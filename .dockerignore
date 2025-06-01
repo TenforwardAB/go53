@@ -1,0 +1,5 @@
+# Don't copy binaries or other local files into container
+/go53
+*.log
+*.zip
+

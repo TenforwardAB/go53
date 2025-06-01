@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  go53:
+    build: .
+    container_name: go53
+    ports:
+      - "53:53/udp"
+      - "8080:8080"
+    volumes:
+      - ./:/app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
