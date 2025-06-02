@@ -6,12 +6,12 @@ services:
     container_name: go53
     ports:
       - "53:53/udp"
-      - "8080:8080"
+      - "8053:8053"
     volumes:
       - ./:/app
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8053"]
       interval: 30s
       timeout: 5s
       retries: 3
