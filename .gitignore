@@ -1,0 +1,56 @@
+# Go build artifacts
+/bin/
+/build/
+/dist/
+/out/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go workspace stuff
+*.log
+*.prof
+*.tmp
+*.swp
+
+# Go coverage files
+*.cover
+*.cov
+*.coverprofile
+
+# IDE/editor settings
+.idea/
+.vscode/
+*.iml
+
+# Dependency directories (if you use vendoring)
+vendor/
+
+# Module cache (if using GOPATH mode — rare today)
+pkg/
+
+# Test result cache (Go 1.15+)
+**/.cache/
+**/testdata/
+
+# GitHub Codespaces and JetBrains remote
+*.code-workspace
+*.ijwb/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# GoLand generated files
+*.iws
+*.ipr
+
+# Compiled binary with project name (optional but common)
+go53
+
+# Custom dev data
+staged/

@@ -1,24 +1,43 @@
 package main
 
 import (
-    "log"
-    "go53/config"
-    "go53/dns"
-    "go53/api"
+	"go53/api"
+	"go53/config"
+	"go53/dns"
+	"go53/memory"
+	"go53/storage"
+	"go53/zone/types"
+	"log"
 )
 
 func main() {
-    cfg := config.Load()
+	config.LoadConfig()
 
-    go func() {
-        log.Println("Starting DNS server on port 53...")
-        if err := dns.Start(cfg); err != nil {
-            log.Fatal(err)
-        }
-    }()
+	// Initialize selected storage backend
+	if err := storage.Init(config.AppConfig.StorageBackend); err != nil {
+		log.Fatalf("Storage init failed: %v", err)
+	}
 
-    log.Println("Starting REST API on port 8080...")
-    if err := api.Start(cfg); err != nil {
-        log.Fatal(err)
-    }
+	store, err := memory.NewZoneStore(storage.Backend)
+	if err != nil {
+		panic(err)
+	}
+	types.InitMemoryStore(store)
+
+	// Initialize the in-memory ZoneStore (loads from storage)
+	//	if err := zone.InitZoneStore(); err != nil {
+	//log.Fatalf("ZoneStore init failed: %v", err)
+	//}
+
+	go func() {
+		log.Println("Starting DNS server on port: ", config.AppConfig.DNSPort)
+		if err := dns.Start(config.AppConfig); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	log.Println("Starting REST API on port: ", config.AppConfig.APIPort)
+	if err := api.Start(config.AppConfig); err != nil {
+		log.Fatal(err)
+	}
 }

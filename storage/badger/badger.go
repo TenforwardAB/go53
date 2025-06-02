@@ -1,7 +1,6 @@
 package badger
 
 import (
-	"fmt"
 	"github.com/dgraph-io/badger/v4"
 	"os"
 	"path/filepath"
@@ -45,6 +44,24 @@ func (b *BadgerStorage) LoadZone(name string) ([]byte, error) {
 		return err
 	})
 	return valCopy, err
+}
+
+func (b *BadgerStorage) LoadAllZones() (map[string][]byte, error) {
+	zones := make(map[string][]byte)
+	err := b.db.View(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer it.Close()
+		for it.Rewind(); it.Valid(); it.Next() {
+			item := it.Item()
+			val, err := item.ValueCopy(nil)
+			if err != nil {
+				return err
+			}
+			zones[string(item.Key())] = val
+		}
+		return nil
+	})
+	return zones, err
 }
 
 func (b *BadgerStorage) DeleteZone(name string) error {

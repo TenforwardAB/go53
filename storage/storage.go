@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"go53/storage/badger"
-	"go53/storage/postgres"
 )
 
 type Storage interface {
@@ -13,6 +12,7 @@ type Storage interface {
 	LoadZone(name string) ([]byte, error)
 	DeleteZone(name string) error
 	ListZones() ([]string, error)
+	LoadAllZones() (map[string][]byte, error) // <--- add this
 }
 
 var Backend Storage
@@ -21,8 +21,8 @@ func Init(backendType string) error {
 	switch backendType {
 	case "badger":
 		Backend = badger.NewBadgerStorage()
-	case "postgres":
-		Backend = postgres.NewPostgresStorage()
+	//case "postgres":
+	//	Backend = postgres.NewPostgresStorage()
 	default:
 		return fmt.Errorf("unsupported backend type: %s", backendType)
 	}
