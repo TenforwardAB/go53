@@ -67,17 +67,17 @@ func (z *InMemoryZoneStore) AddRecord(zone, rtype, name string, record any) erro
 	return z.persist(zone)
 }
 
-func (z *InMemoryZoneStore) GetRecord(zone, rtype, name string) (any, bool) {
+func (z *InMemoryZoneStore) GetRecord(zone, rtype, name string) (string, string, any, bool) {
 	z.mu.RLock()
 	defer z.mu.RUnlock()
 	log.Println("z is before getting ", z.cache)
 	recType, ok := z.cache[zone][rtype]
 	if !ok {
-		return nil, false
+		return "", "", nil, false
 	}
 	rec, exists := recType[name]
 	log.Println("rec is: ", rec)
-	return rec, exists
+	return zone, rtype, rec, exists
 }
 
 func (z *InMemoryZoneStore) DeleteRecord(zone, rtype, name string) error {
