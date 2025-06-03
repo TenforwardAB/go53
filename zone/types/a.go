@@ -5,7 +5,6 @@ import (
 	"github.com/miekg/dns"
 	"go53/internal"
 	"go53/types"
-	"log"
 	"net"
 )
 
@@ -30,13 +29,12 @@ func LookupA(host string) (*dns.A, bool) {
 	if memStore == nil {
 		return nil, false
 	}
-	val, ok := memStore.GetRecord(zone, string(types.TypeA), name)
+	_, _, val, ok := memStore.GetRecord(zone, string(types.TypeA), name)
 	if !ok {
 		return nil, false
 	}
 
 	var rec types.ARecord
-	log.Println("rec is", val)
 	switch v := val.(type) {
 	case types.ARecord:
 		rec = v
@@ -52,7 +50,7 @@ func LookupA(host string) (*dns.A, bool) {
 
 	return &dns.A{
 		Hdr: dns.RR_Header{
-			Name:   rec.Name,
+			Name:   host,
 			Rrtype: dns.TypeA,
 			Class:  dns.ClassINET,
 			Ttl:    rec.TTL,

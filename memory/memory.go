@@ -3,7 +3,6 @@ package memory
 import (
 	"errors"
 	"go53/storage"
-	"log"
 	"sync"
 )
 
@@ -63,20 +62,17 @@ func (z *InMemoryZoneStore) AddRecord(zone, rtype, name string, record any) erro
 		z.cache[zone][rtype] = make(map[string]any)
 	}
 	z.cache[zone][rtype][name] = record
-	log.Println("z is after adding ", z.cache)
 	return z.persist(zone)
 }
 
 func (z *InMemoryZoneStore) GetRecord(zone, rtype, name string) (string, string, any, bool) {
 	z.mu.RLock()
 	defer z.mu.RUnlock()
-	log.Println("z is before getting ", z.cache)
 	recType, ok := z.cache[zone][rtype]
 	if !ok {
 		return "", "", nil, false
 	}
 	rec, exists := recType[name]
-	log.Println("rec is: ", rec)
 	return zone, rtype, rec, exists
 }
 
