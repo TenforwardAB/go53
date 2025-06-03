@@ -15,10 +15,10 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			if rec, _ := zone.LookupA(q.Name); rec != nil {
 				m.Answer = append(m.Answer, rec)
 			}
-			//case dns.TypeAAAA:
-			//	if rec := zone.LookupAAAA(q.Name); rec != nil {
-			//		m.Answer = append(m.Answer, rec)
-			//	}
+		case dns.TypeAAAA:
+			if rec, _ := zone.LookupAAAA(q.Name); rec != nil {
+				m.Answer = append(m.Answer, rec)
+			}
 			//case dns.TypeMX:
 			//	if recs := zone.LookupMX(q.Name); recs != nil {
 			//		for _, r := range recs {

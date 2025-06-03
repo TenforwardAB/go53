@@ -16,29 +16,28 @@ func DeleteARecord(name string) {
 	types.DeleteA(name)
 }
 
-//
-//// AAAA
-//func AddAAAARecord(name, ip string) {
-//	types.AddAAAA(name, ip)
-//}
-//func LookupAAAA(name string) *dns.AAAA {
-//	return types.LookupAAAA(name)
-//}
-//func DeleteAAAARecord(name string) {
-//	types.DeleteAAAA(name)
-//}
-//
-//// MX
-//func AddMXRecord(name string, preference uint16, mx string) {
-//	types.AddMX(name, preference, mx)
-//}
-//func LookupMX(name string) []*dns.MX {
-//	return types.LookupMX(name)
-//}
-//func DeleteMXRecord(name string) {
-//	types.DeleteMX(name)
-//}
-//
+// AAAA
+func AddAAAARecord(zone, name, ip string) {
+	types.AddAAAA(zone, name, ip, nil)
+}
+func LookupAAAA(name string) (*dns.AAAA, bool) {
+	return types.LookupAAAA(name)
+}
+func DeleteAAAARecord(name string) {
+	types.DeleteAAAA(name)
+}
+
+// MX
+func AddMXRecord(name string, preference uint16, mx string) {
+	types.AddMX(name, preference, mx)
+}
+func LookupMX(name string) ([]*dns.MX, bool) {
+	return types.LookupMX(name)
+}
+func DeleteMXRecord(name string) {
+	types.DeleteMX(name)
+}
+
 //// TXT
 //func AddTXTRecord(name string, txts ...string) {
 //	types.AddTXT(name, txts...)

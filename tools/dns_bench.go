@@ -9,12 +9,12 @@ import (
 )
 
 const (
-	host   = "127.0.0.1"
-	port   = "53"
-	name   = "www.go53.test"
-	qtype  = "A"
-	runs   = 1000
-	worker = 10 // parallel queries (can be 1 for serial)
+	host    = "127.0.0.1"
+	port    = "53"
+	name    = "www.go53.test"
+	qtype   = "A"
+	runs    = 1000
+	workers = 10 // parallel queries (can be 1 for serial)
 )
 
 func main() {
@@ -31,8 +31,8 @@ func main() {
 	}
 	close(taskCh)
 
-	wg.Add(worker)
-	for w := 0; w < worker; w++ {
+	wg.Add(workers)
+	for w := 0; w < workers; w++ {
 		go func() {
 			defer wg.Done()
 			for range taskCh {

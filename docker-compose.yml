@@ -9,6 +9,7 @@ services:
       - "8053:8053"
     volumes:
       - ./:/app
+      - ./data:/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8053"]

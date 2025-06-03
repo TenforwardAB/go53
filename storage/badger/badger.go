@@ -15,7 +15,7 @@ func NewBadgerStorage() *BadgerStorage {
 }
 
 func (b *BadgerStorage) Init() error {
-	dir := filepath.Join("/data", "badger")
+	dir := filepath.Join("/data", "go53")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
