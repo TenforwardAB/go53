@@ -1,4 +1,4 @@
-package types
+package rtypes
 
 import (
 	"errors"
@@ -8,7 +8,7 @@ import (
 	"net"
 )
 
-func AddAAAA(zone, name, ip string, ttl *uint32) error {
+func AddA(zone, name, ip string, ttl *uint32) error {
 	TTL := uint32(3600)
 	if ttl != nil {
 		TTL = *ttl
@@ -16,30 +16,30 @@ func AddAAAA(zone, name, ip string, ttl *uint32) error {
 	if memStore == nil {
 		return errors.New("memory store not initialized")
 	}
-	rec := types.AAAARecord{
+	rec := types.ARecord{
 		Name: name,
 		IP:   ip,
 		TTL:  TTL,
 	}
-	return memStore.AddRecord(zone, string(types.TypeAAAA), name, rec)
+	return memStore.AddRecord(zone, string(types.TypeA), name, rec)
 }
 
-func LookupAAAA(host string) (*dns.AAAA, bool) {
+func LookupA(host string) (*dns.A, bool) {
 	zone, name, ok := internal.SplitName(host)
 	if memStore == nil {
 		return nil, false
 	}
-	_, _, val, ok := memStore.GetRecord(zone, string(types.TypeAAAA), name)
+	_, _, val, ok := memStore.GetRecord(zone, string(types.TypeA), name)
 	if !ok {
 		return nil, false
 	}
 
-	var rec types.AAAARecord
+	var rec types.ARecord
 	switch v := val.(type) {
-	case types.AAAARecord:
+	case types.ARecord:
 		rec = v
 	case map[string]interface{}:
-		rec = types.AAAARecord{
+		rec = types.ARecord{
 			Name: v["name"].(string),
 			IP:   v["ip"].(string),
 			TTL:  uint32(v["ttl"].(float64)),
@@ -48,24 +48,25 @@ func LookupAAAA(host string) (*dns.AAAA, bool) {
 		return nil, false
 	}
 
-	return &dns.AAAA{
+	return &dns.A{
 		Hdr: dns.RR_Header{
 			Name:   host,
-			Rrtype: dns.TypeAAAA,
+			Rrtype: dns.TypeA,
 			Class:  dns.ClassINET,
 			Ttl:    rec.TTL,
 		},
-		AAAA: net.ParseIP(rec.IP),
+		A: net.ParseIP(rec.IP),
 	}, true
 }
 
-func DeleteAAAA(host string) error {
+func DeleteA(host string) error {
 	zone, name, ok := internal.SplitName(host)
 	if !ok {
 		return errors.New("invalid host format")
 	}
+
 	if memStore == nil {
 		return errors.New("memory store not initialized")
 	}
-	return memStore.DeleteRecord(zone, string(types.TypeAAAA), name)
+	return memStore.DeleteRecord(zone, string(types.TypeA), name)
 }

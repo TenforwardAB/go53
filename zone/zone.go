@@ -2,106 +2,107 @@ package zone
 
 import (
 	"github.com/miekg/dns"
-	"go53/zone/types"
+	"go53/types"
+	"go53/zone/rtypes"
 )
 
 // A
 func AddARecord(zone, name, ip string) {
-	types.AddA(zone, name, ip, nil)
+	rtypes.AddA(zone, name, ip, nil)
 }
 func LookupA(name string) (*dns.A, bool) {
-	return types.LookupA(name)
+	return rtypes.LookupA(name)
 }
 func DeleteARecord(name string) {
-	types.DeleteA(name)
+	rtypes.DeleteA(name)
 }
 
 // AAAA
 func AddAAAARecord(zone, name, ip string) {
-	types.AddAAAA(zone, name, ip, nil)
+	rtypes.AddAAAA(zone, name, ip, nil)
 }
 func LookupAAAA(name string) (*dns.AAAA, bool) {
-	return types.LookupAAAA(name)
+	return rtypes.LookupAAAA(name)
 }
 func DeleteAAAARecord(name string) {
-	types.DeleteAAAA(name)
+	rtypes.DeleteAAAA(name)
 }
 
 // MX
-func AddMXRecord(name string, preference uint16, mx string) {
-	types.AddMX(name, preference, mx)
+func AddMXRecord(zone, name string, records []types.MXRecord) {
+	rtypes.AddMX(zone, name, records)
 }
 func LookupMX(name string) ([]*dns.MX, bool) {
-	return types.LookupMX(name)
+	return rtypes.LookupMX(name)
 }
 func DeleteMXRecord(name string) {
-	types.DeleteMX(name)
+	rtypes.DeleteMX(name)
 }
 
 //// TXT
 //func AddTXTRecord(name string, txts ...string) {
-//	types.AddTXT(name, txts...)
+//	rtypes.AddTXT(name, txts...)
 //}
 //func LookupTXT(name string) []*dns.TXT {
-//	return types.LookupTXT(name)
+//	return rtypes.LookupTXT(name)
 //}
 //func DeleteTXTRecord(name string) {
-//	types.DeleteTXT(name)
+//	rtypes.DeleteTXT(name)
 //}
 //
 //// CNAME
 //func AddCNAMERecord(name, target string) {
-//	types.AddCNAME(name, target)
+//	rtypes.AddCNAME(name, target)
 //}
 //func LookupCNAME(name string) *dns.CNAME {
-//	return types.LookupCNAME(name)
+//	return rtypes.LookupCNAME(name)
 //}
 //func DeleteCNAMERecord(name string) {
-//	types.DeleteCNAME(name)
+//	rtypes.DeleteCNAME(name)
 //}
 //
 //// DNAME
 //func AddDNAMERecord(name, target string) {
-//	types.AddDNAME(name, target)
+//	rtypes.AddDNAME(name, target)
 //}
 //
 //func LookupDNAME(name string) *dns.DNAME {
-//	return types.LookupDNAME(name)
+//	return rtypes.LookupDNAME(name)
 //}
 //
 //func DeleteDNAMERecord(name string) {
-//	types.DeleteDNAME(name)
+//	rtypes.DeleteDNAME(name)
 //}
 //
 //// PTR
 //func AddPTRRecord(name, ptr string) {
-//	types.AddPTR(name, ptr)
+//	rtypes.AddPTR(name, ptr)
 //}
 //func LookupPTR(name string) *dns.PTR {
-//	return types.LookupPTR(name)
+//	return rtypes.LookupPTR(name)
 //}
 //func DeletePTRRecord(name string) {
-//	types.DeletePTR(name)
+//	rtypes.DeletePTR(name)
 //}
 //
 //// NS
 //func AddNSRecord(name, ns string) {
-//	types.AddNS(name, ns)
+//	rtypes.AddNS(name, ns)
 //}
 //func LookupNS(name string) []*dns.NS {
-//	return types.LookupNS(name)
+//	return rtypes.LookupNS(name)
 //}
 //func DeleteNSRecord(name string) {
-//	types.DeleteNS(name)
+//	rtypes.DeleteNS(name)
 //}
 //
 //// SOA
 //func AddSOARecord(name, ns, mbox string, serial, refresh, retry, expire, minttl uint32) {
-//	types.AddSOA(name, ns, mbox, serial, refresh, retry, expire, minttl)
+//	rtypes.AddSOA(name, ns, mbox, serial, refresh, retry, expire, minttl)
 //}
 //func LookupSOA(name string) *dns.SOA {
-//	return types.LookupSOA(name)
+//	return rtypes.LookupSOA(name)
 //}
 //func DeleteSOARecord(name string) {
-//	types.DeleteSOA(name)
+//	rtypes.DeleteSOA(name)
 //}

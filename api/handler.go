@@ -16,3 +16,11 @@ func addARecordHandler(w http.ResponseWriter, r *http.Request) {
 	zone.AddARecord(req.Zone, req.Name, req.IP)
 	w.WriteHeader(http.StatusCreated)
 }
+
+func GetZonesHandler(w http.ResponseWriter, r *http.Request) {
+	payload := r.Context().Value("user").(map[string]interface{})
+	json.NewEncoder(w).Encode(map[string]any{
+		"message": "Authorized",
+		"user":    payload,
+	})
+}

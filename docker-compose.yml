@@ -5,7 +5,7 @@ services:
     build: .
     container_name: go53
     ports:
-      - "53:53/udp"
+      - "1053:53/udp"
       - "8053:8053"
     volumes:
       - ./:/app

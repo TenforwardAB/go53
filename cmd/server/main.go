@@ -6,7 +6,7 @@ import (
 	"go53/dns"
 	"go53/memory"
 	"go53/storage"
-	"go53/zone/types"
+	"go53/zone/rtypes"
 	"log"
 )
 
@@ -22,7 +22,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	types.InitMemoryStore(store)
+	rtypes.InitMemoryStore(store)
 
 	// Initialize the in-memory ZoneStore (loads from storage)
 	//	if err := zone.InitZoneStore(); err != nil {

@@ -30,7 +30,7 @@ func main() {
 
 Options:
   --db PATH            Path to BadgerDB (default: ../data/go53)
-  --list-all-zones     List all zones with their record types and counts
+  --list-all-zones     List all zones with their record rtypes and counts
   --list-zone ZONE     List a specific zone's records
   --count-only         Only show record counts instead of full record data
 
