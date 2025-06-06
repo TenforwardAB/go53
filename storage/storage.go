@@ -12,7 +12,9 @@ type Storage interface {
 	LoadZone(name string) ([]byte, error)
 	DeleteZone(name string) error
 	ListZones() ([]string, error)
-	LoadAllZones() (map[string][]byte, error) // <--- add this
+	LoadAllZones() (map[string][]byte, error)
+	LoadTable(table string) (map[string][]byte, error)
+	SaveTable(table string, key string, value []byte) error
 }
 
 var Backend Storage

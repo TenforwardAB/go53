@@ -1,6 +1,8 @@
 package badger
 
 import (
+	"bytes"
+	"fmt"
 	"github.com/dgraph-io/badger/v4"
 	"os"
 	"path/filepath"
@@ -82,4 +84,49 @@ func (b *BadgerStorage) ListZones() ([]string, error) {
 		return nil
 	})
 	return keys, err
+}
+
+func (b *BadgerStorage) LoadTable(table string) (map[string][]byte, error) {
+	result := make(map[string][]byte)
+	prefix := []byte(fmt.Sprintf("%s/", table))
+
+	err := b.db.View(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer it.Close()
+
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+			item := it.Item()
+			k := item.Key()
+
+			// Store key without the prefix
+			key := bytes.TrimPrefix(k, prefix)
+
+			err := item.Value(func(v []byte) error {
+				// Copy value to prevent GC issues
+				valCopy := append([]byte(nil), v...)
+				result[string(key)] = valCopy
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (b *BadgerStorage) SaveTable(table string, key string, value []byte) error {
+	fullKey := fmt.Sprintf("%s/%s", table, key)
+
+	err := b.db.Update(func(txn *badger.Txn) error {
+		return txn.Set([]byte(fullKey), value)
+	})
+
+	return err
 }

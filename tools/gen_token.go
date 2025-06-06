@@ -34,7 +34,7 @@ func main() {
 		Subject: "admin@solutrix.se",
 		Roles:   []string{"admin"},
 		Scopes:  []string{"zone:read:*"},
-		Exp:     time.Now().Add(10 * time.Minute),
+		Exp:     time.Now().Add(10 * time.Hour),
 	}
 	token, err := auth.CreateToken(ed25519.PrivateKey(priv), "key1", payload)
 	if err != nil {

@@ -9,14 +9,16 @@ import (
 )
 
 type InMemoryZoneStore struct {
-	cache   map[string]map[string]map[string]any
+	cache   map[string]map[string]map[string]map[string]any // "zones" -> zone -> type -> name -> record
 	storage storage.Storage
 	mu      sync.RWMutex
 }
 
 func NewZoneStore(s storage.Storage) (*InMemoryZoneStore, error) {
 	zs := &InMemoryZoneStore{
-		cache:   make(map[string]map[string]map[string]any),
+		cache: map[string]map[string]map[string]map[string]any{
+			"zones": {},
+		},
 		storage: s,
 	}
 	if err := zs.loadFromStorage(); err != nil {
@@ -42,13 +44,14 @@ func (z *InMemoryZoneStore) loadFromStorage() error {
 		if err != nil {
 			continue
 		}
-		z.cache[zone] = decoded
+		z.cache["zones"][zone] = decoded
 	}
+
 	return nil
 }
 
 func (z *InMemoryZoneStore) persist(zone string) error {
-	data, err := encodeZoneData(z.cache[zone])
+	data, err := encodeZoneData(z.cache["zones"][zone])
 	if err != nil {
 		return err
 	}
@@ -58,20 +61,22 @@ func (z *InMemoryZoneStore) persist(zone string) error {
 func (z *InMemoryZoneStore) AddRecord(zone, rtype, name string, record any) error {
 	z.mu.Lock()
 	defer z.mu.Unlock()
-	if _, ok := z.cache[zone]; !ok {
-		z.cache[zone] = make(map[string]map[string]any)
+	zones := z.cache["zones"]
+	if _, ok := zones[zone]; !ok {
+		zones[zone] = make(map[string]map[string]any)
 	}
-	if _, ok := z.cache[zone][rtype]; !ok {
-		z.cache[zone][rtype] = make(map[string]any)
+	if _, ok := zones[zone][rtype]; !ok {
+		zones[zone][rtype] = make(map[string]any)
 	}
-	z.cache[zone][rtype][name] = record
+	zones[zone][rtype][name] = record
 	return z.persist(zone)
 }
 
 func (z *InMemoryZoneStore) GetRecord(zone, rtype, name string) (string, string, any, bool) {
 	z.mu.RLock()
 	defer z.mu.RUnlock()
-	recType, ok := z.cache[zone][rtype]
+	zones := z.cache["zones"]
+	recType, ok := zones[zone][rtype]
 	if !ok {
 		return "", "", nil, false
 	}
@@ -82,9 +87,11 @@ func (z *InMemoryZoneStore) GetRecord(zone, rtype, name string) (string, string,
 func (z *InMemoryZoneStore) DeleteRecord(zone, rtype, name string) error {
 	z.mu.Lock()
 	defer z.mu.Unlock()
-	if recType, ok := z.cache[zone][rtype]; ok {
+	zones := z.cache["zones"]
+	if recType, ok := zones[zone][rtype]; ok {
 		delete(recType, name)
 		return z.persist(zone)
 	}
 	return errors.New("record type not found")
+
 }

@@ -19,7 +19,10 @@ package auth
 
 import (
 	"crypto/ed25519"
+	"encoding/json"
 	"errors"
+	"go53/storage"
+	"log"
 	"time"
 
 	"github.com/o1egl/paseto"
@@ -36,6 +39,32 @@ func CreateToken(privateKey ed25519.PrivateKey, keyID string, payload TokenPaylo
 	token := paseto.NewV2()
 	footer := map[string]string{"kid": keyID}
 	return token.Sign(privateKey, payload, footer)
+}
+
+func GetAllPublicKeys(store storage.Storage) map[string][]byte {
+	result := make(map[string][]byte)
+
+	data, err := store.LoadTable("paseto_keys")
+	if err != nil {
+		log.Printf("failed to load paseto_keys: %v", err)
+		return result
+	}
+
+	for keyID, raw := range data {
+		var key PasetoKey
+		if err := json.Unmarshal(raw, &key); err != nil {
+			log.Printf("invalid key entry for %s: %v", keyID, err)
+			continue
+		}
+
+		if key.Revoked || len(key.PublicKey) == 0 {
+			continue
+		}
+
+		result[key.KeyID] = key.PublicKey
+	}
+
+	return result
 }
 
 func VerifyToken(tokenStr string) (*TokenPayload, string, error) {

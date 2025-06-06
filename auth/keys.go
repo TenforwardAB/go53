@@ -19,21 +19,49 @@ package auth
 
 import (
 	"crypto/ed25519"
-	"encoding/hex"
+	"crypto/rand"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"go53/storage"
 )
 
-var publicKeys = map[string]ed25519.PublicKey{
-	"key1": mustDecode("31b94195087db2dfc9213f5b99b7e88630633974fa87da5da51c9dc06c3a6abe"),
+type PasetoKey struct {
+	KeyID      string    `json:"keyid"`
+	Purpose    string    `json:"purpose"` // e.g., "public" or "local"
+	Version    string    `json:"version"` // e.g., "v2", "v4"
+	Type       string    `json:"type"`    // "public", "private", or "symmetric"
+	PublicKey  []byte    `json:"key"`
+	PrivateKey []byte    `json:"key"` // private or symmetric key
+	CreatedAt  time.Time `json:"created_at"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	Revoked    bool      `json:"revoked"`
 }
 
-func GetAllPublicKeys() map[string]ed25519.PublicKey {
-	return publicKeys
-}
-
-func mustDecode(hexStr string) ed25519.PublicKey {
-	bytes, err := hex.DecodeString(hexStr)
+func GenerateAndStoreEd25519(store storage.Storage, keyid string, expiresIn time.Duration) error {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("failed to generate ed25519 keypair: %w", err)
 	}
-	return ed25519.PublicKey(bytes)
+
+	key := PasetoKey{
+		KeyID:      keyid,
+		Purpose:    "public",
+		Version:    "v4",
+		Type:       "private",
+		PublicKey:  pub,
+		PrivateKey: priv,
+		CreatedAt:  time.Now(),
+		ExpiresAt:  time.Now().Add(expiresIn),
+		Revoked:    false,
+	}
+
+	data, err := json.Marshal(key)
+	if err != nil {
+		return fmt.Errorf("failed to marshal key entry: %w", err)
+	}
+
+	return store.SaveTable("paseto_keys", keyid, data)
+
 }
