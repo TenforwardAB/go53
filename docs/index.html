@@ -22,8 +22,8 @@
     }
 
     header {
-      background-color: var(--primary);
-      color: white;
+      background-color: var(--muted);
+      color: #1e1e1e;
       padding: 2rem 1rem;
       text-align: center;
     }
@@ -78,7 +78,15 @@
   <main>
     <section>
       <h2>About</h2>
-      <p><strong>go53</strong> is a modern authoritative DNS server, built in Go, with a focus on simplicity, speed, and API-first management. It’s lightweight, easy to install, and simple to administer.</p>
+      <p><strong>go53</strong> is a purpose-built authoritative DNS server written in Go. Designed with clarity and control in mind, it prioritizes straightforward deployment, maintainability, and performance over feature bloat. Built from the ground up, go53 aims to make DNS administration predictable and transparent for modern infrastructure needs.</p>
+
+      <p>Unlike many legacy systems or hybrid resolvers, go53 focuses strictly on being an authoritative DNS server — it does not implement recursive resolution. This intentional scope makes go53 lightweight and predictable, well-suited for serving zones in production environments or integrating with infrastructure as code systems.</p>
+
+      <p>All zone handling occurs in-memory for low-latency resolution, while persistent storage is handled via <strong>BadgerDB</strong> by default — a fast, embeddable, and Go-native key-value store. For users requiring external database integration or high-availability deployments, <strong>PostgreSQL</strong> is also supported as a backend option.</p>
+
+      <p>While go53 focuses on authoritative DNS, those looking for recursive capabilities, Kubernetes-native integration, or a pluggable architecture with service discovery and policy control may prefer <a href="https://coredns.io/" target="_blank" rel="noopener noreferrer">CoreDNS</a>. CoreDNS offers extensive plugin support and is a natural fit for cloud-native and containerized environments.</p>
+
+      <p>Our motivation to create go53 stems from a desire to offer a focused, minimal, and API-driven authoritative DNS solution that can be deployed and managed programmatically. Existing authoritative servers often expose incomplete APIs or require a mix of file-based and manual configuration. go53 embraces modern design patterns — stateless management, declarative zone APIs, and integrated observability — without becoming a monolith.</p>
     </section>
 
     <section>
@@ -116,7 +124,7 @@
   </main>
 
   <footer>
-    <p>© 2025 go53 Project – Fast, Secure, and API-Driven DNS</p>
+    <p>🄯 2025 go53 Project – Fast, Secure, and API-Driven DNS</p>
     <p><a href="https://go53.eu" style="color: var(--primary);">https://go53.eu</a></p>
   </footer>
 </body>
