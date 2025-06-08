@@ -1,0 +1,123 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>go53 - API-Driven Authoritative DNS</title>
+  <style>
+    :root {
+      --primary: #479ab5;
+      --bg: #f9f9f9;
+      --text: #1e1e1e;
+      --muted: #d1d5db;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Roboto, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    header {
+      background-color: var(--primary);
+      color: white;
+      padding: 2rem 1rem;
+      text-align: center;
+    }
+
+    header img {
+      max-width: 128px;
+      height: auto;
+    }
+
+    main {
+      max-width: 900px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+    }
+
+    h1, h2, h3 {
+      color: var(--primary);
+    }
+
+    section {
+      margin-bottom: 2rem;
+    }
+
+    .image-placeholder {
+      width: 100%;
+      max-width: 1024px;
+      height: 300px;
+      background-color: var(--muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.2rem;
+      color: #666;
+      margin: 1rem 0;
+    }
+
+    footer {
+      text-align: center;
+      padding: 2rem 1rem;
+      background-color: var(--muted);
+      color: #444;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <img src="go53-logo.png" alt="go53 Logo" />
+    <h1>go53 – API-Driven Authoritative DNS Server</h1>
+    <p>Fast, extensible, and written in Go</p>
+  </header>
+
+  <main>
+    <section>
+      <h2>About</h2>
+      <p><strong>go53</strong> is a modern authoritative DNS server, built in Go, with a focus on simplicity, speed, and API-first management. It’s lightweight, easy to install, and simple to administer.</p>
+    </section>
+
+    <section>
+      <h2>Core Protocol Support</h2>
+      <ul>
+        <li>UDP/TCP DNS (traditional support)</li>
+        <li>DoT - DNS-over-TLS (RFC 7858) <em>(planned, decision pending)</em></li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Planned v1 Features</h2>
+      <ul>
+        <li>API-managed zone data (with optional file import/export)</li>
+        <li>DNSSEC on-the-fly signing (NSEC minimum)</li>
+        <li>AXFR/IXFR zone transfers</li>
+        <li>Prometheus-compatible metrics</li>
+        <li>Query and error logging</li>
+        <li>ANY-query blocking</li>
+        <li>NSID support</li>
+        <li>CHAOS-class version reporting</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Client Support</h2>
+      <p>A standalone CLI/API client will be available to help manage server settings, import/export zone files, and provide automated workflows.</p>
+    </section>
+
+    <section>
+      <h2>Visual Preview</h2>
+      <div class="image-placeholder">[ Placeholder for cartoonish illustration 1 ]</div>
+      <div class="image-placeholder">[ Placeholder for cartoonish illustration 2 ]</div>
+    </section>
+  </main>
+
+  <footer>
+    <p>© 2025 go53 Project – Fast, Secure, and API-Driven DNS</p>
+    <p><a href="https://go53.eu" style="color: var(--primary);">https://go53.eu</a></p>
+  </footer>
+</body>
+</html>
