@@ -3,56 +3,24 @@ package dns
 import (
 	"github.com/miekg/dns"
 	"go53/zone"
+	"log"
 )
 
 func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
+	log.Printf("TEST")
 	m := new(dns.Msg)
 	m.SetReply(r)
+	log.Printf("Query %s\n", r.Question[0].Name)
 
 	for _, q := range r.Question {
-		switch q.Qtype {
-		case dns.TypeA:
-			if rec, _ := zone.LookupA(q.Name); rec != nil {
-				m.Answer = append(m.Answer, rec)
+		if rec, ok := zone.LookupRecord(q.Qtype, q.Name); ok && rec != nil {
+			m.Answer = append(m.Answer, rec)
+		} else {
+			soaRec, ok := zone.LookupRecord(dns.TypeSOA, q.Name)
+			log.Printf("soaRec: %v\n", soaRec)
+			if ok && soaRec != nil {
+				m.Ns = append(m.Ns, soaRec)
 			}
-		case dns.TypeAAAA:
-			if rec, _ := zone.LookupAAAA(q.Name); rec != nil {
-				m.Answer = append(m.Answer, rec)
-			}
-			//case dns.TypeMX:
-			//	if recs := zone.LookupMX(q.Name); recs != nil {
-			//		for _, r := range recs {
-			//			m.Answer = append(m.Answer, r)
-			//		}
-			//	}
-			//case dns.TypeTXT:
-			//	if recs := zone.LookupTXT(q.Name); recs != nil {
-			//		for _, r := range recs {
-			//			m.Answer = append(m.Answer, r)
-			//		}
-			//	}
-			//case dns.TypeCNAME:
-			//	if rec := zone.LookupCNAME(q.Name); rec != nil {
-			//		m.Answer = append(m.Answer, rec)
-			//	}
-			//case dns.TypeDNAME:
-			//	if rec := zone.LookupDNAME(q.Name); rec != nil {
-			//		m.Answer = append(m.Answer, rec)
-			//	}
-			//case dns.TypePTR:
-			//	if rec := zone.LookupPTR(q.Name); rec != nil {
-			//		m.Answer = append(m.Answer, rec)
-			//	}
-			//case dns.TypeNS:
-			//	if recs := zone.LookupNS(q.Name); recs != nil {
-			//		for _, r := range recs {
-			//			m.Answer = append(m.Answer, r)
-			//		}
-			//	}
-			//case dns.TypeSOA:
-			//	if rec := zone.LookupSOA(q.Name); rec != nil {
-			//		m.Answer = append(m.Answer, rec)
-			//	}
 		}
 	}
 

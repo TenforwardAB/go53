@@ -26,13 +26,22 @@
 package rtypes
 
 import (
+	"github.com/miekg/dns"
 	"go53/memory"
 )
+
+type RRType interface {
+	Add(zone, name string, value interface{}, ttl *uint32) error
+	Lookup(name string) (dns.RR, bool)
+	Delete(name string) error
+	Type() uint16
+}
 
 // memStore is the internal singleton reference to the in-memory zone store.
 // It should be initialized with a call to InitMemoryStore before any record
 // operations are performed.
 var memStore *memory.InMemoryZoneStore
+var registry = make(map[uint16]RRType)
 
 // InitMemoryStore initializes the package-level zone store.
 //
@@ -49,4 +58,13 @@ var memStore *memory.InMemoryZoneStore
 //   - store: a pointer to a memory.InMemoryZoneStore instance, created and loaded by the caller.
 func InitMemoryStore(store *memory.InMemoryZoneStore) {
 	memStore = store
+}
+
+func Register(rr RRType) {
+	registry[rr.Type()] = rr
+}
+
+func Get(rrtype uint16) (RRType, bool) {
+	rr, ok := registry[rrtype]
+	return rr, ok
 }

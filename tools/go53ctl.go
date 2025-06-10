@@ -65,7 +65,7 @@ Examples:
 }
 
 func handleListAllZones(db *badger.DB, countOnly bool) {
-	result := make(map[string]map[string]int)
+	result := make(map[string]map[string]map[string]interface{})
 
 	err := db.View(func(txn *badger.Txn) error {
 		it := txn.NewIterator(badger.DefaultIteratorOptions)
@@ -75,15 +75,16 @@ func handleListAllZones(db *badger.DB, countOnly bool) {
 			zone := string(item.Key())
 
 			err := item.Value(func(val []byte) error {
+				// val holds JSON like: {"a": { ... }, "mx": { ... }, …}
 				var records map[string]map[string]interface{}
 				if err := json.Unmarshal(val, &records); err != nil {
 					fmt.Printf("Skipping %s: failed to unmarshal: %v\n", zone, err)
 					return nil
 				}
 
-				result[zone] = make(map[string]int)
+				result[zone] = make(map[string]map[string]interface{}, len(records))
 				for rtype, entries := range records {
-					result[zone][rtype] = len(entries)
+					result[zone][rtype] = entries
 				}
 				return nil
 			})

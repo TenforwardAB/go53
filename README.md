@@ -1,5 +1,7 @@
 
 # go53
+[![Matrix Chat](https://img.shields.io/badge/chat-%23go53%3Amatrix.org-479ab5?logo=matrix&logoColor=white)](https://matrix.to/#/#go53:matrix.org)
+
 
 **go53** is a focused, API-driven authoritative DNS server written in Go. It is designed to be lightweight, fast, and easy to deploy, while offering extensibility and transparency through a well-structured API and modern design principles.
 

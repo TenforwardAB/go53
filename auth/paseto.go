@@ -72,7 +72,7 @@ func VerifyToken(tokenStr string) (*TokenPayload, string, error) {
 	var footer map[string]string
 
 	token := paseto.NewV2()
-	for keyID, pubKey := range GetAllPublicKeys() {
+	for keyID, pubKey := range GetAllPublicKeys(storage.Backend) {
 		err := token.Verify(tokenStr, pubKey, &payload, &footer)
 		if err == nil && footer["kid"] == keyID {
 			if time.Now().After(payload.Exp) {

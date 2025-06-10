@@ -8,10 +8,12 @@ import (
 
 func NewRouter(cfg config.Config) *mux.Router {
 	r := mux.NewRouter()
-	r.Use(AuthMiddleware)
+	//r.Use(AuthMiddleware)
 
-	r.HandleFunc("/zones", GetZonesHandler).Methods("GET")
-	r.HandleFunc("/api/add-a", addARecordHandler).Methods("POST")
+	r.HandleFunc("/api/zones", GetZonesHandler).Methods("GET")
+	r.HandleFunc("/api/zones/{zone}/records/{rrtype}", addRecordHandler).Methods("POST")
+	r.HandleFunc("/api/zones/{zone}/records/{rrtype}/{name}", getRecordHandler).Methods("GET")
+	r.HandleFunc("/api/zones/{zone}/records/{rrtype}/{name}", deleteRecordHandler).Methods("DELETE")
 
 	return r
 }
