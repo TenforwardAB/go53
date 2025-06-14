@@ -40,9 +40,6 @@ func addRecordHandler(w http.ResponseWriter, r *http.Request) {
 	case dns.TypeSOA:
 		name = zoneName
 
-	case dns.TypeNS:
-		// Dummy here
-
 	default:
 		rawName, ok := body["name"]
 		if !ok {

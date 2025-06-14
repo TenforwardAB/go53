@@ -17,9 +17,8 @@ func AddAAAA(zone, name, ip string, ttl *uint32) error {
 		return errors.New("memory store not initialized")
 	}
 	rec := types.AAAARecord{
-		Name: name,
-		IP:   ip,
-		TTL:  TTL,
+		IP:  ip,
+		TTL: TTL,
 	}
 	return memStore.AddRecord(zone, string(types.TypeAAAA), name, rec)
 }
@@ -40,9 +39,8 @@ func LookupAAAA(host string) (*dns.AAAA, bool) {
 		rec = v
 	case map[string]interface{}:
 		rec = types.AAAARecord{
-			Name: v["name"].(string),
-			IP:   v["ip"].(string),
-			TTL:  uint32(v["ttl"].(float64)),
+			IP:  v["ip"].(string),
+			TTL: uint32(v["ttl"].(float64)),
 		}
 	default:
 		return nil, false

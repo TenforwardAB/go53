@@ -75,7 +75,7 @@ func handleListAllZones(db *badger.DB, countOnly bool) {
 			zone := string(item.Key())
 
 			err := item.Value(func(val []byte) error {
-				// val holds JSON like: {"a": { ... }, "mx": { ... }, …}
+				// val holds JSON like: {"A": { ... }, "SOA": { ... }, …}
 				var records map[string]map[string]interface{}
 				if err := json.Unmarshal(val, &records); err != nil {
 					fmt.Printf("Skipping %s: failed to unmarshal: %v\n", zone, err)

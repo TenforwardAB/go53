@@ -3,23 +3,26 @@ package types
 type RecordType string
 
 const (
-	TypeA    RecordType = "A"
-	TypeAAAA RecordType = "AAAA"
-	TypeMX   RecordType = "MX"
-	TypeNS   RecordType = "NS"
-	TypeSOA  RecordType = "SOA"
+	TypeA     RecordType = "A"
+	TypeAAAA  RecordType = "AAAA"
+	TypeMX    RecordType = "MX"
+	TypeNS    RecordType = "NS"
+	TypeSOA   RecordType = "SOA"
+	TypeCNAME RecordType = "CNAME"
 )
 
 type ARecord struct {
-	Name string `json:"name"`
-	IP   string `json:"ip"`
-	TTL  uint32 `json:"ttl"`
+	IP  string `json:"ip"`
+	TTL uint32 `json:"ttl"`
 }
 
 type AAAARecord struct {
-	Name string `json:"name"`
-	IP   string `json:"ip"`
-	TTL  uint32 `json:"ttl"`
+	IP  string `json:"ip"`
+	TTL uint32 `json:"ttl"`
+}
+type NSRecord struct {
+	NS  []string `json:"ns"`
+	TTL uint32   `json:"ttl"`
 }
 
 type MXRecord struct {
@@ -40,9 +43,16 @@ type SOARecord struct {
 	TTL     uint32 `json:"ttl"`
 }
 
+type CNAMERecord struct {
+	Target string `json:"target"`
+	TTL    uint32 `json:"ttl"`
+}
+
 type ZoneData struct {
-	A    map[string]ARecord    `json:"a,omitempty"`
-	AAAA map[string]AAAARecord `json:"aaaa,omitempty"`
-	MX   map[string]MXRecord   `json:"mx,omitempty"`
-	SOA  map[string]SOARecord  `json:"soa,omitempty"`
+	A     map[string]ARecord     `json:"a,omitempty"`
+	AAAA  map[string]AAAARecord  `json:"aaaa,omitempty"`
+	MX    map[string]MXRecord    `json:"mx,omitempty"`
+	SOA   map[string]SOARecord   `json:"soa,omitempty"`
+	CNAME map[string]CNAMERecord `json:"cname,omitempty"`
+	NS    map[string]NSRecord    `json:"ns,omitempty"`
 }

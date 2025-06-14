@@ -44,9 +44,8 @@ func (ARecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 		return errors.New("memory store not initialized")
 	}
 	rec := types.ARecord{
-		Name: name,
-		IP:   ip,
-		TTL:  TTL,
+		IP:  ip,
+		TTL: TTL,
 	}
 	return memStore.AddRecord(sanitizedZone, string(types.TypeA), name, rec)
 }
@@ -71,9 +70,8 @@ func (ARecord) Lookup(host string) (dns.RR, bool) {
 		rec = v
 	case map[string]interface{}:
 		rec = types.ARecord{
-			Name: v["name"].(string),
-			IP:   v["ip"].(string),
-			TTL:  uint32(v["ttl"].(float64)),
+			IP:  v["ip"].(string),
+			TTL: uint32(v["ttl"].(float64)),
 		}
 	default:
 		return nil, false
