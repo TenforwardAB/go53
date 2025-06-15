@@ -32,8 +32,8 @@ import (
 
 type RRType interface {
 	Add(zone, name string, value interface{}, ttl *uint32) error
-	Lookup(name string) (dns.RR, bool)
-	Delete(name string) error
+	Lookup(name string) ([]dns.RR, bool)
+	Delete(host string, value interface{}) error
 	Type() uint16
 }
 

@@ -14,7 +14,7 @@ func AddRecord(rrtype uint16, zone, name string, value interface{}, ttl *uint32)
 	return rr.Add(zone, name, value, ttl)
 }
 
-func LookupRecord(rrtype uint16, name string) (dns.RR, bool) {
+func LookupRecord(rrtype uint16, name string) ([]dns.RR, bool) {
 	rr, ok := rtypes.Get(rrtype)
 	if !ok {
 		return nil, false
