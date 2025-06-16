@@ -1,13 +1,11 @@
 package rtypes
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/miekg/dns"
 	"go53/internal"
 	"go53/types"
-	"log"
 )
 
 type SOARecord struct{}
@@ -24,18 +22,22 @@ func (SOARecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 	var existing types.SOARecord
 	_, _, raw, found := memStore.GetRecord(sanitizedZone, string(types.TypeSOA), sanitizedZone)
 	if found {
-		rawMap, ok := raw.(map[string]interface{})
-		if !ok {
-			return fmt.Errorf("expected SOARecord map but got %T", raw)
-		}
-
-		jsonBytes, err := json.Marshal(rawMap)
-		if err != nil {
-			return fmt.Errorf("failed to marshal SOA record: %w", err)
-		}
-
-		if err := json.Unmarshal(jsonBytes, &existing); err != nil {
-			return fmt.Errorf("failed to unmarshal SOA record: %w", err)
+		switch v := raw.(type) {
+		case types.SOARecord:
+			existing = v
+		case map[string]interface{}:
+			existing = types.SOARecord{
+				Ns:      v["ns"].(string),
+				Mbox:    v["mbox"].(string),
+				Serial:  uint32(v["serial"].(float64)),
+				Refresh: uint32(v["refresh"].(float64)),
+				Retry:   uint32(v["retry"].(float64)),
+				Expire:  uint32(v["expire"].(float64)),
+				Minimum: uint32(v["minimum"].(float64)),
+				TTL:     uint32(v["ttl"].(float64)),
+			}
+		default:
+			return fmt.Errorf("unexpected SOA record format: %T", v)
 		}
 	}
 
@@ -54,7 +56,6 @@ func (SOARecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 	}
 
 	cfg, ok := value.(map[string]interface{})
-	log.Printf("cfg in soa is %v\n", cfg)
 	if !ok {
 		return fmt.Errorf("SOA Add expects a JSON object")
 	}
@@ -86,8 +87,11 @@ func (SOARecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 	return memStore.AddRecord(sanitizedZone, string(types.TypeSOA), sanitizedZone, rec)
 }
 
-func (SOARecord) Lookup(host string) (dns.RR, bool) {
+func (SOARecord) Lookup(host string) ([]dns.RR, bool) {
 	zone, _, ok := internal.SplitName(host)
+	if !ok {
+		return nil, false
+	}
 	sanitizedZone, err := internal.SanitizeFQDN(zone)
 	if err != nil {
 		return nil, false
@@ -96,7 +100,6 @@ func (SOARecord) Lookup(host string) (dns.RR, bool) {
 		return nil, false
 	}
 	_, _, val, ok := memStore.GetRecord(sanitizedZone, string(types.TypeSOA), sanitizedZone)
-	log.Printf("soaRec zone in SOA.go: %v\n", sanitizedZone)
 	if !ok {
 		return nil, false
 	}
@@ -120,7 +123,7 @@ func (SOARecord) Lookup(host string) (dns.RR, bool) {
 		return nil, false
 	}
 
-	return &dns.SOA{
+	rr := &dns.SOA{
 		Hdr: dns.RR_Header{
 			Name:   sanitizedZone,
 			Rrtype: dns.TypeSOA,
@@ -134,21 +137,25 @@ func (SOARecord) Lookup(host string) (dns.RR, bool) {
 		Retry:   rec.Retry,
 		Expire:  rec.Expire,
 		Minttl:  rec.Minimum,
-	}, true
+	}
+
+	return []dns.RR{rr}, true
 }
 
-func (SOARecord) Delete(host string) error {
+func (SOARecord) Delete(host string, value interface{}) error {
 	zone, _, ok := internal.SplitName(host)
+	if !ok {
+		return errors.New("invalid host format")
+	}
 	sanitizedZone, err := internal.SanitizeFQDN(zone)
 	if err != nil {
 		return errors.New("FQDN Sanitize check failed")
 	}
-	if !ok {
-		return errors.New("invalid host format")
-	}
 	if memStore == nil {
 		return errors.New("memory store not initialized")
 	}
+
+	// SOA only supports one record, delete unconditionally
 	return memStore.DeleteRecord(sanitizedZone, string(types.TypeSOA), sanitizedZone)
 }
 

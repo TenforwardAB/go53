@@ -1,17 +1,18 @@
-package rtypes
+package tmp
 
 import (
 	"errors"
 	"github.com/miekg/dns"
 	"go53/internal"
 	"go53/types"
+	"go53/zone/rtypes"
 )
 
 func AddMX(zone, name string, records []types.MXRecord) error {
-	if memStore == nil {
+	if rtypes.memStore == nil {
 		return errors.New("memory store not initialized")
 	}
-	return memStore.AddRecord(zone, string(types.TypeMX), name, records)
+	return rtypes.memStore.AddRecord(zone, string(types.TypeMX), name, records)
 }
 
 // keep of we need it?
@@ -23,10 +24,10 @@ func AddSingleMX(zone, name string, preference uint16, mx string, ttl uint32) er
 
 func LookupMX(host string) ([]*dns.MX, bool) {
 	zone, name, ok := internal.SplitName(host)
-	if memStore == nil {
+	if rtypes.memStore == nil {
 		return nil, false
 	}
-	_, _, val, ok := memStore.GetRecord(zone, string(types.TypeMX), name)
+	_, _, val, ok := rtypes.memStore.GetRecord(zone, string(types.TypeMX), name)
 	if !ok {
 		return nil, false
 	}
@@ -72,8 +73,8 @@ func DeleteMX(host string) error {
 	if !ok {
 		return errors.New("invalid host format")
 	}
-	if memStore == nil {
+	if rtypes.memStore == nil {
 		return errors.New("memory store not initialized")
 	}
-	return memStore.DeleteRecord(zone, string(types.TypeMX), name)
+	return rtypes.memStore.DeleteRecord(zone, string(types.TypeMX), name)
 }

@@ -6,6 +6,7 @@ import (
 	"github.com/miekg/dns"
 	"go53/internal"
 	"go53/zone"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -105,7 +106,6 @@ func getRecordHandler(w http.ResponseWriter, r *http.Request) {
 // DELETE /api/zones/{zone}/records/{rrtype}/{name}
 func deleteRecordHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	//zoneName := vars["zone"]
 	rrtypeStr := vars["rrtype"]
 	name := vars["name"]
 
@@ -115,11 +115,24 @@ func deleteRecordHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = zone.DeleteRecord(rrtype, name)
+	// Default to nil value
+	var value interface{}
+
+	// Only try to decode body if there *is* one
+	if r.ContentLength > 0 {
+		decoder := json.NewDecoder(r.Body)
+		if err := decoder.Decode(&value); err != nil && err != io.EOF {
+			http.Error(w, "Invalid JSON in request body", http.StatusBadRequest)
+			return
+		}
+	}
+
+	err = zone.DeleteRecord(rrtype, name, value)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 

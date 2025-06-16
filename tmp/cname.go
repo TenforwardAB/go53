@@ -15,11 +15,12 @@
 // Created on 6/3/25 by andrek <andre(-at-)sess.se>
 //
 // This file: cname.go is part of the go53 authoritative DNS server.
-package rtypes
+package tmp
 
 import (
 	"errors"
 	"fmt"
+	"go53/zone/rtypes"
 
 	"github.com/miekg/dns"
 	"go53/internal"
@@ -58,7 +59,7 @@ func (CNAMERecord) Add(zone, name string, value interface{}, ttl *uint32) error 
 		TTL = *ttl
 	}
 
-	if memStore == nil {
+	if rtypes.memStore == nil {
 		return errors.New("memory store not initialized")
 	}
 
@@ -66,7 +67,7 @@ func (CNAMERecord) Add(zone, name string, value interface{}, ttl *uint32) error 
 		Target: sanitizedTarget,
 		TTL:    TTL,
 	}
-	return memStore.AddRecord(sanitizedZone, string(types.TypeCNAME), name, rec)
+	return rtypes.memStore.AddRecord(sanitizedZone, string(types.TypeCNAME), name, rec)
 }
 
 func (CNAMERecord) Lookup(host string) (dns.RR, bool) {
@@ -78,11 +79,11 @@ func (CNAMERecord) Lookup(host string) (dns.RR, bool) {
 	if err != nil {
 		return nil, false
 	}
-	if memStore == nil {
+	if rtypes.memStore == nil {
 		return nil, false
 	}
 
-	_, _, val, ok := memStore.GetRecord(sanitizedZone, string(types.TypeCNAME), name)
+	_, _, val, ok := rtypes.memStore.GetRecord(sanitizedZone, string(types.TypeCNAME), name)
 	if !ok {
 		return nil, false
 	}
@@ -120,10 +121,10 @@ func (CNAMERecord) Delete(host string) error {
 	if err != nil {
 		return errors.New("FQDN sanitize check failed")
 	}
-	if memStore == nil {
+	if rtypes.memStore == nil {
 		return errors.New("memory store not initialized")
 	}
-	return memStore.DeleteRecord(sanitizedZone, string(types.TypeCNAME), name)
+	return rtypes.memStore.DeleteRecord(sanitizedZone, string(types.TypeCNAME), name)
 }
 
 func (CNAMERecord) Type() uint16 {
@@ -131,5 +132,5 @@ func (CNAMERecord) Type() uint16 {
 }
 
 func init() {
-	Register(CNAMERecord{})
+	rtypes.Register(CNAMERecord{})
 }

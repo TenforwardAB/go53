@@ -1,8 +1,9 @@
-package rtypes
+package tmp
 
 import (
 	"errors"
 	"fmt"
+	"go53/zone/rtypes"
 	"log"
 
 	"github.com/miekg/dns"
@@ -42,7 +43,7 @@ func (NSRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 		TTL = *ttl
 	}
 
-	if memStore == nil {
+	if rtypes.memStore == nil {
 		return errors.New("memory store not initialized")
 	}
 
@@ -50,7 +51,7 @@ func (NSRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 	if key == "" {
 		key = "@"
 	}
-	_, _, existing, found := memStore.GetRecord(sanitizedZone, string(types.TypeNS), key)
+	_, _, existing, found := rtypes.memStore.GetRecord(sanitizedZone, string(types.TypeNS), key)
 
 	var currentList []string
 	var currentTTL uint32 = TTL
@@ -85,7 +86,7 @@ func (NSRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 		NS:  currentList,
 		TTL: currentTTL,
 	}
-	return memStore.AddRecord(sanitizedZone, string(types.TypeNS), key, rec)
+	return rtypes.memStore.AddRecord(sanitizedZone, string(types.TypeNS), key, rec)
 }
 
 func (NSRecord) Lookup(host string) (dns.RR, bool) {
@@ -97,7 +98,7 @@ func (NSRecord) Lookup(host string) (dns.RR, bool) {
 	if err != nil {
 		return nil, false
 	}
-	if memStore == nil {
+	if rtypes.memStore == nil {
 		return nil, false
 	}
 
@@ -106,7 +107,7 @@ func (NSRecord) Lookup(host string) (dns.RR, bool) {
 		key = "@"
 	}
 
-	_, _, val, ok := memStore.GetRecord(sanitizedZone, string(types.TypeNS), key)
+	_, _, val, ok := rtypes.memStore.GetRecord(sanitizedZone, string(types.TypeNS), key)
 	log.Printf("Value is: %v\n", val)
 	if !ok {
 		return nil, false
@@ -158,7 +159,7 @@ func (NSRecord) Delete(host string) error {
 	if err != nil {
 		return errors.New("FQDN sanitize check failed")
 	}
-	if memStore == nil {
+	if rtypes.memStore == nil {
 		return errors.New("memory store not initialized")
 	}
 
@@ -167,7 +168,7 @@ func (NSRecord) Delete(host string) error {
 		key = "@"
 	}
 
-	_, _, val, found := memStore.GetRecord(sanitizedZone, string(types.TypeNS), key)
+	_, _, val, found := rtypes.memStore.GetRecord(sanitizedZone, string(types.TypeNS), key)
 	if !found {
 		return nil
 	}
@@ -202,14 +203,14 @@ func (NSRecord) Delete(host string) error {
 	}
 
 	if len(newList) == 0 {
-		return memStore.DeleteRecord(sanitizedZone, string(types.TypeNS), key)
+		return rtypes.memStore.DeleteRecord(sanitizedZone, string(types.TypeNS), key)
 	}
 
 	rec := types.NSRecord{
 		NS:  newList,
 		TTL: ttl,
 	}
-	return memStore.AddRecord(sanitizedZone, string(types.TypeNS), key, rec)
+	return rtypes.memStore.AddRecord(sanitizedZone, string(types.TypeNS), key, rec)
 }
 
 func (NSRecord) Type() uint16 {
@@ -217,5 +218,5 @@ func (NSRecord) Type() uint16 {
 }
 
 func init() {
-	Register(NSRecord{})
+	rtypes.Register(NSRecord{})
 }

@@ -22,10 +22,10 @@ func LookupRecord(rrtype uint16, name string) ([]dns.RR, bool) {
 	return rr.Lookup(name)
 }
 
-func DeleteRecord(rrtype uint16, name string) error {
+func DeleteRecord(rrtype uint16, name string, value interface{}) error {
 	rr, ok := rtypes.Get(rrtype)
 	if !ok {
 		return fmt.Errorf("unknown rrtype: %d", rrtype)
 	}
-	return rr.Delete(name)
+	return rr.Delete(name, value)
 }

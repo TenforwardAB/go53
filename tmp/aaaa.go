@@ -1,10 +1,11 @@
-package rtypes
+package tmp
 
 import (
 	"errors"
 	"github.com/miekg/dns"
 	"go53/internal"
 	"go53/types"
+	"go53/zone/rtypes"
 	"net"
 )
 
@@ -13,22 +14,22 @@ func AddAAAA(zone, name, ip string, ttl *uint32) error {
 	if ttl != nil {
 		TTL = *ttl
 	}
-	if memStore == nil {
+	if rtypes.memStore == nil {
 		return errors.New("memory store not initialized")
 	}
 	rec := types.AAAARecord{
 		IP:  ip,
 		TTL: TTL,
 	}
-	return memStore.AddRecord(zone, string(types.TypeAAAA), name, rec)
+	return rtypes.memStore.AddRecord(zone, string(types.TypeAAAA), name, rec)
 }
 
 func LookupAAAA(host string) (*dns.AAAA, bool) {
 	zone, name, ok := internal.SplitName(host)
-	if memStore == nil {
+	if rtypes.memStore == nil {
 		return nil, false
 	}
-	_, _, val, ok := memStore.GetRecord(zone, string(types.TypeAAAA), name)
+	_, _, val, ok := rtypes.memStore.GetRecord(zone, string(types.TypeAAAA), name)
 	if !ok {
 		return nil, false
 	}
@@ -62,8 +63,8 @@ func DeleteAAAA(host string) error {
 	if !ok {
 		return errors.New("invalid host format")
 	}
-	if memStore == nil {
+	if rtypes.memStore == nil {
 		return errors.New("memory store not initialized")
 	}
-	return memStore.DeleteRecord(zone, string(types.TypeAAAA), name)
+	return rtypes.memStore.DeleteRecord(zone, string(types.TypeAAAA), name)
 }
