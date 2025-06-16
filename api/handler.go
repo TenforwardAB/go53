@@ -12,12 +12,6 @@ import (
 	"strings"
 )
 
-type addRecordRequest struct {
-	Name  string  `json:"name"`
-	Value string  `json:"value"`
-	TTL   *uint32 `json:"ttl,omitempty"`
-}
-
 // POST /api/zones/{zone}/records/{rrtype}
 func addRecordHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
@@ -40,7 +34,6 @@ func addRecordHandler(w http.ResponseWriter, r *http.Request) {
 	switch rrtype {
 	case dns.TypeSOA:
 		name = zoneName
-
 	default:
 		rawName, ok := body["name"]
 		if !ok {
@@ -73,9 +66,16 @@ func addRecordHandler(w http.ResponseWriter, r *http.Request) {
 
 	value := body
 	log.Printf("body: %+v\n", value)
+
 	if err := zone.AddRecord(rrtype, zoneName, name, value, ttlPtr); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	if rrtype != dns.TypeSOA {
+		if err := UpdateSOASerial(zoneName); err != nil {
+			log.Printf("warning: failed to update SOA serial: %v", err)
+		}
 	}
 
 	w.WriteHeader(http.StatusCreated)
@@ -106,6 +106,7 @@ func getRecordHandler(w http.ResponseWriter, r *http.Request) {
 // DELETE /api/zones/{zone}/records/{rrtype}/{name}
 func deleteRecordHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
+	zoneName := vars["zone"]
 	rrtypeStr := vars["rrtype"]
 	name := vars["name"]
 
@@ -115,10 +116,8 @@ func deleteRecordHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Default to nil value
 	var value interface{}
 
-	// Only try to decode body if there *is* one
 	if r.ContentLength > 0 {
 		decoder := json.NewDecoder(r.Body)
 		if err := decoder.Decode(&value); err != nil && err != io.EOF {
@@ -131,6 +130,12 @@ func deleteRecordHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	if rrtype != dns.TypeSOA {
+		if err := UpdateSOASerial(zoneName); err != nil {
+			log.Printf("Failed to update SOA serial: %v", err)
+		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)

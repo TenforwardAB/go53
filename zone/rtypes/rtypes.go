@@ -60,6 +60,10 @@ func InitMemoryStore(store *memory.InMemoryZoneStore) {
 	memStore = store
 }
 
+func GetMemStore() *memory.InMemoryZoneStore {
+	return memStore
+}
+
 func Register(rr RRType) {
 	registry[rr.Type()] = rr
 }
