@@ -98,11 +98,9 @@ func (b *BadgerStorage) LoadTable(table string) (map[string][]byte, error) {
 			item := it.Item()
 			k := item.Key()
 
-			// Store key without the prefix
 			key := bytes.TrimPrefix(k, prefix)
 
 			err := item.Value(func(v []byte) error {
-				// Copy value to prevent GC issues
 				valCopy := append([]byte(nil), v...)
 				result[string(key)] = valCopy
 				return nil
