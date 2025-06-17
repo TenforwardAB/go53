@@ -72,3 +72,7 @@ func Get(rrtype uint16) (RRType, bool) {
 	rr, ok := registry[rrtype]
 	return rr, ok
 }
+
+func GetRegistry() map[uint16]RRType {
+	return registry
+}

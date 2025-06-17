@@ -15,13 +15,11 @@
 // Created on 6/3/25 by andrek <andre(-at-)sess.se>
 //
 // This file: cname.go is part of the go53 authoritative DNS server.
-package tmp
+package rtypes
 
 import (
 	"errors"
 	"fmt"
-	"go53/zone/rtypes"
-
 	"github.com/miekg/dns"
 	"go53/internal"
 	"go53/types"
@@ -59,18 +57,22 @@ func (CNAMERecord) Add(zone, name string, value interface{}, ttl *uint32) error 
 		TTL = *ttl
 	}
 
-	if rtypes.memStore == nil {
+	if memStore == nil {
 		return errors.New("memory store not initialized")
+	}
+
+	if exists, other := internal.HasOtherRecords(memStore, sanitizedZone, name, dns.TypeCNAME, GetRegistry()); exists {
+		return fmt.Errorf("CNAME: other record of type %d exists", other)
 	}
 
 	rec := types.CNAMERecord{
 		Target: sanitizedTarget,
 		TTL:    TTL,
 	}
-	return rtypes.memStore.AddRecord(sanitizedZone, string(types.TypeCNAME), name, rec)
+	return memStore.AddRecord(sanitizedZone, string(types.TypeCNAME), name, rec)
 }
 
-func (CNAMERecord) Lookup(host string) (dns.RR, bool) {
+func (CNAMERecord) Lookup(host string) ([]dns.RR, bool) {
 	zone, name, ok := internal.SplitName(host)
 	if !ok {
 		return nil, false
@@ -79,11 +81,11 @@ func (CNAMERecord) Lookup(host string) (dns.RR, bool) {
 	if err != nil {
 		return nil, false
 	}
-	if rtypes.memStore == nil {
+	if memStore == nil {
 		return nil, false
 	}
 
-	_, _, val, ok := rtypes.memStore.GetRecord(sanitizedZone, string(types.TypeCNAME), name)
+	_, _, val, ok := memStore.GetRecord(sanitizedZone, string(types.TypeCNAME), name)
 	if !ok {
 		return nil, false
 	}
@@ -93,26 +95,35 @@ func (CNAMERecord) Lookup(host string) (dns.RR, bool) {
 	case types.CNAMERecord:
 		rec = v
 	case map[string]interface{}:
-		rec = types.CNAMERecord{
-			Target: v["target"].(string),
-			TTL:    uint32(v["ttl"].(float64)),
+		rec = types.CNAMERecord{}
+		if tgt, ok := v["target"].(string); ok {
+			rec.Target = tgt
+		}
+		if t, ok := v["ttl"].(float64); ok {
+			rec.TTL = uint32(t)
 		}
 	default:
 		return nil, false
 	}
 
-	return &dns.CNAME{
-		Hdr: dns.RR_Header{
-			Name:   host,
-			Rrtype: dns.TypeCNAME,
-			Class:  dns.ClassINET,
-			Ttl:    rec.TTL,
+	if rec.Target == "" {
+		return nil, false
+	}
+
+	return []dns.RR{
+		&dns.CNAME{
+			Hdr: dns.RR_Header{
+				Name:   host,
+				Rrtype: dns.TypeCNAME,
+				Class:  dns.ClassINET,
+				Ttl:    rec.TTL,
+			},
+			Target: rec.Target,
 		},
-		Target: rec.Target,
 	}, true
 }
 
-func (CNAMERecord) Delete(host string) error {
+func (CNAMERecord) Delete(host string, value interface{}) error {
 	zone, name, ok := internal.SplitName(host)
 	if !ok {
 		return errors.New("invalid host format")
@@ -121,10 +132,12 @@ func (CNAMERecord) Delete(host string) error {
 	if err != nil {
 		return errors.New("FQDN sanitize check failed")
 	}
-	if rtypes.memStore == nil {
+	if memStore == nil {
 		return errors.New("memory store not initialized")
 	}
-	return rtypes.memStore.DeleteRecord(sanitizedZone, string(types.TypeCNAME), name)
+
+	// oavsett value, det finns bara en möjlig CNAME-post per namn
+	return memStore.DeleteRecord(sanitizedZone, string(types.TypeCNAME), name)
 }
 
 func (CNAMERecord) Type() uint16 {
@@ -132,5 +145,5 @@ func (CNAMERecord) Type() uint16 {
 }
 
 func init() {
-	rtypes.Register(CNAMERecord{})
+	Register(CNAMERecord{})
 }

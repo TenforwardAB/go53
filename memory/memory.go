@@ -3,7 +3,6 @@ package memory
 import (
 	"errors"
 	"fmt"
-	"go53/internal"
 	"go53/storage"
 	"sync"
 )
@@ -24,7 +23,7 @@ func NewZoneStore(s storage.Storage) (*InMemoryZoneStore, error) {
 	if err := zs.loadFromStorage(); err != nil {
 		return nil, err
 	}
-	fmt.Printf("Estimated deep size: %d bytes\n", internal.DeepSize(zs.cache))
+	fmt.Printf("Estimated deep size: %d bytes\n", DeepSize(zs.cache))
 	return zs, nil
 }
 
