@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"github.com/gorilla/mux"
 	"github.com/miekg/dns"
+	"go53/config"
 	"go53/internal"
 	"go53/zone"
 	"io"
@@ -100,7 +101,10 @@ func getRecordHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(rec)
+	err = json.NewEncoder(w).Encode(rec)
+	if err != nil {
+		return
+	}
 }
 
 // DELETE /api/zones/{zone}/records/{rrtype}/{name}
@@ -144,8 +148,32 @@ func deleteRecordHandler(w http.ResponseWriter, r *http.Request) {
 // GET
 func GetZonesHandler(w http.ResponseWriter, r *http.Request) {
 	payload := r.Context().Value("user").(map[string]interface{})
-	json.NewEncoder(w).Encode(map[string]any{
+	err := json.NewEncoder(w).Encode(map[string]any{
 		"message": "Authorized",
 		"user":    payload,
 	})
+	if err != nil {
+		return
+	}
+}
+
+func updateLiveConfigHandler(w http.ResponseWriter, r *http.Request) {
+	var partial config.LiveConfig
+
+	if err := json.NewDecoder(r.Body).Decode(&partial); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	config.AppConfig.MergeUpdateLive(partial)
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func getLiveConfigHandler(w http.ResponseWriter, r *http.Request) {
+	live := config.AppConfig.GetLive()
+	err := json.NewEncoder(w).Encode(live)
+	if err != nil {
+		return
+	}
 }

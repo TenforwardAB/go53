@@ -2,8 +2,9 @@ package dns
 
 import (
 	"github.com/miekg/dns"
+	"go53/config"
 	"go53/zone"
-	"log"
+	"strings"
 )
 
 func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
@@ -15,18 +16,34 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		var answered bool
 		answered = false
 
+		// Hantera CHAOS-frågor om version
+		if q.Qclass == dns.ClassCHAOS && q.Qtype == dns.TypeTXT && strings.ToLower(q.Name) == "version.bind." {
+			version := config.AppConfig.GetLive().Version
+			if version != "" {
+				txt := &dns.TXT{
+					Hdr: dns.RR_Header{
+						Name:   q.Name,
+						Rrtype: dns.TypeTXT,
+						Class:  dns.ClassCHAOS,
+						Ttl:    0,
+					},
+					Txt: []string{version},
+				}
+				m.Answer = append(m.Answer, txt)
+				answered = true
+				continue
+			}
+		}
+
 		switch q.Qtype {
-		case dns.TypeA: //, dns.TypeAAAA:
-			// 1) Försök direkt A/AAAA
+		case dns.TypeA:
 			if rec, ok := zone.LookupRecord(q.Qtype, q.Name); ok {
 				m.Answer = append(m.Answer, rec...)
 				answered = true
 				break
 			}
-			//2) Fallback: kolla CNAME
 			if cnameRec, ok := zone.LookupRecord(dns.TypeCNAME, q.Name); ok {
 				m.Answer = append(m.Answer, cnameRec[0])
-				// 2a) och följ CNAME till slutmål
 				target := cnameRec[0].(*dns.CNAME).Target
 				if rec2, ok := zone.LookupRecord(q.Qtype, target); ok {
 					m.Answer = append(m.Answer, rec2...)
@@ -36,13 +53,11 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 		case dns.TypeCNAME, dns.TypeNS:
 			if rec, ok := zone.LookupRecord(q.Qtype, q.Name); ok {
-				log.Printf("Value in dns handler is: %v\n", rec)
 				m.Answer = append(m.Answer, rec...)
 				answered = true
 			}
 
 		default:
-			// Andra typer (MX, TXT, osv) – generisk hantering
 			if rec, ok := zone.LookupRecord(q.Qtype, q.Name); ok {
 				m.Answer = append(m.Answer, rec...)
 				answered = true
@@ -50,7 +65,6 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		}
 
 		if !answered {
-			// Inget svar → Authority med SOA
 			if soaRec, ok := zone.LookupRecord(dns.TypeSOA, q.Name); ok {
 				m.Ns = append(m.Ns, soaRec...)
 			}

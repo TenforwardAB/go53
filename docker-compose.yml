@@ -6,6 +6,7 @@ services:
     container_name: go53
     ports:
       - "1053:53/udp"
+      - "1053:53/tcp"
       - "8053:8053"
     volumes:
       - ./:/app
