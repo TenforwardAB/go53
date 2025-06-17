@@ -19,21 +19,63 @@ func (DummyRR) Type() uint16                                                { re
 
 var store *memory.InMemoryZoneStore
 
-func TestMain(m *testing.M) {
-	config.LoadConfig()
+type MockStorage struct {
+	data map[string]map[string][]byte
+}
 
-	if err := storage.Init(config.AppConfig.StorageBackend); err != nil {
-		panic("Storage init failed: " + err.Error())
+func (m *MockStorage) Init() error {
+	if m.data == nil {
+		m.data = make(map[string]map[string][]byte)
 	}
+	return nil
+}
+
+func (m *MockStorage) SaveZone(name string, data []byte) error {
+	return nil
+}
+
+func (m *MockStorage) LoadZone(name string) ([]byte, error) {
+	return nil, nil
+}
+
+func (m *MockStorage) DeleteZone(name string) error {
+	return nil
+}
+
+func (m *MockStorage) ListZones() ([]string, error) {
+	return nil, nil
+}
+
+func (m *MockStorage) LoadAllZones() (map[string][]byte, error) {
+	return nil, nil
+}
+
+func (m *MockStorage) LoadTable(table string) (map[string][]byte, error) {
+	return map[string][]byte{}, nil
+}
+
+func (m *MockStorage) SaveTable(table string, key string, value []byte) error {
+	return nil
+}
+
+func TestMain(m *testing.M) {
+	config.AppConfig = &config.ConfigManager{}
+	config.AppConfig.Base = config.BaseConfig{
+		StorageBackend: "mock", // just a label; not actually used
+	}
+
+	storage.Backend = &MockStorage{
+		data: make(map[string]map[string][]byte),
+	}
+	config.AppConfig.Init()
+	config.AppConfig.InitLiveConfig()
 
 	var err error
 	store, err = memory.NewZoneStore(storage.Backend)
-
 	if err != nil {
 		panic("Failed to init memory zone store: " + err.Error())
 	}
-
-	InitMemoryStore(store)
+	InitMemoryStore(store) // your global setter
 
 	os.Exit(m.Run())
 }

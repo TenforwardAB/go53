@@ -47,11 +47,11 @@ func (cm *ConfigManager) Init() {
 	_ = godotenv.Load()
 
 	cm.Base = BaseConfig{
-		DNSPort:        mustEnv("DNS_PORT", DefaultBaseConfig.DNSPort),
-		BindHost:       mustEnv("BIND_HOST", DefaultBaseConfig.BindHost),
-		APIPort:        mustEnv("API_PORT", DefaultBaseConfig.APIPort),
-		StorageBackend: mustEnv("STORAGE_BACKEND", DefaultBaseConfig.StorageBackend),
-		PostgresDSN:    mustEnv("POSTGRES_DSN", DefaultBaseConfig.PostgresDSN),
+		DNSPort:        MustEnv("DNS_PORT", DefaultBaseConfig.DNSPort),
+		BindHost:       MustEnv("BIND_HOST", DefaultBaseConfig.BindHost),
+		APIPort:        MustEnv("API_PORT", DefaultBaseConfig.APIPort),
+		StorageBackend: MustEnv("STORAGE_BACKEND", DefaultBaseConfig.StorageBackend),
+		PostgresDSN:    MustEnv("POSTGRES_DSN", DefaultBaseConfig.PostgresDSN),
 	}
 
 	if err := storage.Init(cm.Base.StorageBackend); err != nil {
@@ -191,7 +191,7 @@ func (cm *ConfigManager) MergeUpdateLive(partial LiveConfig) {
 	log.Println("Live config partially updated and persisted")
 }
 
-func mustEnv(key, fallback string) string {
+func MustEnv(key, fallback string) string {
 	if value, exists := os.LookupEnv(key); exists {
 		return value
 	}
