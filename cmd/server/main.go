@@ -11,33 +11,25 @@ import (
 )
 
 func main() {
-	config.LoadConfig()
-
-	// Initialize selected storage backend
-	if err := storage.Init(config.AppConfig.StorageBackend); err != nil {
-		log.Fatalf("Storage init failed: %v", err)
-	}
+	config.AppConfig.Init()
+	config.AppConfig.InitLiveConfig()
+	base := config.AppConfig.GetBase()
 
 	store, err := memory.NewZoneStore(storage.Backend)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 	rtypes.InitMemoryStore(store)
 
-	// Initialize the in-memory ZoneStore (loads from storage)
-	//	if err := zone.InitZoneStore(); err != nil {
-	//log.Fatalf("ZoneStore init failed: %v", err)
-	//}
-
 	go func() {
-		log.Println("Starting DNS server on port: ", config.AppConfig.DNSPort)
-		if err := dns.Start(config.AppConfig); err != nil {
+		log.Println("Starting DNS server on", base.DNSPort)
+		if err := dns.Start(base); err != nil {
 			log.Fatal(err)
 		}
 	}()
 
-	log.Println("Starting REST API on port: ", config.AppConfig.APIPort)
-	if err := api.Start(config.AppConfig); err != nil {
+	log.Println("Starting REST API on", base.APIPort)
+	if err := api.Start(base); err != nil {
 		log.Fatal(err)
 	}
 }
