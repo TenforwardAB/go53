@@ -3,11 +3,17 @@ package dns
 import (
 	"github.com/miekg/dns"
 	"go53/config"
+	"go53/dns/dnsutils"
 	"go53/zone"
 	"strings"
 )
 
 func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
+	if r.Opcode == dns.OpcodeNotify {
+		dnsutils.HandleNotify(w, r)
+		return
+	}
+
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
@@ -15,7 +21,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	for _, q := range r.Question {
 		var answered bool
 		answered = false
-		
+
 		if q.Qclass == dns.ClassCHAOS && q.Qtype == dns.TypeTXT && strings.ToLower(q.Name) == "version.bind." {
 			version := config.AppConfig.GetLive().Version
 			if version != "" {

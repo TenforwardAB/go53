@@ -5,6 +5,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/miekg/dns"
 	"go53/config"
+	"go53/dns/dnsutils"
 	"go53/internal"
 	"go53/zone"
 	"io"
@@ -76,6 +77,9 @@ func addRecordHandler(w http.ResponseWriter, r *http.Request) {
 	if rrtype != dns.TypeSOA {
 		if err := UpdateSOASerial(zoneName); err != nil {
 			log.Printf("warning: failed to update SOA serial: %v", err)
+		} else if config.AppConfig.GetLive().Mode != "secondary" {
+			notifyIPs := strings.Split(config.AppConfig.GetLive().AllowTransfer, ",")
+			go dnsutils.SendNotify(zoneName, notifyIPs)
 		}
 	}
 
@@ -138,7 +142,10 @@ func deleteRecordHandler(w http.ResponseWriter, r *http.Request) {
 
 	if rrtype != dns.TypeSOA {
 		if err := UpdateSOASerial(zoneName); err != nil {
-			log.Printf("Failed to update SOA serial: %v", err)
+			log.Printf("warning: failed to update SOA serial: %v", err)
+		} else if config.AppConfig.GetLive().Mode != "secondary" {
+			notifyIPs := strings.Split(config.AppConfig.GetLive().AllowTransfer, ",")
+			go dnsutils.SendNotify(zoneName, notifyIPs)
 		}
 	}
 

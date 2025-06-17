@@ -9,9 +9,16 @@ import (
 	"strings"
 )
 
-func NewRouter(cfg config.BaseConfig) *mux.Router {
+func NewRouter(cfg config.BaseConfig) http.Handler {
+	// If in secondary mode, return a handler that always denies access
+	if config.AppConfig.GetLive().Mode == "secondary" {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "API is disabled in secondary mode", http.StatusServiceUnavailable)
+		})
+	}
+
 	r := mux.NewRouter()
-	//r.Use(AuthMiddleware)
+	// r.Use(AuthMiddleware)
 
 	r.HandleFunc("/api/zones", GetZonesHandler).Methods("GET")
 	r.HandleFunc("/api/zones/{zone}/records/{rrtype}", addRecordHandler).Methods("POST")
@@ -25,10 +32,10 @@ func NewRouter(cfg config.BaseConfig) *mux.Router {
 }
 
 func Start(cfg config.BaseConfig) error {
-	r := NewRouter(cfg)
+	router := NewRouter(cfg)
 
 	addr := net.JoinHostPort(cfg.BindHost, strings.TrimPrefix(cfg.APIPort, ":"))
 	log.Printf("Starting API server on %s", addr)
 
-	return http.ListenAndServe(addr, r)
+	return http.ListenAndServe(addr, router)
 }
