@@ -15,8 +15,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	for _, q := range r.Question {
 		var answered bool
 		answered = false
-
-		// Hantera CHAOS-frågor om version
+		
 		if q.Qclass == dns.ClassCHAOS && q.Qtype == dns.TypeTXT && strings.ToLower(q.Name) == "version.bind." {
 			version := config.AppConfig.GetLive().Version
 			if version != "" {

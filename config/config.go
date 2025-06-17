@@ -47,11 +47,11 @@ func (cm *ConfigManager) Init() {
 	_ = godotenv.Load()
 
 	cm.Base = BaseConfig{
-		DNSPort:        mustEnv("DNS_PORT", ":53"),
-		BindHost:       mustEnv("BIND_HOST", "0.0.0.0"),
-		APIPort:        mustEnv("API_PORT", ":8053"),
-		StorageBackend: mustEnv("STORAGE_BACKEND", "badger"),
-		PostgresDSN:    mustEnv("POSTGRES_DSN", "host=localhost port=5432 user=postgres password=postgres dbname=go53 sslmode=disable"),
+		DNSPort:        mustEnv("DNS_PORT", DefaultBaseConfig.DNSPort),
+		BindHost:       mustEnv("BIND_HOST", DefaultBaseConfig.BindHost),
+		APIPort:        mustEnv("API_PORT", DefaultBaseConfig.APIPort),
+		StorageBackend: mustEnv("STORAGE_BACKEND", DefaultBaseConfig.StorageBackend),
+		PostgresDSN:    mustEnv("POSTGRES_DSN", DefaultBaseConfig.PostgresDSN),
 	}
 
 	if err := storage.Init(cm.Base.StorageBackend); err != nil {

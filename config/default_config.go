@@ -13,3 +13,11 @@ var DefaultLiveConfig = LiveConfig{
 	AllowAXFR:      "false",
 	DefaultNS:      "ns1.go53.local.",
 }
+
+var DefaultBaseConfig = BaseConfig{
+	DNSPort:        ":53",
+	BindHost:       "0.0.0.0",
+	APIPort:        ":8053",
+	StorageBackend: "badger",
+	PostgresDSN:    "host=localhost port=5432 user=postgres password=postgres dbname=go53 sslmode=disable",
+}
