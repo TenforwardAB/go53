@@ -1,10 +1,13 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
+	"go53/internal"
 	"log"
 	"os"
 	"reflect"
+	"strconv"
 	"sync"
 
 	"go53/storage"
@@ -20,19 +23,37 @@ type BaseConfig struct {
 	PostgresDSN    string
 }
 
+type DevConfig struct {
+	DualMode bool `json:"dual_mode"` // true/false if you want to use server as both Primary/Replictor and Secondary
+}
+type PrimaryConfig struct {
+	NotifyDebounceMs int    `json:"notify_debounce_ms"` // delay before sending NOTIFY
+	Ip               string `json:"ip"`                 //ip of primary DNS
+	Port             int    `json:"port"`               //port of primary DNS
+}
+
+type SecondaryConfig struct {
+	FetchDebounceMs     int `json:"fetch_debounce_ms"`      // delay before starting AXFR/IXFR
+	MinFetchIntervalSec int `json:"min_fetch_interval_sec"` // rate limit per zone
+	MaxParallelFetches  int `json:"max_parallel_fetches"`   // limit concurrent zone fetches
+}
 type LiveConfig struct {
 	LogLevel       string `json:"log_level"`       // debug/info/warn
 	Mode           string `json:"mode"`            // primary/secondary/replication
 	AllowTransfer  string `json:"allow_transfer"`  // comma-separated IPs
-	AllowRecursion string `json:"allow_recursion"` // "true"/"false"
-	DNSSECEnabled  string `json:"dnssec_enabled"`  // "true"/"false"
-	DefaultTTL     string `json:"default_ttl"`     // seconds
+	AllowRecursion bool   `json:"allow_recursion"` // "true"/"false"
+	DNSSECEnabled  bool   `json:"dnssec_enabled"`  // "true"/"false"
+	DefaultTTL     int    `json:"default_ttl"`     // seconds
 	Version        string `json:"version"`         // CHAOS version.bind
-	MaxUDPSize     string `json:"max_udp_size"`    // e.g. 1232
-	EnableEDNS     string `json:"enable_edns"`     // "true"/"false"
-	RateLimitQPS   string `json:"rate_limit_qps"`  // queries per second
-	AllowAXFR      string `json:"allow_axfr"`      // "true"/"false"
+	MaxUDPSize     int    `json:"max_udp_size"`    // e.g. 1232
+	EnableEDNS     bool   `json:"enable_edns"`     // "true"/"false"
+	RateLimitQPS   int    `json:"rate_limit_qps"`  // queries per second
+	AllowAXFR      bool   `json:"allow_axfr"`      // "true"/"false"
 	DefaultNS      string `json:"default_ns"`      // e.g. ns1.example.com
+
+	Primary   PrimaryConfig   `json:"primary"`
+	Secondary SecondaryConfig `json:"secondary"`
+	Dev       DevConfig       `json:"dev"`
 }
 
 type ConfigManager struct {
@@ -64,40 +85,60 @@ func (cm *ConfigManager) Init() {
 }
 
 func (cm *ConfigManager) InitLiveConfig() {
-	liveData, err := storage.Backend.LoadTable("config")
-	if err != nil {
-		log.Println("No live config found in storage, initializing with defaults")
-		cm.MergeUpdateLive(DefaultLiveConfig)
+	raw, err := storage.Backend.LoadTable("config")
+	if err != nil || len(raw) == 0 {
+		log.Println("No live config found, seeding with defaults")
+		cm.MergeUpdateLive(DefaultLiveConfig) // sets & persists
 		return
 	}
 
-	cfg := LiveConfig{}
+	cfg := DefaultLiveConfig
+	changed := false
 	val := reflect.ValueOf(&cfg).Elem()
 	typ := val.Type()
 
-	log.Println("Reading live config from storage:")
 	for i := 0; i < val.NumField(); i++ {
-		field := typ.Field(i)
-		key := field.Tag.Get("json")
-		if v, ok := liveData[key]; ok {
-			val.Field(i).SetString(string(v))
-			log.Printf("  - Loaded %s = %s", key, string(v))
-		} else {
-			log.Printf("  - Missing %s in storage", key)
-		}
-	}
-
-	defVal := reflect.ValueOf(DefaultLiveConfig)
-	changed := false
-	for i := 0; i < val.NumField(); i++ {
-		fieldName := typ.Field(i).Name
-		fieldValue := val.Field(i).String()
-
-		if fieldValue == "" {
-			defaultValue := defVal.Field(i).String()
-			val.Field(i).SetString(defaultValue)
-			log.Printf("  - %s was empty, set to default: %s", fieldName, defaultValue)
+		meta := typ.Field(i)
+		key := meta.Tag.Get("json")
+		data, ok := raw[key]
+		if !ok {
+			log.Printf("  • %s missing → using default", key)
 			changed = true
+			continue
+		}
+
+		f := val.Field(i)
+		if !f.CanSet() {
+			continue
+		}
+
+		switch f.Kind() {
+		case reflect.String:
+			f.SetString(string(data))
+
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			if x, err := strconv.ParseInt(string(data), 10, 64); err == nil {
+				f.SetInt(x)
+			} else {
+				log.Printf("  • parse int %s: %v", key, err)
+			}
+
+		case reflect.Bool:
+			if b, err := strconv.ParseBool(string(data)); err == nil {
+				f.SetBool(b)
+			} else {
+				log.Printf("  • parse bool %s: %v", key, err)
+			}
+
+		case reflect.Struct:
+			// unmarshal nested JSON into the struct field
+			ptr := f.Addr().Interface()
+			if err := json.Unmarshal(data, ptr); err != nil {
+				log.Printf("  • unmarshal struct %s: %v", key, err)
+			}
+
+		default:
+			// skip the rests
 		}
 	}
 
@@ -106,55 +147,154 @@ func (cm *ConfigManager) InitLiveConfig() {
 	cm.mu.Unlock()
 
 	if changed {
-		_ = cm.PersistLiveConfig()
-		log.Println("Live config merged with defaults and persisted")
+		if err := cm.persistLiveConfigUnlocked(cfg); err != nil {
+			log.Println("Failed to persist merged defaults:", err)
+		} else {
+			log.Println("Merged defaults persisted")
+		}
 	} else {
-		log.Println("Live config fully loaded from storage, no defaults applied")
+		log.Println("Config loaded from storage; no defaults applied")
 	}
 }
 
 func (cm *ConfigManager) loadLiveConfig() error {
-	data, err := storage.Backend.LoadTable("config")
+	raw, err := storage.Backend.LoadTable("config")
 	if err != nil {
-		return err
+		return fmt.Errorf("config: LoadTable failed: %w", err)
 	}
-	if len(data) == 0 {
-		return fmt.Errorf("no live config found")
+	if len(raw) == 0 {
+		return fmt.Errorf("config: no live config found")
 	}
 
-	live := LiveConfig{}
-	t := reflect.TypeOf(live)
-	v := reflect.ValueOf(&live).Elem()
+	var cfg LiveConfig
+	val := reflect.ValueOf(&cfg).Elem()
+	typ := val.Type()
 
-	for i := 0; i < t.NumField(); i++ {
-		tag := t.Field(i).Tag.Get("json")
-		if val, ok := data[tag]; ok {
-			v.Field(i).SetString(string(val))
+	changed := false
+
+	for i := 0; i < typ.NumField(); i++ {
+		meta := typ.Field(i)
+		key := meta.Tag.Get("json")
+
+		data, ok := raw[key]
+		if !ok {
+			continue
+		}
+
+		field := val.Field(i)
+		if !field.CanSet() {
+			log.Printf("config: cannot set field %s", meta.Name)
+			continue
+		}
+
+		switch field.Kind() {
+		case reflect.String:
+			field.SetString(string(data))
+
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			var (
+				i64 int64
+				err error
+			)
+
+			if err = json.Unmarshal(data, &i64); err != nil {
+				i64, err = strconv.ParseInt(string(data), 10, 64)
+			}
+			if err == nil {
+				field.SetInt(i64)
+			} else {
+				log.Printf("config: failed to parse int for %s: %v", key, err)
+			}
+
+		case reflect.Bool:
+			var b bool
+			if err := json.Unmarshal(data, &b); err == nil {
+				field.SetBool(b)
+			} else if parsed, err2 := strconv.ParseBool(string(data)); err2 == nil {
+				field.SetBool(parsed)
+			} else {
+				log.Printf("config: failed to parse bool for %s: %v", key, err)
+			}
+
+		case reflect.Struct:
+			ptr := field.Addr().Interface()
+			if err := json.Unmarshal(data, ptr); err != nil {
+				log.Printf("config: invalid JSON for %s: %v; using default", key, err)
+
+				defField := reflect.ValueOf(DefaultLiveConfig).FieldByName(meta.Name)
+				field.Set(defField)
+				changed = true
+			}
+
+		default:
+			// skip slices, maps, pointers, and wahtever.
 		}
 	}
 
 	cm.mu.Lock()
-	cm.live = live
+	cm.live = cfg
 	cm.mu.Unlock()
+
+	if changed {
+		if err := cm.persistLiveConfigUnlocked(cfg); err != nil {
+			log.Printf("config: failed to re-persist after cleaning defaults: %v", err)
+		} else {
+			log.Println("config: cleaned up invalid nested JSON and re-persisted defaults")
+		}
+	}
+
 	return nil
 }
 
-func (cm *ConfigManager) PersistLiveConfig() error {
-	cm.mu.RLock()
-	live := cm.live
-	cm.mu.RUnlock()
-
+func (cm *ConfigManager) persistLiveConfigUnlocked(live LiveConfig) error {
 	v := reflect.ValueOf(live)
 	t := v.Type()
 
 	for i := 0; i < t.NumField(); i++ {
-		key := t.Field(i).Tag.Get("json")
-		value := v.Field(i).String()
-		if err := storage.Backend.SaveTable("config", key, []byte(value)); err != nil {
-			return err
+		meta := t.Field(i)
+		key := meta.Tag.Get("json")
+		field := v.Field(i)
+
+		var data []byte
+		var err error
+
+		switch field.Kind() {
+		case reflect.String:
+			data = []byte(field.String())
+
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			data = []byte(fmt.Sprintf("%d", field.Int()))
+
+		case reflect.Bool:
+			data = []byte(fmt.Sprintf("%t", field.Bool()))
+
+		case reflect.Struct:
+			// marshal nested struct to JSON
+			data, err = json.Marshal(field.Interface())
+			if err != nil {
+				return fmt.Errorf("config: failed to marshal %s: %w", key, err)
+			}
+
+		default:
+			// skip slices, maps, pointers, etc.
+			continue
+		}
+
+		if err := storage.Backend.SaveTable("config", key, data); err != nil {
+			return fmt.Errorf("config: SaveTable %s: %w", key, err)
 		}
 	}
+
 	return nil
+}
+
+// PersistLiveConfig is the public version: it locks, then calls the unlocked writer.
+func (cm *ConfigManager) PersistLiveConfig() error {
+	cm.mu.RLock()
+	liveCopy := cm.live
+	cm.mu.RUnlock()
+
+	return cm.persistLiveConfigUnlocked(liveCopy)
 }
 
 func (cm *ConfigManager) GetBase() BaseConfig {
@@ -170,25 +310,21 @@ func (cm *ConfigManager) GetLive() LiveConfig {
 func (cm *ConfigManager) UpdateLive(newConfig LiveConfig) {
 	cm.mu.Lock()
 	cm.live = newConfig
+	_ = cm.persistLiveConfigUnlocked(cm.live)
 	cm.mu.Unlock()
-	_ = cm.PersistLiveConfig()
 }
 
 func (cm *ConfigManager) MergeUpdateLive(partial LiveConfig) {
 	cm.mu.Lock()
-	v := reflect.ValueOf(&cm.live).Elem()
-	p := reflect.ValueOf(partial)
+	internal.MergeStructs(&cm.live, &partial)
 
-	for i := 0; i < v.NumField(); i++ {
-		val := p.Field(i).String()
-		if val != "" {
-			v.Field(i).SetString(val)
-		}
-	}
+	// take a snapshot to persist
+	toPersist := cm.live
 	cm.mu.Unlock()
 
-	_ = cm.PersistLiveConfig()
-	log.Println("Live config partially updated and persisted")
+	if err := cm.persistLiveConfigUnlocked(toPersist); err != nil {
+		log.Println("MergeUpdateLive: failed to persist:", err)
+	}
 }
 
 func MustEnv(key, fallback string) string {

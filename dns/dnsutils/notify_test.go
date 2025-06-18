@@ -162,7 +162,7 @@ func TestSendNotify_UDPAndTCP(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	SendNotify("example.com.", []string{"127.0.0.1:8055"})
+	SendNotify("example.com.")
 
 	time.Sleep(300 * time.Millisecond)
 

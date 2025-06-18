@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/miekg/dns"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -117,4 +118,49 @@ func HasOtherRecords[T any](
 		}
 	}
 	return false, 0
+}
+
+func MergeStructs(dst, src interface{}) {
+	dstVal := reflect.ValueOf(dst).Elem()
+	srcVal := reflect.ValueOf(src).Elem()
+
+	for i := 0; i < dstVal.NumField(); i++ {
+		dstField := dstVal.Field(i)
+		srcField := srcVal.Field(i)
+
+		if !dstField.CanSet() {
+			continue
+		}
+
+		switch dstField.Kind() {
+		case reflect.Struct:
+			if !isZeroValue(srcField) {
+				MergeStructs(dstField.Addr().Interface(), srcField.Addr().Interface())
+			}
+
+		case reflect.String:
+			if srcField.String() != "" {
+				dstField.SetString(srcField.String())
+			}
+
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			if srcField.Int() != 0 {
+				dstField.SetInt(srcField.Int())
+			}
+
+		case reflect.Bool:
+			if srcField.Bool() {
+				dstField.SetBool(srcField.Bool())
+			}
+
+		case reflect.Float32, reflect.Float64:
+			if srcField.Float() != 0 {
+				dstField.SetFloat(srcField.Float())
+			}
+		}
+	}
+}
+
+func isZeroValue(v reflect.Value) bool {
+	return reflect.DeepEqual(v.Interface(), reflect.Zero(v.Type()).Interface())
 }

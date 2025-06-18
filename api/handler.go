@@ -78,8 +78,7 @@ func addRecordHandler(w http.ResponseWriter, r *http.Request) {
 		if err := UpdateSOASerial(zoneName); err != nil {
 			log.Printf("warning: failed to update SOA serial: %v", err)
 		} else if config.AppConfig.GetLive().Mode != "secondary" {
-			notifyIPs := strings.Split(config.AppConfig.GetLive().AllowTransfer, ",")
-			go dnsutils.SendNotify(zoneName, notifyIPs)
+			go dnsutils.ScheduleNotify(zoneName)
 		}
 	}
 
@@ -144,8 +143,7 @@ func deleteRecordHandler(w http.ResponseWriter, r *http.Request) {
 		if err := UpdateSOASerial(zoneName); err != nil {
 			log.Printf("warning: failed to update SOA serial: %v", err)
 		} else if config.AppConfig.GetLive().Mode != "secondary" {
-			notifyIPs := strings.Split(config.AppConfig.GetLive().AllowTransfer, ",")
-			go dnsutils.SendNotify(zoneName, notifyIPs)
+			go dnsutils.ScheduleNotify(zoneName)
 		}
 	}
 

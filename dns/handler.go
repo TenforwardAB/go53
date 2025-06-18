@@ -5,11 +5,14 @@ import (
 	"go53/config"
 	"go53/dns/dnsutils"
 	"go53/zone"
+	"log"
+	"net"
 	"strings"
 )
 
 func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
-	if r.Opcode == dns.OpcodeNotify {
+	if r.Opcode == dns.OpcodeNotify && (config.AppConfig.GetLive().Mode == "secondary" ||
+		config.AppConfig.GetLive().Dev.DualMode) {
 		dnsutils.HandleNotify(w, r)
 		return
 	}
@@ -61,6 +64,22 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				m.Answer = append(m.Answer, rec...)
 				answered = true
 			}
+
+		case dns.TypeAXFR, dns.TypeIXFR:
+			// Only over TCP and only on secondaries
+			if _, tcp := w.RemoteAddr().(*net.TCPAddr); !tcp {
+				m.SetRcode(r, dns.RcodeRefused)
+				_ = w.WriteMsg(m)
+				return
+			}
+			if config.AppConfig.GetLive().Mode != "secondary" && !config.AppConfig.GetLive().Dev.DualMode {
+				m.SetRcode(r, dns.RcodeNotImplemented)
+				_ = w.WriteMsg(m)
+				return
+			}
+			//serveAXFR(w, r, q.Name)
+			log.Println("Serve AXFR here")
+			return
 
 		default:
 			if rec, ok := zone.LookupRecord(q.Qtype, q.Name); ok {

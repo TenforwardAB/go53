@@ -4,6 +4,7 @@ import (
 	"go53/api"
 	"go53/config"
 	"go53/dns"
+	"go53/dns/dnsutils"
 	"go53/memory"
 	"go53/storage"
 	"go53/zone/rtypes"
@@ -20,6 +21,8 @@ func main() {
 		log.Fatal(err)
 	}
 	rtypes.InitMemoryStore(store)
+
+	go dnsutils.ProcessFetchQueue()
 
 	go func() {
 		log.Println("Starting DNS server on", base.DNSPort)
