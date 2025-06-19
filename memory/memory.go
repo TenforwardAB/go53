@@ -3,6 +3,8 @@ package memory
 import (
 	"errors"
 	"fmt"
+	"github.com/miekg/dns"
+	"go53/internal"
 	"go53/storage"
 	"sync"
 )
@@ -81,6 +83,58 @@ func (z *InMemoryZoneStore) GetRecord(zone, rtype, name string) (string, string,
 	}
 	rec, exists := recType[name]
 	return zone, rtype, rec, exists
+}
+
+func (z *InMemoryZoneStore) GetZone(zone string) ([]dns.RR, error) {
+	sanitizedZone, err := internal.SanitizeFQDN(zone)
+	if err != nil {
+		return nil, err
+	}
+
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+
+	zonesMap, ok := z.cache["zones"]
+	if !ok {
+		return nil, errors.New("zones cache missing")
+	}
+
+	zoneMap, ok := zonesMap[sanitizedZone]
+	if !ok {
+		return nil, errors.New("zone not found")
+	}
+
+	var allRRs []dns.RR
+
+	for rtype, namesMap := range zoneMap {
+		builder, ok := internal.RRBuilders[rtype]
+		if !ok {
+			continue // skip other unknown recordtypes
+		}
+
+		for name, rawRecords := range namesMap {
+			records, ok := rawRecords.([]interface{})
+			if !ok {
+				continue
+			}
+
+			fqdn := sanitizedZone
+			if name != "@" {
+				fqdn = name + "." + sanitizedZone
+			}
+
+			for _, rec := range records {
+				if m, ok := rec.(map[string]interface{}); ok {
+					rr := builder(fqdn, m)
+					if rr != nil {
+						allRRs = append(allRRs, rr)
+					}
+				}
+			}
+		}
+	}
+
+	return allRRs, nil
 }
 
 func (z *InMemoryZoneStore) DeleteRecord(zone, rtype, name string) error {
