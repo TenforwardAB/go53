@@ -1,6 +1,9 @@
 package memory
 
-import "reflect"
+import (
+	"fmt"
+	"reflect"
+)
 
 func DeepSize(v interface{}) uintptr {
 	visited := make(map[uintptr]bool)
@@ -42,4 +45,26 @@ func deepSize(val reflect.Value, visited map[uintptr]bool) uintptr {
 	default:
 		return val.Type().Size()
 	}
+}
+
+func HasOtherRecords[T any](
+	memStore *InMemoryZoneStore,
+	zone, name string,
+	excludeType uint16,
+	registry map[uint16]T,
+) (bool, uint16) {
+	if memStore == nil {
+		return false, 0
+	}
+
+	for rrtype := range registry {
+		if rrtype == excludeType {
+			continue
+		}
+		_, _, _, found := memStore.GetRecord(zone, fmt.Sprintf("%d", rrtype), name)
+		if found {
+			return true, rrtype
+		}
+	}
+	return false, 0
 }

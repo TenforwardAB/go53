@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"github.com/miekg/dns"
 	"go53/internal"
+	"go53/memory"
 	"go53/types"
 )
 
@@ -61,7 +62,7 @@ func (CNAMERecord) Add(zone, name string, value interface{}, ttl *uint32) error 
 		return errors.New("memory store not initialized")
 	}
 
-	if exists, other := internal.HasOtherRecords(memStore, sanitizedZone, name, dns.TypeCNAME, GetRegistry()); exists {
+	if exists, other := memory.HasOtherRecords(memStore, sanitizedZone, name, dns.TypeCNAME, GetRegistry()); exists {
 		return fmt.Errorf("CNAME: other record of type %d exists", other)
 	}
 

@@ -11,6 +11,7 @@ import (
 )
 
 func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
+	log.Println("Incomming DNS request")
 	if r.Opcode == dns.OpcodeNotify && (config.AppConfig.GetLive().Mode == "secondary" ||
 		config.AppConfig.GetLive().Dev.DualMode) {
 		dnsutils.HandleNotify(w, r)
@@ -24,6 +25,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	for _, q := range r.Question {
 		var answered bool
 		answered = false
+		log.Println("Type is :", q.Qtype)
 
 		if q.Qclass == dns.ClassCHAOS && q.Qtype == dns.TypeTXT && strings.ToLower(q.Name) == "version.bind." {
 			version := config.AppConfig.GetLive().Version
@@ -77,9 +79,25 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				_ = w.WriteMsg(m)
 				return
 			}
-			//serveAXFR(w, r, q.Name)
-			log.Println("Serve AXFR here")
+			log.Println("Sending AXFR to client")
+			dnsutils.ServeDNS(w, r)
 			return
+
+		case dns.TypeSRV:
+			if rec, ok := zone.LookupRecord(dns.TypeSRV, q.Name); ok {
+				log.Println("Getting SRV record: ", q.Name)
+				m.Answer = append(m.Answer, rec...)
+				answered = true
+				break
+			}
+			if cnameRec, ok := zone.LookupRecord(dns.TypeCNAME, q.Name); ok {
+				m.Answer = append(m.Answer, cnameRec[0])
+				target := cnameRec[0].(*dns.CNAME).Target
+				if rec2, ok := zone.LookupRecord(dns.TypeSRV, target); ok {
+					m.Answer = append(m.Answer, rec2...)
+				}
+				answered = true
+			}
 
 		default:
 			if rec, ok := zone.LookupRecord(q.Qtype, q.Name); ok {

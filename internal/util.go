@@ -8,8 +8,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
-	"go53/memory"
 )
 
 func SplitName(name string) (zone, host string, ok bool) {
@@ -96,28 +94,6 @@ func SanitizeFQDN(fqdn string) (string, error) {
 	}
 
 	return fqdn, nil
-}
-
-func HasOtherRecords[T any](
-	memStore *memory.InMemoryZoneStore,
-	zone, name string,
-	excludeType uint16,
-	registry map[uint16]T,
-) (bool, uint16) {
-	if memStore == nil {
-		return false, 0
-	}
-
-	for rrtype := range registry {
-		if rrtype == excludeType {
-			continue
-		}
-		_, _, _, found := memStore.GetRecord(zone, fmt.Sprintf("%d", rrtype), name)
-		if found {
-			return true, rrtype
-		}
-	}
-	return false, 0
 }
 
 func MergeStructs(dst, src interface{}) {

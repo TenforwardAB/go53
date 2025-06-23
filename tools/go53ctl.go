@@ -72,6 +72,7 @@ func handleListAllZones(db *badger.DB, countOnly bool) {
 		defer it.Close()
 		for it.Rewind(); it.Valid(); it.Next() {
 			item := it.Item()
+			log.Println(item)
 			zone := string(item.Key())
 
 			err := item.Value(func(val []byte) error {

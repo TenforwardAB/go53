@@ -60,15 +60,26 @@ func (ARecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 			currentList = v
 		case []interface{}:
 			for _, item := range v {
-				if obj, ok := item.(map[string]interface{}); ok {
-					if ipStr, ok := obj["ip"].(string); ok {
-						ttlVal := uint32(3600)
-						if t, ok := obj["ttl"].(float64); ok {
-							ttlVal = uint32(t)
-						}
-						currentList = append(currentList, types.ARecord{IP: ipStr, TTL: ttlVal})
+				switch obj := item.(type) {
+				case map[string]interface{}:
+					ipStr, _ := obj["ip"].(string)
+					ttlVal := uint32(3600)
+					if t, ok := obj["ttl"].(float64); ok {
+						ttlVal = uint32(t)
 					}
+					currentList = append(currentList, types.ARecord{IP: ipStr, TTL: ttlVal})
+				case types.ARecord: // ← detta behövs om det finns gamla records kvar som struct
+					currentList = append(currentList, obj)
 				}
+			}
+		case []map[string]interface{}: // ← NYTT CASE
+			for _, obj := range v {
+				ipStr, _ := obj["ip"].(string)
+				ttlVal := uint32(3600)
+				if t, ok := obj["ttl"].(float64); ok {
+					ttlVal = uint32(t)
+				}
+				currentList = append(currentList, types.ARecord{IP: ipStr, TTL: ttlVal})
 			}
 		}
 	}
@@ -80,7 +91,16 @@ func (ARecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 	}
 
 	currentList = append(currentList, types.ARecord{IP: ip, TTL: TTL})
-	return memStore.AddRecord(sanitizedZone, string(types.TypeA), key, currentList)
+
+	var listToStore []map[string]interface{}
+	for _, r := range currentList {
+		listToStore = append(listToStore, map[string]interface{}{
+			"ip":  r.IP,
+			"ttl": r.TTL,
+		})
+	}
+
+	return memStore.AddRecord(sanitizedZone, string(types.TypeA), key, listToStore)
 }
 
 func (ARecord) Lookup(host string) ([]dns.RR, bool) {
@@ -90,10 +110,7 @@ func (ARecord) Lookup(host string) ([]dns.RR, bool) {
 	}
 
 	sanitizedZone, err := internal.SanitizeFQDN(zone)
-	if err != nil {
-		return nil, false
-	}
-	if memStore == nil {
+	if err != nil || memStore == nil {
 		return nil, false
 	}
 
@@ -102,45 +119,33 @@ func (ARecord) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
-	var recs []types.ARecord
+	var results []dns.RR
+
 	switch v := val.(type) {
-	case []types.ARecord:
-		recs = v
-	case []interface{}:
+	case []map[string]interface{}:
 		for _, item := range v {
-			if obj, ok := item.(map[string]interface{}); ok {
-				if ipStr, ok := obj["ip"].(string); ok {
-					ttl := uint32(3600)
-					if t, ok := obj["ttl"].(float64); ok {
-						ttl = uint32(t)
-					}
-					recs = append(recs, types.ARecord{IP: ipStr, TTL: ttl})
-				}
+			ipStr, _ := item["ip"].(string)
+			ip := net.ParseIP(ipStr).To4()
+			if ip == nil {
+				continue
 			}
+			ttl := uint32(3600)
+			if t, ok := item["ttl"].(float64); ok {
+				ttl = uint32(t)
+			}
+			results = append(results, &dns.A{
+				Hdr: dns.RR_Header{
+					Name:   host,
+					Rrtype: dns.TypeA,
+					Class:  dns.ClassINET,
+					Ttl:    ttl,
+				},
+				A: ip,
+			})
 		}
+
 	default:
 		return nil, false
-	}
-
-	var results []dns.RR
-	for _, rec := range recs {
-		ip := net.ParseIP(rec.IP)
-		if ip == nil {
-			continue
-		}
-		v4 := ip.To4()
-		if v4 == nil {
-			continue
-		}
-		results = append(results, &dns.A{
-			Hdr: dns.RR_Header{
-				Name:   host,
-				Rrtype: dns.TypeA,
-				Class:  dns.ClassINET,
-				Ttl:    rec.TTL,
-			},
-			A: v4,
-		})
 	}
 
 	return results, len(results) > 0
@@ -151,6 +156,7 @@ func (ARecord) Delete(host string, value interface{}) error {
 	if !ok {
 		return errors.New("invalid host format")
 	}
+
 	sanitizedZone, err := internal.SanitizeFQDN(zone)
 	if err != nil {
 		return errors.New("FQDN Sanitize check failed")
@@ -160,7 +166,6 @@ func (ARecord) Delete(host string, value interface{}) error {
 	}
 
 	if value == nil {
-		// Delete all
 		return memStore.DeleteRecord(sanitizedZone, string(types.TypeA), name)
 	}
 
@@ -169,35 +174,21 @@ func (ARecord) Delete(host string, value interface{}) error {
 		return fmt.Errorf("ARecord Delete: expected string IP, got %T", value)
 	}
 
-	// Get existing
 	_, _, raw, found := memStore.GetRecord(sanitizedZone, string(types.TypeA), name)
 	if !found {
 		return nil
 	}
 
-	var records []types.ARecord
-	switch v := raw.(type) {
-	case []types.ARecord:
-		records = v
-	case []interface{}:
-		for _, item := range v {
-			if obj, ok := item.(map[string]interface{}); ok {
-				if ipStr, ok := obj["ip"].(string); ok {
-					ttl := uint32(3600)
-					if t, ok := obj["ttl"].(float64); ok {
-						ttl = uint32(t)
-					}
-					records = append(records, types.ARecord{IP: ipStr, TTL: ttl})
-				}
-			}
-		}
+	records, ok := raw.([]map[string]interface{})
+	if !ok {
+		return fmt.Errorf("Delete: invalid data format for A record")
 	}
 
-	// Filter
-	var filtered []types.ARecord
-	for _, r := range records {
-		if r.IP != targetIP {
-			filtered = append(filtered, r)
+	var filtered []map[string]interface{}
+	for _, rec := range records {
+		ipStr, _ := rec["ip"].(string)
+		if ipStr != targetIP {
+			filtered = append(filtered, rec)
 		}
 	}
 
