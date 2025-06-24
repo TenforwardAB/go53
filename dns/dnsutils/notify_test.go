@@ -31,20 +31,7 @@ var zoneLookupRecordFunc = func(qtype uint16, name string) (any, bool) {
 }
 
 func TestHandleNotify_Success(t *testing.T) {
-	lookupZoneRecord = func(rrtype uint16, name string) ([]dns.RR, bool) {
-		return []dns.RR{
-			&dns.SOA{
-				Hdr:     dns.RR_Header{Name: name, Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 3600},
-				Ns:      "ns1.example.com.",
-				Mbox:    "hostmaster.example.com.",
-				Serial:  2025061701,
-				Refresh: 3600,
-				Retry:   600,
-				Expire:  604800,
-				Minttl:  86400,
-			},
-		}, true
-	}
+
 	mockSOAExists = true
 
 	msg := new(dns.Msg)
@@ -81,9 +68,7 @@ func TestHandleNotify_Success(t *testing.T) {
 }
 
 func TestHandleNotify_Refused(t *testing.T) {
-	lookupZoneRecord = func(rrtype uint16, name string) ([]dns.RR, bool) {
-		return nil, false
-	}
+
 	mockSOAExists = false
 
 	msg := new(dns.Msg)

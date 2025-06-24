@@ -153,30 +153,15 @@ func (z *InMemoryZoneStore) DeleteRecord(zone, rtype, name string) error {
 
 }
 
-func normalizeRecord(input interface{}) (map[string]interface{}, bool) {
-	switch v := input.(type) {
-	case map[string]interface{}:
-		return v, true
-	case map[string]string:
-		out := make(map[string]interface{})
-		for k, val := range v {
-			out[k] = val
-		}
-		return out, true
-	case struct {
-		Ip  string
-		TTL int
-	}: // unlikely to work unless you're unmarshaling to struct
-		return map[string]interface{}{"ip": v.Ip, "ttl": v.TTL}, true
-	default:
-		// fallback for []interface{} with positional data
-		if arr, ok := v.([]interface{}); ok && len(arr) == 2 {
-			if ip, ok1 := arr[0].(string); ok1 {
-				if ttl, ok2 := arr[1].(float64); ok2 {
-					return map[string]interface{}{"ip": ip, "ttl": int(ttl)}, true
-				}
-			}
-		}
+func (z *InMemoryZoneStore) DeleteZone(zone string) error {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+
+	zones := z.cache["zones"]
+	if _, exists := zones[zone]; exists {
+		delete(zones, zone)
+		return z.persist(zone)
 	}
-	return nil, false
+	
+	return nil
 }

@@ -1,4 +1,4 @@
-package api
+package dnsutils
 
 import (
 	"fmt"
@@ -49,5 +49,5 @@ func UpdateSOASerial(zoneName string) error {
 	}
 
 	existing.Serial = internal.NextSerial(existing.Serial)
-	return store.AddRecord(sanitizedZone, string(types.TypeSOA), sanitizedZone, existing)
+	return store.AddRecord(sanitizedZone, string(types.TypeSOA), sanitizedZone, existing) //TODO: why not use zone.AddRecord?
 }

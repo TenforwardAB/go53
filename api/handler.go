@@ -68,6 +68,8 @@ func addRecordHandler(w http.ResponseWriter, r *http.Request) {
 
 	value := body
 	log.Printf("body: %+v\n", value)
+	log.Printf("zoneName: %+v\n", zoneName)
+	log.Printf("name: %+v\n", name)
 
 	if err := zone.AddRecord(rrtype, zoneName, name, value, ttlPtr); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -75,7 +77,7 @@ func addRecordHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if rrtype != dns.TypeSOA {
-		if err := UpdateSOASerial(zoneName); err != nil {
+		if err := dnsutils.UpdateSOASerial(zoneName); err != nil {
 			log.Printf("warning: failed to update SOA serial: %v", err)
 		} else if config.AppConfig.GetLive().Mode != "secondary" {
 			go dnsutils.ScheduleNotify(zoneName)
@@ -140,7 +142,7 @@ func deleteRecordHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if rrtype != dns.TypeSOA {
-		if err := UpdateSOASerial(zoneName); err != nil {
+		if err := dnsutils.UpdateSOASerial(zoneName); err != nil {
 			log.Printf("warning: failed to update SOA serial: %v", err)
 		} else if config.AppConfig.GetLive().Mode != "secondary" {
 			go dnsutils.ScheduleNotify(zoneName)
@@ -152,13 +154,19 @@ func deleteRecordHandler(w http.ResponseWriter, r *http.Request) {
 
 // GET
 func GetZonesHandler(w http.ResponseWriter, r *http.Request) {
-	payload := r.Context().Value("user").(map[string]interface{})
+	userRaw := r.Context().Value("user")
+	payload, ok := userRaw.(map[string]interface{})
+	if !ok {
+		http.Error(w, "unauthorized or missing user context", http.StatusUnauthorized)
+		return
+	}
+
 	err := json.NewEncoder(w).Encode(map[string]any{
 		"message": "Authorized",
 		"user":    payload,
 	})
 	if err != nil {
-		return
+		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
 }
 

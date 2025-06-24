@@ -14,8 +14,6 @@ import (
 	"github.com/miekg/dns"
 )
 
-var lookupZoneRecord = zone.LookupRecord
-
 type notifyState struct {
 	lastNotify    time.Time
 	debounceTimer *time.Timer
@@ -32,6 +30,14 @@ var notifyStates = make(map[string]*notifyState)
 var zoneStates = make(map[string]*zoneState)
 var fetchQueue = make(chan string, 100)
 
+// ScheduleNotify schedules a DNS NOTIFY message for the specified zone.
+// It uses a debounce timer to prevent repeated notifications within a short
+// time window, based on the NotifyDebounceMs configuration.
+//
+// If a notification is already pending for the zone, the function does nothing.
+//
+// Parameters:
+//   - zone: The zone name for which a NOTIFY message should be sent.
 func ScheduleNotify(zone string) {
 	state, ok := notifyStates[zone]
 	if !ok {
@@ -53,6 +59,12 @@ func ScheduleNotify(zone string) {
 	})
 }
 
+// SendNotify sends a DNS NOTIFY message for the given zone to all
+// configured transfer targets. It tries UDP first and falls back to TCP
+// if the UDP attempt fails. Each target is notified asynchronously.
+//
+// Parameters:
+//   - inzone: The raw zone name (which will be sanitized before use).
 func SendNotify(inzone string) {
 	szone, err := internal.SanitizeFQDN(inzone)
 	if err != nil {
@@ -95,9 +107,17 @@ func SendNotify(inzone string) {
 	}
 }
 
+// HandleNotify processes an incoming DNS NOTIFY message.
+// If the message contains a valid question, it extracts the zone name
+// and triggers a background fetch for that zone via `handleNotify`.
+//
+// Parameters:
+//   - w: dns.ResponseWriter used to send the response.
+//   - r: The received *dns.Msg containing the NOTIFY message.
 func HandleNotify(w dns.ResponseWriter, r *dns.Msg) {
 	m := new(dns.Msg)
 	m.SetReply(r)
+	log.Println("Notify recieved")
 
 	if len(r.Question) == 0 {
 		m.SetRcode(r, dns.RcodeFormatError)
@@ -107,17 +127,6 @@ func HandleNotify(w dns.ResponseWriter, r *dns.Msg) {
 
 	zoneName := r.Question[0].Name
 
-	// RFC 1034 - A zone contains exactly one SOA record.
-	// (Section 4.3.4 — Start Of Authority)
-	//  RFC 1035 - Every zone has a single origin node, and the database at the origin node must include an SOA record.
-	// (Section 5.2 — Zone Maintenance)
-	_, exists := lookupZoneRecord(dns.TypeSOA, zoneName)
-	if !exists {
-		m.SetRcode(r, dns.RcodeRefused)
-		_ = w.WriteMsg(m)
-		return
-	}
-
 	log.Printf("Received NOTIFY for zone %s from %s", zoneName, w.RemoteAddr().String())
 
 	handleNotify(zoneName)
@@ -126,6 +135,16 @@ func HandleNotify(w dns.ResponseWriter, r *dns.Msg) {
 	_ = w.WriteMsg(m)
 }
 
+// localZoneSerial retrieves the local SOA serial number for a given zone.
+// It sanitizes the input FQDN, performs a lookup, and extracts the serial
+// from the first SOA record if found.
+//
+// Returns:
+//   - uint32: The local SOA serial number (0 if not found).
+//   - error:  An error if the lookup or type assertion fails.
+//
+// Parameters:
+//   - lzone: The raw zone name to check.
 func localZoneSerial(lzone string) (uint32, error) {
 	zoneName, err := internal.SanitizeFQDN(lzone)
 	if err != nil {
@@ -134,10 +153,13 @@ func localZoneSerial(lzone string) (uint32, error) {
 
 	rrs, ok := zone.LookupRecord(dns.TypeSOA, zoneName)
 	if !ok || len(rrs) == 0 {
-		return 0, fmt.Errorf("zone %q not loaded locally", lzone)
+		return 0, nil
 	}
 
-	// The first RR is SOA since only ONE SOA can exsist for each zone
+	// RFC 1034 - A zone contains exactly one SOA record.
+	// (Section 4.3.4 — Start Of Authority)
+	//  RFC 1035 - Every zone has a single origin node, and the database at the origin node must include an SOA record.
+	// (Section 5.2 — Zone Maintenance)
 	if soa, ok := rrs[0].(*dns.SOA); ok {
 		return soa.Serial, nil
 	}
@@ -145,6 +167,14 @@ func localZoneSerial(lzone string) (uint32, error) {
 	return 0, fmt.Errorf("unexpected record type for %q: %T", zoneName, rrs[0])
 }
 
+// checkSOA compares the SOA serial number of a zone from the primary DNS server
+// with the local zone's SOA serial. It determines if the primary has a newer version.
+//
+// Returns true if the primary serial is higher (indicating an update is available),
+// or false if the serials are equal, missing, or if an error occurs.
+//
+// Parameters:
+//   - zone: The zone name to check.
 func checkSOA(zone string) bool {
 
 	primaryIP := config.AppConfig.GetLive().Primary.Ip
@@ -187,6 +217,12 @@ func checkSOA(zone string) bool {
 	return primarySerial > localSerial
 }
 
+// handleNotify updates the state for a zone upon receiving a NOTIFY.
+// It ensures at least 10 seconds have passed since the last fetch and that no
+// fetch is currently pending. If eligible, the zone is queued for background fetching.
+//
+// Parameters:
+//   - zone: The zone name received in the NOTIFY message.
 func handleNotify(zone string) {
 	state, ok := zoneStates[zone]
 	if !ok {
@@ -200,6 +236,15 @@ func handleNotify(zone string) {
 	fetchQueue <- zone
 }
 
+// fetchZone performs a full AXFR (zone transfer) for the specified zone
+// from the configured primary DNS server. If the transfer is successful,
+// the resulting records are imported into the system.
+//
+// This function logs the outcome and any errors encountered during transfer
+// or record import.
+//
+// Parameters:
+//   - zoneName: The name of the zone to fetch.
 func fetchZone(zoneName string) {
 	live := config.AppConfig.GetLive()
 	primaryIP := live.Primary.Ip
@@ -209,11 +254,9 @@ func fetchZone(zoneName string) {
 	}
 	addr := net.JoinHostPort(primaryIP, strconv.Itoa(port))
 
-	// Prepare the AXFR request
 	req := new(dns.Msg)
 	req.SetAxfr(dns.Fqdn(zoneName))
 
-	// Set up a Transfer; it will dial over TCP automatically for AXFR.
 	tran := &dns.Transfer{
 		DialTimeout:  5 * time.Second,
 		ReadTimeout:  5 * time.Second,
@@ -239,26 +282,32 @@ func fetchZone(zoneName string) {
 	log.Printf("[fetchZone] AXFR returned %d records", len(records))
 	log.Printf("[fetchZone] AXFR returned the records", records)
 
-	log.Printf("[fetchZone] got %d records for %s", len(records), zoneName)
+	err = ImportRecords("", zoneName, records)
+	if err != nil {
+		log.Println("[fetchZone] error importing AXFR records: ", err)
+		return
+	}
 
-	// Now update your in-memory zone store
-	//if err := zone.LoadZoneFromRecords(zoneName, records); err != nil {
-	//	log.Printf("[fetchZone] failed to load zone %s: %v", zoneName, err)
-	//} else {
-	//	log.Printf("[fetchZone] zone %s updated successfully", zoneName)
-	//}
+	log.Printf("[fetchZone] got %d records for %s", len(records), zoneName)
 }
 
+// ProcessFetchQueue starts an infinite loop to process zone fetches
+// from the `fetchQueue` channel. For each zone, it launches a goroutine
+// that checks if an update is required using `checkSOA`, and if so,
+// performs an AXFR via `fetchZone`. It respects `Dev.DualMode` as an override.
+//
+// This function is intended to run as a background worker.
+
 func ProcessFetchQueue() {
-	for zone := range fetchQueue {
+	for izone := range fetchQueue {
 		go func(zone string) {
 			defer func() {
 				zoneStates[zone].pending = false
 			}()
-			if checkSOA(zone) {
-				fetchZone(zone) // do AXFR via config.Primary.Ip
+			if checkSOA(zone) || config.AppConfig.GetLive().Dev.DualMode {
+				fetchZone(zone)
 				zoneStates[zone].lastFetch = time.Now()
 			}
-		}(zone)
+		}(izone)
 	}
 }

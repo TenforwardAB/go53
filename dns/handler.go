@@ -12,8 +12,19 @@ import (
 
 func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	log.Println("Incomming DNS request")
-	if r.Opcode == dns.OpcodeNotify && (config.AppConfig.GetLive().Mode == "secondary" ||
-		config.AppConfig.GetLive().Dev.DualMode) {
+	live := config.AppConfig.GetLive()
+	if r.Opcode == dns.OpcodeNotify && (live.Mode == "secondary" || live.Dev.DualMode) {
+		remoteIP, _, err := net.SplitHostPort(w.RemoteAddr().String())
+		if err != nil {
+			log.Println("Invalid remote address:", w.RemoteAddr())
+			return
+		}
+
+		if !strings.HasPrefix(remoteIP, live.Primary.Ip) {
+			log.Println("Refusing NOTIFY from unknown IP:", remoteIP)
+			return
+		}
+
 		dnsutils.HandleNotify(w, r)
 		return
 	}
@@ -28,7 +39,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		log.Println("Type is :", q.Qtype)
 
 		if q.Qclass == dns.ClassCHAOS && q.Qtype == dns.TypeTXT && strings.ToLower(q.Name) == "version.bind." {
-			version := config.AppConfig.GetLive().Version
+			version := live.Version
 			if version != "" {
 				txt := &dns.TXT{
 					Hdr: dns.RR_Header{
@@ -68,17 +79,24 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			}
 
 		case dns.TypeAXFR, dns.TypeIXFR:
-			// Only over TCP and only on secondaries
+			log.Println("Type is:", q.Qtype)
+
+			// Only allow AXFR/IXFR over TCP
 			if _, tcp := w.RemoteAddr().(*net.TCPAddr); !tcp {
+				log.Println("Request is NOT over TCP")
 				m.SetRcode(r, dns.RcodeRefused)
 				_ = w.WriteMsg(m)
 				return
 			}
-			if config.AppConfig.GetLive().Mode != "secondary" && !config.AppConfig.GetLive().Dev.DualMode {
-				m.SetRcode(r, dns.RcodeNotImplemented)
+
+			// Allow AXFR only from primary or replication mode (or dual-mode if configured)
+			if !(live.Mode == "primary" || live.Mode == "replication" || live.Dev.DualMode) {
+				log.Println("AXFR refused: not in primary/replication/dual mode (current mode:", live.Mode, ")")
+				m.SetRcode(r, dns.RcodeRefused)
 				_ = w.WriteMsg(m)
 				return
 			}
+
 			log.Println("Sending AXFR to client")
 			dnsutils.ServeDNS(w, r)
 			return

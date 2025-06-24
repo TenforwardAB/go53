@@ -4,6 +4,7 @@ import (
 	"github.com/miekg/dns"
 	"go53/types"
 	"net"
+	"strings"
 )
 
 type RRBuilder func(name string, data any) []dns.RR
@@ -37,6 +38,57 @@ var RRBuilders = map[string]RRBuilder{
 					rrs = append(rrs, &dns.A{
 						Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: ttl},
 						A:   ip,
+					})
+				}
+			}
+		}
+
+		return rrs
+	},
+
+	"NS": func(name string, data any) []dns.RR {
+		var rrs []dns.RR
+
+		switch v := data.(type) {
+		case []types.NSRecord:
+			for _, rec := range v {
+				rrs = append(rrs, &dns.NS{
+					Hdr: dns.RR_Header{
+						Name:   name,
+						Rrtype: dns.TypeNS,
+						Class:  dns.ClassINET,
+						Ttl:    rec.TTL,
+					},
+					Ns: dns.Fqdn(rec.NS),
+				})
+			}
+		case []map[string]interface{}:
+			for _, rec := range v {
+				ns := rec["ns"].(string)
+				ttl := toTTL(rec)
+				rrs = append(rrs, &dns.NS{
+					Hdr: dns.RR_Header{
+						Name:   name,
+						Rrtype: dns.TypeNS,
+						Class:  dns.ClassINET,
+						Ttl:    ttl,
+					},
+					Ns: dns.Fqdn(ns),
+				})
+			}
+		case []interface{}:
+			for _, raw := range v {
+				if rec, ok := raw.(map[string]interface{}); ok {
+					ns := rec["ns"].(string)
+					ttl := toTTL(rec)
+					rrs = append(rrs, &dns.NS{
+						Hdr: dns.RR_Header{
+							Name:   name,
+							Rrtype: dns.TypeNS,
+							Class:  dns.ClassINET,
+							Ttl:    ttl,
+						},
+						Ns: dns.Fqdn(ns),
 					})
 				}
 			}
@@ -328,6 +380,35 @@ var RRBuilders = map[string]RRBuilder{
 		}
 	},
 
+	"SPF": func(name string, data any) []dns.RR {
+		switch v := data.(type) {
+		case types.SPFRecord:
+			return []dns.RR{&dns.SPF{
+				Hdr: dns.RR_Header{
+					Name:   name,
+					Rrtype: dns.TypeSPF,
+					Class:  dns.ClassINET,
+					Ttl:    v.TTL,
+				},
+				Txt: []string{v.Text},
+			}}
+		case map[string]interface{}:
+			text := v["text"].(string)
+			ttl := toTTL(v)
+			return []dns.RR{&dns.SPF{
+				Hdr: dns.RR_Header{
+					Name:   name,
+					Rrtype: dns.TypeSPF,
+					Class:  dns.ClassINET,
+					Ttl:    ttl,
+				},
+				Txt: []string{text},
+			}}
+		default:
+			return nil
+		}
+	},
+
 	"SOA": func(name string, data any) []dns.RR {
 		switch v := data.(type) {
 		case types.SOARecord:
@@ -356,6 +437,82 @@ var RRBuilders = map[string]RRBuilder{
 			return nil
 		}
 	},
+}
+
+func RRToZoneData(rrs []dns.RR) types.ZoneData {
+	var zd types.ZoneData
+
+	zd.A = map[string][]types.ARecord{}
+	zd.AAAA = map[string][]types.AAAARecord{}
+	zd.MX = map[string][]types.MXRecord{}
+	zd.NS = map[string][]types.NSRecord{}
+	zd.TXT = map[string][]types.TXTRecord{}
+	zd.SRV = map[string][]types.SRVRecord{}
+	zd.PTR = map[string][]types.PTRRecord{}
+	zd.CNAME = map[string]types.CNAMERecord{}
+	zd.CAA = map[string][]types.CAARecord{}
+	zd.DNAME = map[string]types.DNAMERecord{}
+	zd.NSEC = map[string]types.NSECRecord{}
+	zd.NSEC3 = map[string]types.NSEC3Record{}
+	zd.DNSKEY = map[string][]types.DNSKEYRecord{}
+	zd.RRSIG = map[string][]types.RRSIGRecord{}
+	zd.DS = map[string][]types.DSRecord{}
+	zd.NAPTR = map[string][]types.NAPTRRecord{}
+	zd.SPF = map[string]types.SPFRecord{}
+	zd.HTTPS = map[string][]types.HTTPSRecord{}
+	zd.SVCB = map[string][]types.SVCBRecord{}
+	zd.LOC = map[string][]types.LOCRecord{}
+	zd.CERT = map[string][]types.CERTRecord{}
+	zd.SSHFP = map[string][]types.SSHFPRecord{}
+	zd.URI = map[string][]types.URIRecord{}
+	zd.APL = map[string][]types.APLRecord{}
+
+	for _, rr := range rrs {
+		name := strings.ToLower(strings.TrimSuffix(rr.Header().Name, "."))     // Normalize
+		zone := strings.ToLower(strings.TrimSuffix(rrs[0].Header().Name, ".")) // Or use sanitizedZoneName passed in as arg!
+
+		// Remove the zone suffix from the name
+		if strings.HasSuffix(name, "."+zone) {
+			name = strings.TrimSuffix(name, "."+zone)
+		} else if name == zone {
+			name = "@"
+		}
+
+		switch v := rr.(type) {
+		case *dns.A:
+			zd.A[name] = append(zd.A[name], types.ARecord{IP: v.A.String(), TTL: v.Hdr.Ttl})
+		case *dns.AAAA:
+			zd.AAAA[name] = append(zd.AAAA[name], types.AAAARecord{IP: v.AAAA.String(), TTL: v.Hdr.Ttl})
+		case *dns.MX:
+			zd.MX[name] = append(zd.MX[name], types.MXRecord{Priority: v.Preference, Host: strings.TrimSuffix(v.Mx, "."), TTL: v.Hdr.Ttl})
+		case *dns.NS:
+			zd.NS[name] = append(zd.NS[name], types.NSRecord{NS: strings.TrimSuffix(v.Ns, "."), TTL: v.Hdr.Ttl})
+		case *dns.TXT:
+			zd.TXT[name] = append(zd.TXT[name], types.TXTRecord{Text: strings.Join(v.Txt, " "), TTL: v.Hdr.Ttl})
+		case *dns.SRV:
+			zd.SRV[name] = append(zd.SRV[name], types.SRVRecord{Priority: v.Priority, Weight: v.Weight, Port: v.Port, Target: strings.TrimSuffix(v.Target, "."), TTL: v.Hdr.Ttl})
+		case *dns.PTR:
+			zd.PTR[name] = append(zd.PTR[name], types.PTRRecord{Ptr: strings.TrimSuffix(v.Ptr, "."), TTL: v.Hdr.Ttl})
+		case *dns.CNAME:
+			zd.CNAME[name] = types.CNAMERecord{Target: strings.TrimSuffix(v.Target, "."), TTL: v.Hdr.Ttl}
+		case *dns.SPF:
+			zd.SPF[name] = types.SPFRecord{Text: strings.Join(v.Txt, " "), TTL: v.Hdr.Ttl}
+		case *dns.SOA:
+			zd.SOA = &types.SOARecord{
+				Ns:      strings.TrimSuffix(v.Ns, "."),
+				Mbox:    strings.TrimSuffix(v.Mbox, "."),
+				Serial:  v.Serial,
+				Refresh: v.Refresh,
+				Retry:   v.Retry,
+				Expire:  v.Expire,
+				Minimum: v.Minttl,
+				TTL:     v.Hdr.Ttl,
+			}
+			// TODO: Add remaining record types if needed
+		}
+	}
+
+	return zd
 }
 
 func toTTL(m map[string]interface{}) uint32 {

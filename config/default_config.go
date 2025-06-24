@@ -26,7 +26,7 @@ var DefaultLiveConfig = LiveConfig{
 	},
 
 	Dev: DevConfig{
-		DualMode: true,
+		DualMode: false,
 	},
 }
 

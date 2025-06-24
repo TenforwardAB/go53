@@ -1,4 +1,4 @@
-// This file is part of the go53 project.
+// Package rtypes This file is part of the go53 project.
 //
 // This file is licensed under the European Union Public License (EUPL) v1.2.
 // You may only use this work in compliance with the License.

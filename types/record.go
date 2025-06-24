@@ -208,29 +208,29 @@ type APLRecord struct {
 }
 
 type ZoneData struct {
-	A      map[string]ARecord      `json:"a,omitempty"`
-	AAAA   map[string]AAAARecord   `json:"aaaa,omitempty"`
-	MX     map[string]MXRecord     `json:"mx,omitempty"`
-	SOA    map[string]SOARecord    `json:"soa,omitempty"`
-	CNAME  map[string]CNAMERecord  `json:"cname,omitempty"`
-	NS     map[string]NSRecord     `json:"ns,omitempty"`
-	SRV    map[string]SRVRecord    `json:"srv,omitempty"`
-	TXT    map[string]TXTRecord    `json:"txt,omitempty"`
-	PTR    map[string]PTRRecord    `json:"ptr,omitempty"`
-	CAA    map[string]CAARecord    `json:"caa,omitempty"`
-	DNSKEY map[string]DNSKEYRecord `json:"dnskey,omitempty"`
-	RRSIG  map[string]RRSIGRecord  `json:"rrsig,omitempty"`
-	NSEC   map[string]NSECRecord   `json:"nsec,omitempty"`
-	NSEC3  map[string]NSEC3Record  `json:"nsec3,omitempty"`
-	DS     map[string]DSRecord     `json:"ds,omitempty"`
-	NAPTR  map[string]NAPTRRecord  `json:"naptr,omitempty"`
-	SPF    map[string]SPFRecord    `json:"spf,omitempty"`
-	HTTPS  map[string]HTTPSRecord  `json:"https,omitempty"`
-	SVCB   map[string]SVCBRecord   `json:"svcb,omitempty"`
-	LOC    map[string]LOCRecord    `json:"loc,omitempty"`
-	CERT   map[string]CERTRecord   `json:"cert,omitempty"`
-	SSHFP  map[string]SSHFPRecord  `json:"sshfp,omitempty"`
-	URI    map[string]URIRecord    `json:"uri,omitempty"`
-	APL    map[string]APLRecord    `json:"apl,omitempty"`
-	DNAME  map[string]DNAMERecord  `json:"dname,omitempty"`
+	A      map[string][]ARecord      `json:"a,omitempty"`
+	AAAA   map[string][]AAAARecord   `json:"aaaa,omitempty"`
+	MX     map[string][]MXRecord     `json:"mx,omitempty"`
+	SOA    *SOARecord                `json:"soa,omitempty"` // Only one per zone
+	CNAME  map[string]CNAMERecord    `json:"cname,omitempty"`
+	NS     map[string][]NSRecord     `json:"ns,omitempty"`
+	SRV    map[string][]SRVRecord    `json:"srv,omitempty"`
+	TXT    map[string][]TXTRecord    `json:"txt,omitempty"`
+	PTR    map[string][]PTRRecord    `json:"ptr,omitempty"`
+	CAA    map[string][]CAARecord    `json:"caa,omitempty"`
+	DNSKEY map[string][]DNSKEYRecord `json:"dnskey,omitempty"`
+	RRSIG  map[string][]RRSIGRecord  `json:"rrsig,omitempty"`
+	NSEC   map[string]NSECRecord     `json:"nsec,omitempty"`  // one per name
+	NSEC3  map[string]NSEC3Record    `json:"nsec3,omitempty"` // one per name
+	DS     map[string][]DSRecord     `json:"ds,omitempty"`
+	NAPTR  map[string][]NAPTRRecord  `json:"naptr,omitempty"`
+	SPF    map[string]SPFRecord      `json:"spf,omitempty"`
+	HTTPS  map[string][]HTTPSRecord  `json:"https,omitempty"`
+	SVCB   map[string][]SVCBRecord   `json:"svcb,omitempty"`
+	LOC    map[string][]LOCRecord    `json:"loc,omitempty"`
+	CERT   map[string][]CERTRecord   `json:"cert,omitempty"`
+	SSHFP  map[string][]SSHFPRecord  `json:"sshfp,omitempty"`
+	URI    map[string][]URIRecord    `json:"uri,omitempty"`
+	APL    map[string][]APLRecord    `json:"apl,omitempty"`
+	DNAME  map[string]DNAMERecord    `json:"dname,omitempty"`
 }
