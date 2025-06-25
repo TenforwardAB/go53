@@ -59,7 +59,7 @@ type LiveConfig struct {
 type ConfigManager struct {
 	Base BaseConfig
 	mu   sync.RWMutex
-	live LiveConfig
+	Live LiveConfig
 }
 
 var AppConfig = &ConfigManager{}
@@ -143,7 +143,7 @@ func (cm *ConfigManager) InitLiveConfig() {
 	}
 
 	cm.mu.Lock()
-	cm.live = cfg
+	cm.Live = cfg
 	cm.mu.Unlock()
 
 	if changed {
@@ -232,7 +232,7 @@ func (cm *ConfigManager) loadLiveConfig() error {
 	}
 
 	cm.mu.Lock()
-	cm.live = cfg
+	cm.Live = cfg
 	cm.mu.Unlock()
 
 	if changed {
@@ -291,7 +291,7 @@ func (cm *ConfigManager) persistLiveConfigUnlocked(live LiveConfig) error {
 // PersistLiveConfig is the public version: it locks, then calls the unlocked writer.
 func (cm *ConfigManager) PersistLiveConfig() error {
 	cm.mu.RLock()
-	liveCopy := cm.live
+	liveCopy := cm.Live
 	cm.mu.RUnlock()
 
 	return cm.persistLiveConfigUnlocked(liveCopy)
@@ -304,22 +304,22 @@ func (cm *ConfigManager) GetBase() BaseConfig {
 func (cm *ConfigManager) GetLive() LiveConfig {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
-	return cm.live
+	return cm.Live
 }
 
 func (cm *ConfigManager) UpdateLive(newConfig LiveConfig) {
 	cm.mu.Lock()
-	cm.live = newConfig
-	_ = cm.persistLiveConfigUnlocked(cm.live)
+	cm.Live = newConfig
+	_ = cm.persistLiveConfigUnlocked(cm.Live)
 	cm.mu.Unlock()
 }
 
 func (cm *ConfigManager) MergeUpdateLive(partial LiveConfig) {
 	cm.mu.Lock()
-	internal.MergeStructs(&cm.live, &partial)
+	internal.MergeStructs(&cm.Live, &partial)
 
 	// take a snapshot to persist
-	toPersist := cm.live
+	toPersist := cm.Live
 	cm.mu.Unlock()
 
 	if err := cm.persistLiveConfigUnlocked(toPersist); err != nil {

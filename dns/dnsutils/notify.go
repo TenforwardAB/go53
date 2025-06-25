@@ -30,6 +30,11 @@ var notifyStates = make(map[string]*notifyState)
 var zoneStates = make(map[string]*zoneState)
 var fetchQueue = make(chan string, 100)
 
+var (
+	checkSOAFunc  = checkSOA
+	fetchZoneFunc = fetchZone
+)
+
 // ScheduleNotify schedules a DNS NOTIFY message for the specified zone.
 // It uses a debounce timer to prevent repeated notifications within a short
 // time window, based on the NotifyDebounceMs configuration.
@@ -77,11 +82,23 @@ func SendNotify(inzone string) {
 			continue
 		}
 
-		go func(addr string) {
-			if !strings.Contains(addr, ":") {
-				addr += ":53"
-			}
+		// Lägg till default-port om den saknas
+		addr := target
+		if !strings.Contains(addr, ":") {
+			addr += ":53"
+		}
 
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			log.Printf("SendNotify: invalid address format '%s': %v", addr, err)
+			continue
+		}
+		if ip := net.ParseIP(host); ip == nil {
+			log.Printf("SendNotify: invalid IP address '%s'", host)
+			continue
+		}
+
+		go func(addr string) {
 			m := new(dns.Msg)
 			m.SetNotify(szone)
 			m.RecursionDesired = false
@@ -103,7 +120,7 @@ func SendNotify(inzone string) {
 			} else {
 				log.Printf("SendNotify: successfully notified %s for zone %s over TCP", addr, szone)
 			}
-		}(target)
+		}(addr)
 	}
 }
 
@@ -280,7 +297,7 @@ func fetchZone(zoneName string) {
 	}
 
 	log.Printf("[fetchZone] AXFR returned %d records", len(records))
-	log.Printf("[fetchZone] AXFR returned the records", records)
+	log.Printf("[fetchZone] AXFR returned the records: %+v", records)
 
 	err = ImportRecords("", zoneName, records)
 	if err != nil {
@@ -302,11 +319,15 @@ func ProcessFetchQueue() {
 	for izone := range fetchQueue {
 		go func(zone string) {
 			defer func() {
-				zoneStates[zone].pending = false
+				if state, ok := zoneStates[zone]; ok {
+					state.pending = false
+				}
 			}()
-			if checkSOA(zone) || config.AppConfig.GetLive().Dev.DualMode {
-				fetchZone(zone)
-				zoneStates[zone].lastFetch = time.Now()
+			if checkSOAFunc(zone) || config.AppConfig.GetLive().Dev.DualMode {
+				fetchZoneFunc(zone)
+				if state, ok := zoneStates[zone]; ok {
+					state.lastFetch = time.Now()
+				}
 			}
 		}(izone)
 	}

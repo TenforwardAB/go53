@@ -44,7 +44,7 @@ func main() {
 		color = "#4c1"
 	case pct > 75:
 		color = "#97CA00"
-	case pct > 55:
+	case pct > 50:
 		color = "#dfb317"
 	}
 
