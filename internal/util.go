@@ -4,11 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"github.com/miekg/dns"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
-
-	"go53/memory"
 )
 
 func SplitName(name string) (zone, host string, ok bool) {
@@ -97,24 +96,47 @@ func SanitizeFQDN(fqdn string) (string, error) {
 	return fqdn, nil
 }
 
-func HasOtherRecords[T any](
-	memStore *memory.InMemoryZoneStore,
-	zone, name string,
-	excludeType uint16,
-	registry map[uint16]T,
-) (bool, uint16) {
-	if memStore == nil {
-		return false, 0
-	}
+func MergeStructs(dst, src interface{}) {
+	dstVal := reflect.ValueOf(dst).Elem()
+	srcVal := reflect.ValueOf(src).Elem()
 
-	for rrtype := range registry {
-		if rrtype == excludeType {
+	for i := 0; i < dstVal.NumField(); i++ {
+		dstField := dstVal.Field(i)
+		srcField := srcVal.Field(i)
+
+		if !dstField.CanSet() {
 			continue
 		}
-		_, _, _, found := memStore.GetRecord(zone, fmt.Sprintf("%d", rrtype), name)
-		if found {
-			return true, rrtype
+
+		switch dstField.Kind() {
+		case reflect.Struct:
+			if !isZeroValue(srcField) {
+				MergeStructs(dstField.Addr().Interface(), srcField.Addr().Interface())
+			}
+
+		case reflect.String:
+			if srcField.String() != "" {
+				dstField.SetString(srcField.String())
+			}
+
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			if srcField.Int() != 0 {
+				dstField.SetInt(srcField.Int())
+			}
+
+		case reflect.Bool:
+			if srcField.Bool() {
+				dstField.SetBool(srcField.Bool())
+			}
+
+		case reflect.Float32, reflect.Float64:
+			if srcField.Float() != 0 {
+				dstField.SetFloat(srcField.Float())
+			}
 		}
 	}
-	return false, 0
+}
+
+func isZeroValue(v reflect.Value) bool {
+	return reflect.DeepEqual(v.Interface(), reflect.Zero(v.Type()).Interface())
 }

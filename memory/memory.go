@@ -3,7 +3,11 @@ package memory
 import (
 	"errors"
 	"fmt"
+	"github.com/miekg/dns"
+	"go53/internal"
 	"go53/storage"
+	"log"
+	"strings"
 	"sync"
 )
 
@@ -83,6 +87,60 @@ func (z *InMemoryZoneStore) GetRecord(zone, rtype, name string) (string, string,
 	return zone, rtype, rec, exists
 }
 
+func (z *InMemoryZoneStore) GetZone(zone string) ([]dns.RR, error) {
+	sanitizedZone, err := internal.SanitizeFQDN(zone)
+	if err != nil {
+		return nil, err
+	}
+
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+
+	zonesMap, ok := z.cache["zones"]
+	log.Println("zonesMap", zonesMap)
+	if !ok {
+		return nil, errors.New("zones cache missing")
+	}
+
+	zoneMap, ok := zonesMap[sanitizedZone]
+	log.Println("zoneMap", zoneMap)
+	if !ok {
+		return nil, errors.New("zone not found")
+	}
+
+	var allRRs []dns.RR
+
+	for rtype, namesMap := range zoneMap {
+		builder, ok := internal.RRBuilders[rtype]
+		log.Println("rtype is: ", rtype)
+		log.Println("builder is:", builder)
+		if !ok {
+			log.Println("NOT OK IN GetZone")
+			continue
+		}
+
+		for name, rawData := range namesMap {
+			var fqdn string
+			switch {
+			case name == "@":
+				fqdn = sanitizedZone
+			case dns.IsFqdn(name) && strings.HasSuffix(name, sanitizedZone):
+				fqdn = name
+			default:
+				fqdn = name + "." + sanitizedZone
+			}
+			fqdn = dns.Fqdn(fqdn)
+
+			rrs := builder(fqdn, rawData)
+			if len(rrs) > 0 {
+				allRRs = append(allRRs, rrs...)
+			}
+		}
+	}
+
+	return allRRs, nil
+}
+
 func (z *InMemoryZoneStore) DeleteRecord(zone, rtype, name string) error {
 	z.mu.Lock()
 	defer z.mu.Unlock()
@@ -93,4 +151,17 @@ func (z *InMemoryZoneStore) DeleteRecord(zone, rtype, name string) error {
 	}
 	return errors.New("record type not found")
 
+}
+
+func (z *InMemoryZoneStore) DeleteZone(zone string) error {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+
+	zones := z.cache["zones"]
+	if _, exists := zones[zone]; exists {
+		delete(zones, zone)
+		return z.persist(zone)
+	}
+	
+	return nil
 }

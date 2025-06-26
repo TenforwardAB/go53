@@ -23,10 +23,14 @@ type MockStorage struct {
 	data map[string]map[string][]byte
 }
 
-func (m *MockStorage) Init() error {
+func (m *MockStorage) ensure() {
 	if m.data == nil {
 		m.data = make(map[string]map[string][]byte)
 	}
+}
+
+func (m *MockStorage) Init() error {
+	m.ensure()
 	return nil
 }
 
@@ -51,23 +55,31 @@ func (m *MockStorage) LoadAllZones() (map[string][]byte, error) {
 }
 
 func (m *MockStorage) LoadTable(table string) (map[string][]byte, error) {
+	m.ensure()
+	if tbl, ok := m.data[table]; ok {
+		return tbl, nil
+	}
 	return map[string][]byte{}, nil
 }
 
-func (m *MockStorage) SaveTable(table string, key string, value []byte) error {
+func (m *MockStorage) SaveTable(table, key string, value []byte) error {
+	m.ensure()
+	if _, ok := m.data[table]; !ok {
+		m.data[table] = make(map[string][]byte)
+	}
+	m.data[table][key] = value
 	return nil
 }
 
 func TestMain(m *testing.M) {
 	config.AppConfig = &config.ConfigManager{}
 	config.AppConfig.Base = config.BaseConfig{
-		StorageBackend: "mock", // just a label; not actually used
+		StorageBackend: "mock",
 	}
 
 	storage.Backend = &MockStorage{
 		data: make(map[string]map[string][]byte),
 	}
-	config.AppConfig.Init()
 	config.AppConfig.InitLiveConfig()
 
 	var err error
@@ -75,7 +87,7 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic("Failed to init memory zone store: " + err.Error())
 	}
-	InitMemoryStore(store) // your global setter
+	InitMemoryStore(store)
 
 	os.Exit(m.Run())
 }
@@ -111,3 +123,30 @@ func TestGetRegistry(t *testing.T) {
 		t.Errorf("expected DummyRR type to be in registry")
 	}
 }
+
+//func TestInitSkipsIfBaseAlreadySet(t *testing.T) {
+//	config.AppConfig = &config.ConfigManager{
+//		Base: config.BaseConfig{
+//			DNSPort: ":9999",
+//		},
+//	}
+//	storage.Backend = &MockStorage{}
+//
+//	config.AppConfig.Init()
+//
+//	if config.AppConfig.Base.DNSPort != ":9999" {
+//		t.Errorf("Expected DNSPort ':9999', got '%s'", config.AppConfig.Base.DNSPort)
+//	}
+//}
+//
+//func TestGetLive_WhenNil(t *testing.T) {
+//	config.AppConfig = &config.ConfigManager{}
+//	storage.Backend = &MockStorage{}
+//
+//	live := config.AppConfig.GetLive()
+//	expected := config.DefaultLiveConfig
+//
+//	if live != expected {
+//		t.Errorf("Expected default live config %+v, got %+v", expected, live)
+//	}
+//}

@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  primary:
+    build: .
+    container_name: go53-primary
+    ports:
+      - "1053:53/udp"
+      - "1053:53/tcp"
+      - "8053:8053"
+    volumes:
+      - ./primary:/app
+      - ./data-primary:/data
+    networks:
+      go53net:
+        ipv4_address: 172.99.53.10
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8053"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  secondary:
+    build: .
+    container_name: go53-secondary
+    ports:
+      - "1054:53/udp"
+      - "1054:53/tcp"
+      - "8054:8053"
+    volumes:
+      - ./secondary:/app
+      - ./data-secondary:/data
+    networks:
+      go53net:
+        ipv4_address: 172.99.53.11
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8053"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  go53net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.99.53.0/24

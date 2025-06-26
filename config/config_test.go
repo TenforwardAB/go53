@@ -240,8 +240,8 @@ func TestPersistLiveConfig_SaveTableFails(t *testing.T) {
 	cm.MergeUpdateLive(config.LiveConfig{LogLevel: "warn", Mode: "secondary"})
 
 	err := cm.PersistLiveConfig()
-	if err == nil || err.Error() != "forced SaveTable error" {
-		t.Errorf("Expected 'forced SaveTable error', got %v", err)
+	if err == nil || err.Error() != "config: SaveTable log_level: forced SaveTable error" {
+		t.Errorf("config: SaveTable log_level: forced SaveTable error', got %v", err)
 	}
 }
 

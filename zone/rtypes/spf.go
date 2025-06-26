@@ -12,9 +12,10 @@
 //
 // Copyleft (c) 2025 - Tenforward AB. All rights reserved.
 //
-// Created on 6/3/25 by andrek <andre(-at-)sess.se>
+// Created on 6/24/25 by andrek <andre(-at-)sess.se>
 //
-// This file: cname.go is part of the go53 authoritative DNS server.
+// This file: spf.go is part of the go53 authoritative DNS server.
+
 package rtypes
 
 import (
@@ -22,13 +23,12 @@ import (
 	"fmt"
 	"github.com/miekg/dns"
 	"go53/internal"
-	"go53/memory"
 	"go53/types"
 )
 
-type CNAMERecord struct{}
+type SPFRecord struct{}
 
-func (CNAMERecord) Add(zone, name string, value interface{}, ttl *uint32) error {
+func (SPFRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 	sanitizedZone, err := internal.SanitizeFQDN(zone)
 	if err != nil {
 		return errors.New("FQDN sanitize check failed")
@@ -36,21 +36,16 @@ func (CNAMERecord) Add(zone, name string, value interface{}, ttl *uint32) error 
 
 	m, ok := value.(map[string]interface{})
 	if !ok {
-		return fmt.Errorf("CNAMERecord expects value to be a JSON object, got %T", value)
+		return fmt.Errorf("SPFRecord expects value to be a JSON object, got %T", value)
 	}
 
-	rawTarget, ok := m["target"]
+	rawText, ok := m["text"]
 	if !ok {
-		return fmt.Errorf("CNAMERecord expects field 'target'")
+		return fmt.Errorf("SPFRecord expects field 'text'")
 	}
-	target, ok := rawTarget.(string)
+	text, ok := rawText.(string)
 	if !ok {
-		return fmt.Errorf("CNAMERecord: field 'target' must be a string, got %T", rawTarget)
-	}
-
-	sanitizedTarget, err := internal.SanitizeFQDN(target)
-	if err != nil {
-		return fmt.Errorf("CNAMERecord: invalid target FQDN %q", target)
+		return fmt.Errorf("SPFRecord: field 'text' must be a string, got %T", rawText)
 	}
 
 	TTL := uint32(3600)
@@ -62,18 +57,14 @@ func (CNAMERecord) Add(zone, name string, value interface{}, ttl *uint32) error 
 		return errors.New("memory store not initialized")
 	}
 
-	if exists, other := memory.HasOtherRecords(memStore, sanitizedZone, name, dns.TypeCNAME, GetRegistry()); exists {
-		return fmt.Errorf("CNAME: other record of type %d exists", other)
+	rec := types.SPFRecord{
+		Text: text,
+		TTL:  TTL,
 	}
-
-	rec := types.CNAMERecord{
-		Target: sanitizedTarget,
-		TTL:    TTL,
-	}
-	return memStore.AddRecord(sanitizedZone, string(types.TypeCNAME), name, rec)
+	return memStore.AddRecord(sanitizedZone, string(types.TypeSPF), name, rec)
 }
 
-func (CNAMERecord) Lookup(host string) ([]dns.RR, bool) {
+func (SPFRecord) Lookup(host string) ([]dns.RR, bool) {
 	zone, name, ok := internal.SplitName(host)
 	if !ok {
 		return nil, false
@@ -86,19 +77,19 @@ func (CNAMERecord) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
-	_, _, val, ok := memStore.GetRecord(sanitizedZone, string(types.TypeCNAME), name)
+	_, _, val, ok := memStore.GetRecord(sanitizedZone, string(types.TypeSPF), name)
 	if !ok {
 		return nil, false
 	}
 
-	var rec types.CNAMERecord
+	var rec types.SPFRecord
 	switch v := val.(type) {
-	case types.CNAMERecord:
+	case types.SPFRecord:
 		rec = v
 	case map[string]interface{}:
-		rec = types.CNAMERecord{}
-		if tgt, ok := v["target"].(string); ok {
-			rec.Target = tgt
+		rec = types.SPFRecord{}
+		if txt, ok := v["text"].(string); ok {
+			rec.Text = txt
 		}
 		if t, ok := v["ttl"].(float64); ok {
 			rec.TTL = uint32(t)
@@ -107,24 +98,24 @@ func (CNAMERecord) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
-	if rec.Target == "" {
+	if rec.Text == "" {
 		return nil, false
 	}
 
 	return []dns.RR{
-		&dns.CNAME{
+		&dns.SPF{
 			Hdr: dns.RR_Header{
 				Name:   host,
-				Rrtype: dns.TypeCNAME,
+				Rrtype: dns.TypeSPF,
 				Class:  dns.ClassINET,
 				Ttl:    rec.TTL,
 			},
-			Target: rec.Target,
+			Txt: []string{rec.Text},
 		},
 	}, true
 }
 
-func (CNAMERecord) Delete(host string, value interface{}) error {
+func (SPFRecord) Delete(host string, value interface{}) error {
 	zone, name, ok := internal.SplitName(host)
 	if !ok {
 		return errors.New("invalid host format")
@@ -137,14 +128,14 @@ func (CNAMERecord) Delete(host string, value interface{}) error {
 		return errors.New("memory store not initialized")
 	}
 
-	// oavsett value, det finns bara en möjlig CNAME-post per namn
-	return memStore.DeleteRecord(sanitizedZone, string(types.TypeCNAME), name)
+	// Only one SPF per name allowed
+	return memStore.DeleteRecord(sanitizedZone, string(types.TypeSPF), name)
 }
 
-func (CNAMERecord) Type() uint16 {
-	return dns.TypeCNAME
+func (SPFRecord) Type() uint16 {
+	return dns.TypeSPF
 }
 
 func init() {
-	Register(CNAMERecord{})
+	Register(SPFRecord{})
 }

@@ -3,11 +3,32 @@ package dns
 import (
 	"github.com/miekg/dns"
 	"go53/config"
+	"go53/dns/dnsutils"
 	"go53/zone"
+	"log"
+	"net"
 	"strings"
 )
 
 func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
+	log.Println("Incomming DNS request")
+	live := config.AppConfig.GetLive()
+	if r.Opcode == dns.OpcodeNotify && (live.Mode == "secondary" || live.Dev.DualMode) {
+		remoteIP, _, err := net.SplitHostPort(w.RemoteAddr().String())
+		if err != nil {
+			log.Println("Invalid remote address:", w.RemoteAddr())
+			return
+		}
+
+		if !strings.HasPrefix(remoteIP, live.Primary.Ip) {
+			log.Println("Refusing NOTIFY from unknown IP:", remoteIP)
+			return
+		}
+
+		dnsutils.HandleNotify(w, r)
+		return
+	}
+
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
@@ -15,9 +36,10 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	for _, q := range r.Question {
 		var answered bool
 		answered = false
-		
+		log.Println("Type is :", q.Qtype)
+
 		if q.Qclass == dns.ClassCHAOS && q.Qtype == dns.TypeTXT && strings.ToLower(q.Name) == "version.bind." {
-			version := config.AppConfig.GetLive().Version
+			version := live.Version
 			if version != "" {
 				txt := &dns.TXT{
 					Hdr: dns.RR_Header{
@@ -53,6 +75,45 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		case dns.TypeCNAME, dns.TypeNS:
 			if rec, ok := zone.LookupRecord(q.Qtype, q.Name); ok {
 				m.Answer = append(m.Answer, rec...)
+				answered = true
+			}
+
+		case dns.TypeAXFR, dns.TypeIXFR:
+			log.Println("Type is:", q.Qtype)
+
+			// Only allow AXFR/IXFR over TCP
+			if _, tcp := w.RemoteAddr().(*net.TCPAddr); !tcp {
+				log.Println("Request is NOT over TCP")
+				m.SetRcode(r, dns.RcodeRefused)
+				_ = w.WriteMsg(m)
+				return
+			}
+
+			// Allow AXFR only from primary or replication mode (or dual-mode if configured)
+			if !(live.Mode == "primary" || live.Mode == "replication" || live.Dev.DualMode) {
+				log.Println("AXFR refused: not in primary/replication/dual mode (current mode:", live.Mode, ")")
+				m.SetRcode(r, dns.RcodeRefused)
+				_ = w.WriteMsg(m)
+				return
+			}
+
+			log.Println("Sending AXFR to client")
+			dnsutils.ServeDNS(w, r)
+			return
+
+		case dns.TypeSRV:
+			if rec, ok := zone.LookupRecord(dns.TypeSRV, q.Name); ok {
+				log.Println("Getting SRV record: ", q.Name)
+				m.Answer = append(m.Answer, rec...)
+				answered = true
+				break
+			}
+			if cnameRec, ok := zone.LookupRecord(dns.TypeCNAME, q.Name); ok {
+				m.Answer = append(m.Answer, cnameRec[0])
+				target := cnameRec[0].(*dns.CNAME).Target
+				if rec2, ok := zone.LookupRecord(dns.TypeSRV, target); ok {
+					m.Answer = append(m.Answer, rec2...)
+				}
 				answered = true
 			}
 

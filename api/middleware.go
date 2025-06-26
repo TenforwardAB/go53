@@ -1,4 +1,4 @@
-// This file is part of the go53 project.
+// Package api This file is part of the go53 project.
 //
 // This file is licensed under the European Union Public License (EUPL) v1.2.
 // You may only use this work in compliance with the License.
@@ -12,7 +12,7 @@
 //
 // Copyleft (c) 2025 - Tenforward AB. All rights reserved.
 //
-// Created on 6/4/25::10:53PM by joyider <andre(-at-)sess.se>
+// Created on 6/4/25::8:17PM by joyider <andre(-at-)sess.se>
 //
 // This file: middleware.go is part of the go53 authoritative DNS server.
 package api
