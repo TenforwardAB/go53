@@ -79,25 +79,24 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			}
 
 		case dns.TypeAXFR, dns.TypeIXFR:
-			log.Println("Type is:", q.Qtype)
-
-			// Only allow AXFR/IXFR over TCP
-			if _, tcp := w.RemoteAddr().(*net.TCPAddr); !tcp {
-				log.Println("Request is NOT over TCP")
+			// Enforce TSIG for AXFR/IXFR
+			tsig := r.IsTsig()
+			if tsig == nil {
+				log.Println("AXFR/IXFR request is not TSIG-signed — rejecting")
 				m.SetRcode(r, dns.RcodeRefused)
 				_ = w.WriteMsg(m)
 				return
 			}
 
-			// Allow AXFR only from primary or replication mode (or dual-mode if configured)
-			if !(live.Mode == "primary" || live.Mode == "replication" || live.Dev.DualMode) {
-				log.Println("AXFR refused: not in primary/replication/dual mode (current mode:", live.Mode, ")")
+			// Check if key is known
+			if _, ok := config.TSIGSecrets[tsig.Hdr.Name]; !ok {
+				log.Printf("TSIG key not recognized: %s — rejecting", tsig.Hdr.Name)
 				m.SetRcode(r, dns.RcodeRefused)
 				_ = w.WriteMsg(m)
 				return
 			}
 
-			log.Println("Sending AXFR to client")
+			// OK, let ServeDNS handle AXFR
 			dnsutils.ServeDNS(w, r)
 			return
 

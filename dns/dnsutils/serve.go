@@ -19,8 +19,10 @@ package dnsutils
 
 import (
 	"github.com/miekg/dns"
+	"go53/config"
 	"go53/zone"
 	"log"
+	"time"
 )
 
 // ServeDNS handles incoming DNS requests and responds with AXFR (full zone transfer) data
@@ -70,6 +72,22 @@ func ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	msg.SetReply(req)
 	msg.Answer = make([]dns.RR, 0, 10)
 
+	var tsigName, tsigAlg, tsigSecret string
+	if t := req.IsTsig(); t != nil {
+		tsigName = t.Hdr.Name
+		if key, ok := config.TSIGSecrets[tsigName]; ok {
+			tsigAlg = key.Algorithm
+			tsigSecret = key.Secret
+			log.Printf("TSIG request signed with key: %s", tsigName)
+		} else {
+			log.Printf("Unknown TSIG key: %s", tsigName)
+			respondWithFailure(w, req)
+			return
+		}
+	} else {
+		log.Println("Incoming request is NOT TSIG-signed")
+	}
+
 	for _, rr := range rrs {
 		msg.Answer = append(msg.Answer, rr)
 
@@ -82,6 +100,11 @@ func ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 
 		if len(packed) > maxSize {
 			msg.Answer = msg.Answer[:len(msg.Answer)-1]
+
+			if tsigName != "" {
+				msg.SetTsig(tsigName, tsigAlg, 300, time.Now().Unix())
+			}
+
 			if err := w.WriteMsg(msg); err != nil {
 				log.Printf("Failed to send AXFR packet: %v", err)
 				return
@@ -94,6 +117,10 @@ func ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	}
 
 	if len(msg.Answer) > 0 {
+		if tsig != nil {
+			msg.SetTsig(tsig.Hdr.Name, tsig.Algorithm, 300, time.Now().Unix())
+		}
+
 		if err := w.WriteMsg(msg); err != nil {
 			log.Printf("Failed to send final AXFR packet: %v", err)
 		}

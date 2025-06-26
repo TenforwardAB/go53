@@ -14,5 +14,4 @@ EXPOSE 53/udp 8053
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s CMD wget -qO- http://localhost:8080 || exit 1
 
-ENTRYPOINT ["/go53"]
-
+CMD ["/go53"]
