@@ -52,6 +52,12 @@ post_record "a" '{
 }'
 
 post_record "a" '{
+  "name": "www",
+  "ip": "1.2.3.9",
+  "ttl": 3600
+}'
+
+post_record "a" '{
   "name": "mail",
   "ip": "1.2.3.8",
   "ttl": 3600
