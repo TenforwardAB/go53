@@ -12,6 +12,7 @@ var DefaultLiveConfig = LiveConfig{
 	RateLimitQPS:   0, // 0 = no rate limiting
 	AllowAXFR:      false,
 	DefaultNS:      "ns1.go53.local.",
+	EnforceTSIG:    false,
 
 	Primary: PrimaryConfig{
 		NotifyDebounceMs: 2000,

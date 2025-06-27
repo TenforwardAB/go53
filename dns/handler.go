@@ -4,6 +4,7 @@ import (
 	"github.com/miekg/dns"
 	"go53/config"
 	"go53/dns/dnsutils"
+	"go53/security"
 	"go53/zone"
 	"log"
 	"net"
@@ -23,6 +24,41 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		if !strings.HasPrefix(remoteIP, live.Primary.Ip) {
 			log.Println("Refusing NOTIFY from unknown IP:", remoteIP)
 			return
+		}
+
+		tsig := r.IsTsig()
+		enforceTSIG := live.EnforceTSIG
+
+		switch {
+		case tsig != nil:
+			// TSIG is present — must be validated regardless of config is (RFC 2845  §4.6)
+			if _, ok := security.TSIGSecrets[tsig.Hdr.Name]; !ok {
+				log.Printf("TSIG key not recognized: %s — rejecting", tsig.Hdr.Name)
+				m := new(dns.Msg)
+				m.SetRcode(r, dns.RcodeRefused)
+				_ = w.WriteMsg(m)
+				return
+			}
+			if w.TsigStatus() != nil {
+				log.Printf("TSIG validation failed: %v", w.TsigStatus())
+				m := new(dns.Msg)
+				m.SetRcode(r, dns.RcodeRefused)
+				_ = w.WriteMsg(m)
+				return
+			}
+			log.Printf("TSIG validated. Key: %s", tsig.Hdr.Name)
+
+		case tsig == nil && enforceTSIG:
+			// TSIG is required but not present — reject per RFC 2845 §4.5
+			log.Println("TSIG required but not present — rejecting")
+			m := new(dns.Msg)
+			m.SetRcode(r, dns.RcodeRefused)
+			_ = w.WriteMsg(m)
+			return
+
+		case tsig == nil && !enforceTSIG:
+			// TSIG is not  required — continue (RFC 2845  §4.5)
+			log.Println("TSIG not present, but not required — continuing")
 		}
 
 		dnsutils.HandleNotify(w, r)
@@ -79,24 +115,40 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			}
 
 		case dns.TypeAXFR, dns.TypeIXFR:
-			// Enforce TSIG for AXFR/IXFR
+			// RFC 2845 §4.5: If TSIG is present, it MUST be validated. If not present, only require it if EnforceTSIG is true.
 			tsig := r.IsTsig()
-			if tsig == nil {
-				log.Println("AXFR/IXFR request is not TSIG-signed — rejecting")
+			enforceTSIG := config.AppConfig.GetLive().EnforceTSIG
+
+			switch {
+			case tsig != nil:
+				// TSIG present: validate it
+				if _, ok := security.TSIGSecrets[tsig.Hdr.Name]; !ok {
+					log.Printf("TSIG key not recognized: %s — rejecting", tsig.Hdr.Name)
+					m.SetRcode(r, dns.RcodeRefused)
+					_ = w.WriteMsg(m)
+					return
+				}
+				if w.TsigStatus() != nil {
+					log.Printf("TSIG validation failed: %v", w.TsigStatus())
+					m.SetRcode(r, dns.RcodeRefused)
+					_ = w.WriteMsg(m)
+					return
+				}
+				log.Printf("TSIG validated for AXFR/IXFR. Key: %s", tsig.Hdr.Name)
+
+			case tsig == nil && enforceTSIG:
+				// TSIG required but missing
+				log.Println("AXFR/IXFR request is not TSIG-signed — rejecting due to EnforceTSIG")
 				m.SetRcode(r, dns.RcodeRefused)
 				_ = w.WriteMsg(m)
 				return
+
+			case tsig == nil && !enforceTSIG:
+				// TSIG not present and not required
+				log.Println("AXFR/IXFR without TSIG — accepted due to EnforceTSIG=false")
 			}
 
-			// Check if key is known
-			if _, ok := config.TSIGSecrets[tsig.Hdr.Name]; !ok {
-				log.Printf("TSIG key not recognized: %s — rejecting", tsig.Hdr.Name)
-				m.SetRcode(r, dns.RcodeRefused)
-				_ = w.WriteMsg(m)
-				return
-			}
-
-			// OK, let ServeDNS handle AXFR
+			// Delegate to ServeDNS
 			dnsutils.ServeDNS(w, r)
 			return
 

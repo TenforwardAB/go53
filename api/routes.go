@@ -20,6 +20,7 @@ package api
 
 import (
 	"github.com/gorilla/mux"
+	"go53/api/handlers"
 	"go53/config"
 	"log"
 	"net"
@@ -31,14 +32,18 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 	r := mux.NewRouter()
 	// r.Use(AuthMiddleware)
 
-	r.HandleFunc("/api/config", updateLiveConfigHandler).Methods("PATCH")
-	r.HandleFunc("/api/config", getLiveConfigHandler).Methods("GET")
+	r.HandleFunc("/api/config", handlers.UpdateLiveConfigHandler).Methods("PATCH")
+	r.HandleFunc("/api/config", handlers.GetLiveConfigHandler).Methods("GET")
 
-	r.HandleFunc("/api/zones", GetZonesHandler).Methods("GET")
+	r.HandleFunc("/api/zones", handlers.GetZonesHandler).Methods("GET")
 
-	r.HandleFunc("/api/zones/{zone}/records/{rrtype}", disableSecondary(addRecordHandler)).Methods("POST")
-	r.HandleFunc("/api/zones/{zone}/records/{rrtype}/{name}", disableSecondary(getRecordHandler)).Methods("GET")
-	r.HandleFunc("/api/zones/{zone}/records/{rrtype}/{name}", disableSecondary(deleteRecordHandler)).Methods("DELETE")
+	r.HandleFunc("/api/zones/{zone}/records/{rrtype}", disableSecondary(handlers.AddRecordHandler)).Methods("POST")
+	r.HandleFunc("/api/zones/{zone}/records/{rrtype}/{name}", disableSecondary(handlers.GetRecordHandler)).Methods("GET")
+	r.HandleFunc("/api/zones/{zone}/records/{rrtype}/{name}", disableSecondary(handlers.DeleteRecordHandler)).Methods("DELETE")
+
+	r.HandleFunc("/api/tsig", handlers.ListTSIGKeysHandler).Methods("GET")
+	r.HandleFunc("/api/tsig/{name}", handlers.AddTSIGKeyHandler).Methods("POST")
+	r.HandleFunc("/api/tsig/{name}", handlers.DeleteTSIGKeyHandler).Methods("DELETE")
 
 	return r
 }

@@ -1,4 +1,4 @@
-package config
+package security
 
 import (
 	"crypto/rand"
@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"go53/storage"
+	"log"
 )
 
 var TSIGSecrets map[string]TSIGKey
@@ -21,6 +22,8 @@ func LoadTSIGKeysFromStorage() error {
 		return fmt.Errorf("failed to load TSIG keys from storage: %w", err)
 	}
 
+	log.Printf("TSIG raw data loaded: %+v", tableData)
+
 	TSIGSecrets = make(map[string]TSIGKey)
 
 	for name, raw := range tableData {
@@ -31,7 +34,7 @@ func LoadTSIGKeysFromStorage() error {
 
 		TSIGSecrets[name+"."] = key
 	}
-
+	log.Printf("TSIGSecrets loaded: %+v", TSIGSecrets)
 	return nil
 }
 

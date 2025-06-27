@@ -50,6 +50,7 @@ type LiveConfig struct {
 	RateLimitQPS   int    `json:"rate_limit_qps"`  // queries per second
 	AllowAXFR      bool   `json:"allow_axfr"`      // "true"/"false"
 	DefaultNS      string `json:"default_ns"`      // e.g. ns1.example.com
+	EnforceTSIG    bool   `json:"enforce_tsig"`
 
 	Primary   PrimaryConfig   `json:"primary"`
 	Secondary SecondaryConfig `json:"secondary"`

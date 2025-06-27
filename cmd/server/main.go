@@ -8,6 +8,7 @@ import (
 	"go53/dns"
 	"go53/dns/dnsutils"
 	"go53/memory"
+	"go53/security"
 	"go53/storage"
 	"go53/zone/rtypes"
 	"log"
@@ -34,7 +35,7 @@ func main() {
 		if _, ok := existing[keyName]; ok {
 			log.Printf("TSIG key '%s' already exists. Skipping generation.", keyName)
 		} else {
-			secret, err := config.GenerateTSIGSecret()
+			secret, err := security.GenerateTSIGSecret()
 			if err != nil {
 				log.Fatalf("Failed to generate TSIG key: %v", err)
 			}
@@ -52,9 +53,11 @@ func main() {
 			}
 			log.Println("TSIG key stored:", string(new[keyName]))
 		}
+	} else {
+		log.Println("TSIG key generation skipped (generateTSIG flag not set).")
 	}
 
-	err := config.LoadTSIGKeysFromStorage()
+	err := security.LoadTSIGKeysFromStorage()
 	if err != nil {
 		return
 	}

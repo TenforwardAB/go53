@@ -51,42 +51,48 @@ func ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	}
 
 	q := req.Question[0]
+	//TODO: Do we need this extra check?
 	if !(q.Qtype == dns.TypeAXFR || q.Qtype == dns.TypeIXFR) {
-		log.Println("Q.type is not dns.TypeAXFR: ", q.Qtype)
+		log.Println("Q.type is not AXFR or IXFR:", q.Qtype)
 		respondWithFailure(w, req)
 		return
 	}
 
-	log.Println("Fetching Zone from memory")
+	log.Println("Fetching zone from memory:", q.Name)
 	rrs, ok := zone.LookupRecord(dns.TypeAXFR, q.Name)
-	log.Println("Raw zone data is::: ", rrs)
 	if !ok || len(rrs) < 2 {
 		log.Println("zone not found or too few records")
 		respondWithFailure(w, req)
 		return
 	}
 
-	const maxSize = 61 * 1024 // 61 KiB for safety noqa
+	const maxSize = 61 * 1024
+
+	tsigKey := ""
+	if req.IsTsig() != nil {
+		if w.TsigStatus() == nil {
+			tsigKey = req.Extra[len(req.Extra)-1].Header().Name
+			log.Printf("TSIG validated, using key: %s", tsigKey)
+		} else {
+			log.Printf("TSIG present. Name: %s, Algorithm: %s", req.IsTsig().Hdr.Name, req.IsTsig().Algorithm)
+
+			if config.AppConfig.GetLive().EnforceTSIG {
+				log.Printf("TSIG validation failed and EnforceTSIG is enabled: %v", w.TsigStatus())
+				respondWithFailure(w, req)
+				return
+			} else {
+				log.Printf("TSIG validation failed but EnforceTSIG is disabled: ignoring error")
+			}
+		}
+	} else if config.AppConfig.GetLive().EnforceTSIG {
+		log.Println("TSIG required but not present")
+		respondWithFailure(w, req)
+		return
+	}
 
 	msg := new(dns.Msg)
 	msg.SetReply(req)
 	msg.Answer = make([]dns.RR, 0, 10)
-
-	var tsigName, tsigAlg, tsigSecret string
-	if t := req.IsTsig(); t != nil {
-		tsigName = t.Hdr.Name
-		if key, ok := config.TSIGSecrets[tsigName]; ok {
-			tsigAlg = key.Algorithm
-			tsigSecret = key.Secret
-			log.Printf("TSIG request signed with key: %s", tsigName)
-		} else {
-			log.Printf("Unknown TSIG key: %s", tsigName)
-			respondWithFailure(w, req)
-			return
-		}
-	} else {
-		log.Println("Incoming request is NOT TSIG-signed")
-	}
 
 	for _, rr := range rrs {
 		msg.Answer = append(msg.Answer, rr)
@@ -101,12 +107,12 @@ func ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		if len(packed) > maxSize {
 			msg.Answer = msg.Answer[:len(msg.Answer)-1]
 
-			if tsigName != "" {
-				msg.SetTsig(tsigName, tsigAlg, 300, time.Now().Unix())
+			if config.AppConfig.GetLive().EnforceTSIG && tsigKey != "" {
+				msg.SetTsig(tsigKey, dns.HmacSHA256, 300, time.Now().Unix())
 			}
 
 			if err := w.WriteMsg(msg); err != nil {
-				log.Printf("Failed to send AXFR packet: %v", err)
+				log.Printf("Failed to send AXFR chunk: %v", err)
 				return
 			}
 
@@ -117,8 +123,8 @@ func ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	}
 
 	if len(msg.Answer) > 0 {
-		if tsig != nil {
-			msg.SetTsig(tsig.Hdr.Name, tsig.Algorithm, 300, time.Now().Unix())
+		if config.AppConfig.GetLive().EnforceTSIG && tsigKey != "" {
+			msg.SetTsig(tsigKey, dns.HmacSHA256, 300, time.Now().Unix())
 		}
 
 		if err := w.WriteMsg(msg); err != nil {
