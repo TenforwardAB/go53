@@ -4,11 +4,16 @@ import (
 	"fmt"
 	"github.com/miekg/dns"
 	"go53/config"
+	"go53/security"
 	"log"
 	"time"
 )
 
 func Start(cfg config.BaseConfig) error {
+	tsigSecrets := make(map[string]string)
+	for k, v := range security.TSIGSecrets {
+		tsigSecrets[k] = v.Secret
+	}
 	dns.HandleFunc(".", handleRequest)
 
 	addr := fmt.Sprintf("%s%s", cfg.BindHost, cfg.DNSPort)
@@ -22,6 +27,7 @@ func Start(cfg config.BaseConfig) error {
 	tcpServer := &dns.Server{
 		Addr:          addr,
 		Net:           "tcp",
+		TsigSecret:    tsigSecrets,
 		Handler:       dns.DefaultServeMux,
 		ReadTimeout:   5 * time.Second,
 		WriteTimeout:  5 * time.Second,

@@ -4,6 +4,7 @@ services:
   primary:
     build: .
     container_name: go53-primary
+    command: /go53 --generate-tsig
     ports:
       - "1053:53/udp"
       - "1053:53/tcp"

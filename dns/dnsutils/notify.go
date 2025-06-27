@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go53/config"
 	"go53/internal"
+	"go53/security"
 	"go53/zone"
 	"log"
 	"net"
@@ -76,13 +77,18 @@ func SendNotify(inzone string) {
 		log.Printf("warning: failed to sanitize FQDN: %v", err)
 	}
 	targets := strings.Split(config.AppConfig.GetLive().AllowTransfer, ",")
+	enforceTSIG := config.AppConfig.GetLive().EnforceTSIG
+
+	const tsigKeyName = "xxfr-key" //TODO: We have this set in too many locations need a central place for all constants
+	fqdnKeyName := dns.Fqdn(tsigKeyName)
+	tsigKey, tsigExists := security.TSIGSecrets[fqdnKeyName]
+
 	for _, target := range targets {
 		target = strings.TrimSpace(target)
 		if target == "" {
 			continue
 		}
 
-		// Lägg till default-port om den saknas
 		addr := target
 		if !strings.Contains(addr, ":") {
 			addr += ":53"
@@ -103,7 +109,19 @@ func SendNotify(inzone string) {
 			m.SetNotify(szone)
 			m.RecursionDesired = false
 
-			udpClient := &dns.Client{Net: "udp", Timeout: 3 * time.Second}
+			// Optional: sign with TSIG
+			var tsigSecrets map[string]string
+			if enforceTSIG && tsigExists {
+				m.SetTsig(fqdnKeyName, dns.HmacSHA256, 300, time.Now().Unix())
+				tsigSecrets = map[string]string{fqdnKeyName: tsigKey.Secret}
+			}
+
+			udpClient := &dns.Client{
+				Net:        "udp",
+				Timeout:    3 * time.Second,
+				TsigSecret: tsigSecrets,
+			}
+
 			_, _, err := udpClient.Exchange(m, addr)
 			log.Println("Zone is: ", szone)
 			if err == nil {
@@ -113,7 +131,12 @@ func SendNotify(inzone string) {
 
 			log.Printf("SendNotify: UDP notify to %s failed: %v — retrying over TCP", addr, err)
 
-			tcpClient := &dns.Client{Net: "tcp", Timeout: 5 * time.Second}
+			tcpClient := &dns.Client{
+				Net:        "tcp",
+				Timeout:    5 * time.Second,
+				TsigSecret: tsigSecrets,
+			}
+
 			_, _, err = tcpClient.Exchange(m, addr)
 			if err != nil {
 				log.Printf("SendNotify: TCP notify to %s for zone %s also failed: %v", addr, szone, err)
@@ -274,10 +297,21 @@ func fetchZone(zoneName string) {
 	req := new(dns.Msg)
 	req.SetAxfr(dns.Fqdn(zoneName))
 
+	tsigKeyName := dns.Fqdn("xxfr-key")
+
 	tran := &dns.Transfer{
 		DialTimeout:  5 * time.Second,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 5 * time.Second,
+	}
+
+	if config.AppConfig.GetLive().EnforceTSIG {
+		tsigSecret := security.TSIGSecrets[tsigKeyName].Secret
+
+		req.SetTsig(tsigKeyName, dns.HmacSHA256, 300, time.Now().Unix())
+		tran.TsigSecret = map[string]string{
+			tsigKeyName: tsigSecret,
+		}
 	}
 
 	log.Printf("[fetchZone] starting AXFR of %s from %s", zoneName, addr)
