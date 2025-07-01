@@ -105,15 +105,15 @@ type DNSKEYRecord struct {
 }
 
 type RRSIGRecord struct {
-	TypeCovered string `json:"type_covered"`
+	TypeCovered string `json:"type_covered"` // e.g., "A", "NS", etc.
 	Algorithm   uint8  `json:"algorithm"`
 	Labels      uint8  `json:"labels"`
 	OrigTTL     uint32 `json:"original_ttl"`
-	Expiration  uint32 `json:"expiration"`
-	Inception   uint32 `json:"inception"`
+	Expiration  uint32 `json:"expiration"` // Unix timestamp
+	Inception   uint32 `json:"inception"`  // Unix timestamp
 	KeyTag      uint16 `json:"key_tag"`
-	SignerName  string `json:"signer_name"`
-	Signature   string `json:"signature"`
+	SignerName  string `json:"signer_name"` // FQDN of signer
+	Signature   string `json:"signature"`   // Base64-encoded
 	TTL         uint32 `json:"ttl"`
 }
 
@@ -124,12 +124,12 @@ type NSECRecord struct {
 }
 
 type NSEC3Record struct {
-	HashAlg    uint8    `json:"hash_algorithm"`
-	Flags      uint8    `json:"flags"`
-	Iterations uint16   `json:"iterations"`
-	Salt       string   `json:"salt"`
-	NextHashed string   `json:"next_hashed"`
-	Types      []string `json:"types"`
+	HashAlg    uint8    `json:"hash_algorithm"` // Usually 1 (SHA-1)
+	Flags      uint8    `json:"flags"`          // Opt-out bit
+	Iterations uint16   `json:"iterations"`     // Hash iterations
+	Salt       string   `json:"salt"`           // Hex-encoded
+	NextHashed string   `json:"next_hashed"`    // Base32-encoded
+	Types      []string `json:"types"`          // e.g., ["A", "NS"]
 	TTL        uint32   `json:"ttl"`
 }
 
@@ -219,7 +219,7 @@ type ZoneData struct {
 	PTR    map[string][]PTRRecord    `json:"ptr,omitempty"`
 	CAA    map[string][]CAARecord    `json:"caa,omitempty"`
 	DNSKEY map[string][]DNSKEYRecord `json:"dnskey,omitempty"`
-	RRSIG  map[string][]RRSIGRecord  `json:"rrsig,omitempty"`
+	RRSIG  map[string][]*RRSIGRecord `json:"rrsig,omitempty"`
 	NSEC   map[string]NSECRecord     `json:"nsec,omitempty"`  // one per name
 	NSEC3  map[string]NSEC3Record    `json:"nsec3,omitempty"` // one per name
 	DS     map[string][]DSRecord     `json:"ds,omitempty"`
@@ -233,4 +233,13 @@ type ZoneData struct {
 	URI    map[string][]URIRecord    `json:"uri,omitempty"`
 	APL    map[string][]APLRecord    `json:"apl,omitempty"`
 	DNAME  map[string]DNAMERecord    `json:"dname,omitempty"`
+}
+
+type StoredKey struct {
+	KeyTag     uint16 `json:"key_tag"`     // Needed for DS and RRSIG
+	Zone       string `json:"zone"`        // Used for signer name, key publishing
+	Algorithm  string `json:"algorithm"`   // "ECDSAP256", "RSASHA256", etc.
+	Flags      uint16 `json:"flags"`       // 256 = ZSK, 257 = KSK
+	PrivatePEM string `json:"private_pem"` // PEM-encoded EC/RSA key
+	PublicKey  string `json:"public_key"`  // Optional: base64 DNSKEY string
 }

@@ -1,11 +1,17 @@
 package memory
 
 import (
+	"crypto/ecdsa"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"github.com/miekg/dns"
 	"go53/internal"
+	"go53/security"
 	"go53/storage"
+	"go53/types"
 	"log"
 	"strings"
 	"sync"
@@ -72,6 +78,13 @@ func (z *InMemoryZoneStore) AddRecord(zone, rtype, name string, record any) erro
 		zones[zone][rtype] = make(map[string]any)
 	}
 	zones[zone][rtype][name] = record
+
+	//if config.DNSSECEnabled {
+	//	go z.maybeSignRRSet(zone, rtype, name, record)
+	//}
+
+	go z.maybeSignRRSet(zone, rtype, name, record)
+
 	return z.persist(zone)
 }
 
@@ -162,6 +175,65 @@ func (z *InMemoryZoneStore) DeleteZone(zone string) error {
 		delete(zones, zone)
 		return z.persist(zone)
 	}
-	
+
 	return nil
+}
+
+func (z *InMemoryZoneStore) maybeSignRRSet(zone, rtype, name string, record any) {
+	// Försök konvertera till []dns.RR
+	rrs, err := security.ToRRSet(record)
+	if err != nil || len(rrs) == 0 {
+		return
+	}
+
+	// Hämta signer key
+	table, err := storage.Backend.LoadTable("dnssec_keys")
+	if err != nil {
+		return
+	}
+
+	var signerKey *ecdsa.PrivateKey
+	var keyTag uint16
+	var signerName string
+
+	for _, data := range table {
+		var stored types.StoredKey
+		if err := json.Unmarshal(data, &stored); err != nil {
+			continue
+		}
+		if stored.Zone != zone {
+			continue
+		}
+		block, _ := pem.Decode([]byte(stored.PrivatePEM))
+		if block == nil || block.Type != "EC PRIVATE KEY" {
+			continue
+		}
+		key, err := x509.ParseECPrivateKey(block.Bytes)
+		if err != nil {
+			continue
+		}
+		signerKey = key
+		keyTag = stored.KeyTag
+		signerName = stored.Zone
+		break
+	}
+
+	if signerKey == nil {
+		return
+	}
+
+	rrsig, err := security.SignRRSet(rrs, signerKey, keyTag, signerName)
+	if err != nil {
+		return
+	}
+
+	rrsigTyped := security.RRSIGFromDNS(rrsig)
+
+	z.mu.Lock()
+	defer z.mu.Unlock()
+
+	if _, ok := z.cache["zones"][zone][string(types.TypeRRSIG)]; !ok {
+		z.cache["zones"][zone][string(types.TypeRRSIG)] = make(map[string]any)
+	}
+	z.cache["zones"][zone][string(types.TypeRRSIG)][name] = []interface{}{rrsigTyped}
 }

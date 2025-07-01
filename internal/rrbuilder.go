@@ -1,7 +1,9 @@
 package internal
 
 import (
+	"encoding/json"
 	"github.com/miekg/dns"
+	"go53/security"
 	"go53/types"
 	"net"
 	"strings"
@@ -437,6 +439,130 @@ var RRBuilders = map[string]RRBuilder{
 			return nil
 		}
 	},
+
+	"DNSKEY": func(name string, data any) []dns.RR {
+		switch v := data.(type) {
+		case types.DNSKEYRecord:
+			return []dns.RR{&dns.DNSKEY{
+				Hdr: dns.RR_Header{
+					Name:   dns.Fqdn(name),
+					Rrtype: dns.TypeDNSKEY,
+					Class:  dns.ClassINET,
+					Ttl:    v.TTL,
+				},
+				Flags:     v.Flags,
+				Protocol:  v.Protocol,
+				Algorithm: v.Algorithm,
+				PublicKey: v.PublicKey,
+			}}
+
+		case map[string]interface{}:
+			// single DNSKEY entry
+			flags := uint16(v["flags"].(float64))
+			protocol := uint8(3)
+			if p, ok := v["protocol"].(float64); ok {
+				protocol = uint8(p)
+			}
+			algorithm := uint8(v["algorithm"].(float64))
+			publicKey := v["public_key"].(string)
+			ttl := toTTL(v)
+
+			return []dns.RR{&dns.DNSKEY{
+				Hdr: dns.RR_Header{
+					Name:   dns.Fqdn(name),
+					Rrtype: dns.TypeDNSKEY,
+					Class:  dns.ClassINET,
+					Ttl:    ttl,
+				},
+				Flags:     flags,
+				Protocol:  protocol,
+				Algorithm: algorithm,
+				PublicKey: publicKey,
+			}}
+
+		case []interface{}:
+			// multiple DNSKEY entries
+			var out []dns.RR
+			for _, item := range v {
+				m, ok := item.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				flags := uint16(m["flags"].(float64))
+				protocol := uint8(3)
+				if p, ok := m["protocol"].(float64); ok {
+					protocol = uint8(p)
+				}
+				algorithm := uint8(m["algorithm"].(float64))
+				publicKey := m["public_key"].(string)
+				ttl := toTTL(m)
+
+				out = append(out, &dns.DNSKEY{
+					Hdr: dns.RR_Header{
+						Name:   dns.Fqdn(name),
+						Rrtype: dns.TypeDNSKEY,
+						Class:  dns.ClassINET,
+						Ttl:    ttl,
+					},
+					Flags:     flags,
+					Protocol:  protocol,
+					Algorithm: algorithm,
+					PublicKey: publicKey,
+				})
+			}
+			return out
+		}
+
+		return nil
+	},
+
+	"RRSIG": func(name string, data any) []dns.RR {
+		var rrs []dns.RR
+
+		switch v := data.(type) {
+		case []*types.RRSIGRecord:
+			for _, rec := range v {
+				rr, err := security.ToDNSRRSIG(name, rec)
+				if err == nil {
+					rrs = append(rrs, rr)
+				}
+			}
+		case []map[string]interface{}:
+			for _, raw := range v {
+				b, err := json.Marshal(raw)
+				if err != nil {
+					continue
+				}
+				var rec types.RRSIGRecord
+				if err := json.Unmarshal(b, &rec); err != nil {
+					continue
+				}
+				rr, err := security.ToDNSRRSIG(name, &rec)
+				if err == nil {
+					rrs = append(rrs, rr)
+				}
+			}
+		case []interface{}:
+			for _, raw := range v {
+				if rec, ok := raw.(map[string]interface{}); ok {
+					b, err := json.Marshal(rec)
+					if err != nil {
+						continue
+					}
+					var rec types.RRSIGRecord
+					if err := json.Unmarshal(b, &rec); err != nil {
+						continue
+					}
+					rr, err := security.ToDNSRRSIG(name, &rec)
+					if err == nil {
+						rrs = append(rrs, rr)
+					}
+				}
+			}
+		}
+
+		return rrs
+	},
 }
 
 func RRToZoneData(rrs []dns.RR) types.ZoneData {
@@ -455,7 +581,7 @@ func RRToZoneData(rrs []dns.RR) types.ZoneData {
 	zd.NSEC = map[string]types.NSECRecord{}
 	zd.NSEC3 = map[string]types.NSEC3Record{}
 	zd.DNSKEY = map[string][]types.DNSKEYRecord{}
-	zd.RRSIG = map[string][]types.RRSIGRecord{}
+	zd.RRSIG = map[string][]*types.RRSIGRecord{}
 	zd.DS = map[string][]types.DSRecord{}
 	zd.NAPTR = map[string][]types.NAPTRRecord{}
 	zd.SPF = map[string]types.SPFRecord{}

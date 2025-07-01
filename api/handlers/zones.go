@@ -2,11 +2,13 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/gorilla/mux"
 	"github.com/miekg/dns"
 	"go53/config"
 	"go53/dns/dnsutils"
 	"go53/internal"
+	"go53/security"
 	"go53/zone"
 	"io"
 	"log"
@@ -27,6 +29,8 @@ func AddRecordHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body map[string]interface{}
+	var value map[string]interface{}
+
 	var name string
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -36,6 +40,55 @@ func AddRecordHandler(w http.ResponseWriter, r *http.Request) {
 	switch rrtype {
 	case dns.TypeSOA:
 		name = zoneName
+	case dns.TypeDNSKEY:
+		// Always default to zone apex for DNSKEY
+		name = dns.Fqdn(zoneName)
+
+		// Support keyid usage (optional)
+		keyidRaw, ok := body["keyid"]
+		if !ok {
+			http.Error(w, "Missing field: keyid", http.StatusBadRequest)
+			return
+		}
+		keyid, ok := keyidRaw.(string)
+		if !ok || strings.TrimSpace(keyid) == "" {
+			http.Error(w, "Field 'keyid' must be a non-empty string", http.StatusBadRequest)
+			return
+		}
+
+		// Load key from storage
+		_, storedKey, err := security.LoadPrivateKeyFromStorage(keyid)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Key not found: %v", err), http.StatusNotFound)
+			return
+		}
+
+		// Fill DNSKEYRecord fields
+		dnskey := map[string]interface{}{
+			"flags":      storedKey.Flags,
+			"protocol":   3,                                                     // always 3 for DNSSEC
+			"algorithm":  security.AlgorithmNumberFromName(storedKey.Algorithm), // convert "ED25519" -> 15
+			"public_key": storedKey.PublicKey,
+		}
+
+		if ttlRaw, ok := body["ttl"]; ok {
+			switch v := ttlRaw.(type) {
+			case float64:
+				dnskey["ttl"] = uint32(v)
+			case int:
+				dnskey["ttl"] = uint32(v)
+			default:
+				http.Error(w, "Field 'ttl' must be a number", http.StatusBadRequest)
+				return
+			}
+		}
+
+		// Set zone apex
+		name = dns.Fqdn(zoneName)
+		value = dnskey
+
+		// Remove 'name' if it exists (we don't use it for DNSKEY)
+		delete(body, "name")
 	default:
 		rawName, ok := body["name"]
 		if !ok {
@@ -66,7 +119,9 @@ func AddRecordHandler(w http.ResponseWriter, r *http.Request) {
 		delete(body, "ttl")
 	}
 
-	value := body
+	if rrtype != dns.TypeDNSKEY {
+		value = body
+	}
 	log.Printf("body: %+v\n", value)
 	log.Printf("zoneName: %+v\n", zoneName)
 	log.Printf("name: %+v\n", name)

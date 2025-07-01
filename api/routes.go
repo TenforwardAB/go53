@@ -45,6 +45,11 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 	r.HandleFunc("/api/tsig/{name}", handlers.AddTSIGKeyHandler).Methods("POST")
 	r.HandleFunc("/api/tsig/{name}", handlers.DeleteTSIGKeyHandler).Methods("DELETE")
 
+	r.HandleFunc("/api/dnskeys", disableSecondary(handlers.ListDNSKeysHandler)).Methods("GET")
+	r.HandleFunc("/api/dnskeys/{keyid}", disableSecondary(handlers.GetDNSKeyHandler)).Methods("GET")
+	r.HandleFunc("/api/dnskeys", disableSecondary(handlers.CreateDNSKeyHandler)).Methods("POST")
+	r.HandleFunc("/api/dnskeys/{keyid}", disableSecondary(handlers.DeleteDNSKeyHandler)).Methods("DELETE")
+
 	return r
 }
 

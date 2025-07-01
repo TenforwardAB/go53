@@ -209,3 +209,23 @@ func (b *BadgerStorage) SaveTable(table string, key string, value []byte) error 
 
 	return err
 }
+
+// DeleteFromTable deletes a key/value pair from a given table prefix.
+//
+// The key will be stored as "table/key" internally.
+//
+// Parameters:
+//   - table: The logical table name (prefix).
+//   - key:   The specific key within the table.
+//
+// Returns:
+//   - error: If the delete operation fails.
+func (b *BadgerStorage) DeleteFromTable(table string, key string) error {
+	fullKey := fmt.Sprintf("%s/%s", table, key)
+
+	err := b.db.Update(func(txn *badger.Txn) error {
+		return txn.Delete([]byte(fullKey))
+	})
+
+	return err
+}

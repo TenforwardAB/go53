@@ -95,6 +95,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		switch q.Qtype {
 		case dns.TypeA:
 			if rec, ok := zone.LookupRecord(q.Qtype, q.Name); ok {
+				log.Println("A record found:", rec)
 				m.Answer = append(m.Answer, rec...)
 				answered = true
 				break
@@ -106,6 +107,16 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 					m.Answer = append(m.Answer, rec2...)
 				}
 				answered = true
+			}
+
+		case dns.TypeDNSKEY:
+			zoneApex := dns.Fqdn(q.Name)
+			if rec, ok := zone.LookupRecord(dns.TypeDNSKEY, zoneApex); ok {
+				log.Println("DNSKEY record found:", rec)
+				m.Answer = append(m.Answer, rec...)
+				answered = true
+			} else {
+				log.Println("DNSKEY record NOT FOUND OR ERROR:")
 			}
 
 		case dns.TypeCNAME, dns.TypeNS:
@@ -170,6 +181,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 		default:
 			if rec, ok := zone.LookupRecord(q.Qtype, q.Name); ok {
+				log.Println("Record found:", rec)
 				m.Answer = append(m.Answer, rec...)
 				answered = true
 			}
