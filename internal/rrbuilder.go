@@ -2,8 +2,8 @@ package internal
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/miekg/dns"
-	"go53/security"
 	"go53/types"
 	"net"
 	"strings"
@@ -442,6 +442,24 @@ var RRBuilders = map[string]RRBuilder{
 
 	"DNSKEY": func(name string, data any) []dns.RR {
 		switch v := data.(type) {
+		case []types.DNSKEYRecord:
+			var out []dns.RR
+			for _, v := range data.([]types.DNSKEYRecord) {
+				out = append(out, &dns.DNSKEY{
+					Hdr: dns.RR_Header{
+						Name:   dns.Fqdn(name),
+						Rrtype: dns.TypeDNSKEY,
+						Class:  dns.ClassINET,
+						Ttl:    v.TTL,
+					},
+					Flags:     v.Flags,
+					Protocol:  v.Protocol,
+					Algorithm: v.Algorithm,
+					PublicKey: v.PublicKey,
+				})
+			}
+			return out
+
 		case types.DNSKEYRecord:
 			return []dns.RR{&dns.DNSKEY{
 				Hdr: dns.RR_Header{
@@ -522,7 +540,7 @@ var RRBuilders = map[string]RRBuilder{
 		switch v := data.(type) {
 		case []*types.RRSIGRecord:
 			for _, rec := range v {
-				rr, err := security.ToDNSRRSIG(name, rec)
+				rr, err := toDNSRRSIG(name, rec)
 				if err == nil {
 					rrs = append(rrs, rr)
 				}
@@ -537,7 +555,7 @@ var RRBuilders = map[string]RRBuilder{
 				if err := json.Unmarshal(b, &rec); err != nil {
 					continue
 				}
-				rr, err := security.ToDNSRRSIG(name, &rec)
+				rr, err := toDNSRRSIG(name, &rec)
 				if err == nil {
 					rrs = append(rrs, rr)
 				}
@@ -553,7 +571,7 @@ var RRBuilders = map[string]RRBuilder{
 					if err := json.Unmarshal(b, &rec); err != nil {
 						continue
 					}
-					rr, err := security.ToDNSRRSIG(name, &rec)
+					rr, err := toDNSRRSIG(name, &rec)
 					if err == nil {
 						rrs = append(rrs, rr)
 					}
@@ -653,4 +671,29 @@ func getFloat64(v interface{}) float64 {
 		return f
 	}
 	return 0
+}
+
+func toDNSRRSIG(name string, r *types.RRSIGRecord) (*dns.RRSIG, error) {
+	rrtype, ok := dns.StringToType[r.TypeCovered]
+	if !ok {
+		return nil, fmt.Errorf("invalid type_covered: %s", r.TypeCovered)
+	}
+
+	return &dns.RRSIG{
+		Hdr: dns.RR_Header{
+			Name:   dns.Fqdn(name),
+			Rrtype: dns.TypeRRSIG,
+			Class:  dns.ClassINET,
+			Ttl:    r.TTL,
+		},
+		TypeCovered: rrtype,
+		Algorithm:   r.Algorithm,
+		Labels:      r.Labels,
+		OrigTtl:     r.OrigTTL,
+		Expiration:  r.Expiration,
+		Inception:   r.Inception,
+		KeyTag:      r.KeyTag,
+		SignerName:  dns.Fqdn(r.SignerName),
+		Signature:   r.Signature,
+	}, nil
 }

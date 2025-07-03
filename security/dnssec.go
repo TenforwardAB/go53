@@ -4,26 +4,49 @@ import (
 	"crypto"
 	"errors"
 	"fmt"
+	"github.com/TenforwardAB/slog"
+	"go53/internal"
 	"go53/types"
+	"reflect"
 	"time"
 
 	"github.com/miekg/dns"
 )
 
-func ToRRSet(rrs interface{}) ([]dns.RR, error) {
-	switch v := rrs.(type) {
-	case []dns.RR:
-		return v, nil
-	case dns.RR:
-		return []dns.RR{v}, nil
-	case *dns.RR:
-		return []dns.RR{*v}, nil
-	default:
-		return nil, fmt.Errorf("unsupported RRSet type: %T", rrs)
+func ToRRSet(name string, rtype string, raw any) ([]dns.RR, error) {
+	if rtype == "DNSKEY" {
+		name = "go53.test."
 	}
+
+	switch r := raw.(type) {
+	case []types.DNSKEYRecord:
+		slog.Crazy("[ToRRSet] raw är []types.DNSKEYRecord med längd %d", len(r))
+	default:
+		slog.Crazy("[ToRRSet] raw är INTE []types.DNSKEYRecord utan %T", raw)
+	}
+	builder, ok := internal.RRBuilders[rtype]
+	slog.Crazy("[ToRRSet] rtype is: ", rtype)
+	slog.Crazy("[ToRRSet] name is:", name)
+	slog.Crazy("[ToRRSet] raw is:", raw)
+	slog.Crazy("[ToRRSet] reflect.TypeOf(raw): %v", reflect.TypeOf(raw))
+	slog.Crazy("[ToRRSet] builder for type %s", builder)
+	if !ok {
+		return nil, fmt.Errorf("no RRBuilder for rtype %q", rtype)
+	}
+
+	rrs := builder(dns.Fqdn(name), raw)
+	slog.Crazy("[ToRRSet] name2 is:", name)
+	slog.Crazy("[ToRRSet] rrs is:", rrs)
+	if len(rrs) == 0 {
+		return nil, fmt.Errorf("no RRs built for %q", rtype)
+	}
+
+	return rrs, nil
 }
 
 func SignRRSet(rrs []dns.RR, key crypto.Signer, keyTag uint16, signerName string) (*dns.RRSIG, error) {
+	slog.Crazy("[SignRRSet] len(rrs): %d", len(rrs))
+	slog.Crazy("[SignRRSet] keyTag: %d", keyTag)
 	if len(rrs) == 0 {
 		return nil, errors.New("cannot sign empty RRSet")
 	}
@@ -39,7 +62,7 @@ func SignRRSet(rrs []dns.RR, key crypto.Signer, keyTag uint16, signerName string
 			Ttl:    hdr.Ttl,
 		},
 		TypeCovered: hdr.Rrtype,
-		Algorithm:   13, // ECDSAP256 for now
+		Algorithm:   10, // RSASHA512 for now
 
 		Labels:     uint8(dns.CountLabel(hdr.Name)),
 		OrigTtl:    hdr.Ttl,
@@ -52,6 +75,8 @@ func SignRRSet(rrs []dns.RR, key crypto.Signer, keyTag uint16, signerName string
 	if err := rrsig.Sign(key, rrs); err != nil {
 		return nil, err
 	}
+
+	slog.Crazy("[SignRRSet] signed RRSet %+v for the RR %s", rrsig, rrs)
 
 	return rrsig, nil
 }
@@ -73,29 +98,4 @@ func RRSIGFromDNS(rrsig *dns.RRSIG) *types.RRSIGRecord {
 		Signature:   rrsig.Signature,
 		TTL:         rrsig.Hdr.Ttl,
 	}
-}
-
-func ToDNSRRSIG(name string, r *types.RRSIGRecord) (*dns.RRSIG, error) {
-	rrtype, ok := dns.StringToType[r.TypeCovered]
-	if !ok {
-		return nil, fmt.Errorf("invalid type_covered: %s", r.TypeCovered)
-	}
-
-	return &dns.RRSIG{
-		Hdr: dns.RR_Header{
-			Name:   dns.Fqdn(name),
-			Rrtype: dns.TypeRRSIG,
-			Class:  dns.ClassINET,
-			Ttl:    r.TTL,
-		},
-		TypeCovered: rrtype,
-		Algorithm:   r.Algorithm,
-		Labels:      r.Labels,
-		OrigTtl:     r.OrigTTL,
-		Expiration:  r.Expiration,
-		Inception:   r.Inception,
-		KeyTag:      r.KeyTag,
-		SignerName:  dns.Fqdn(r.SignerName),
-		Signature:   r.Signature,
-	}, nil
 }

@@ -12,8 +12,10 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"github.com/miekg/dns"
 	"go53/storage"
 	"go53/types"
+	"go53/zonereader"
 	"log"
 	"strings"
 )
@@ -272,6 +274,73 @@ func LoadAllKeysForZone(zone string) ([]*types.StoredKey, error) {
 	}
 
 	return keys, nil
+}
+
+func GetDNSSECKeys(zoneName string) ([]*dns.DNSKEY, []*dns.DNSKEY, error) {
+	zoneApex := dns.Fqdn(zoneName)
+
+	recs, ok := zonereader.LookupRecord(dns.TypeDNSKEY, zoneApex)
+	if !ok {
+		return nil, nil, fmt.Errorf("no DNSKEY records found for %s", zoneApex)
+	}
+
+	var ksks []*dns.DNSKEY
+	var zsks []*dns.DNSKEY
+
+	for _, rr := range recs {
+		dnskey, ok := rr.(*dns.DNSKEY)
+		if !ok {
+			continue
+		}
+		switch dnskey.Flags {
+		case 257:
+			ksks = append(ksks, dnskey)
+		case 256:
+			zsks = append(zsks, dnskey)
+		default:
+			// ignore the rest
+		}
+	}
+
+	return ksks, zsks, nil
+}
+
+func GetDNSSECKeyNames(zoneName string) ([]string, error) {
+	zoneApex := dns.Fqdn(zoneName)
+
+	recs, ok := zonereader.LookupRecord(dns.TypeDNSKEY, zoneApex)
+	if !ok {
+		return nil, fmt.Errorf("no DNSKEY records found for %s", zoneApex)
+	}
+
+	var keyNames []string
+
+	for _, rr := range recs {
+		dnskey, ok := rr.(*dns.DNSKEY)
+		if !ok {
+			continue
+		}
+
+		var prefix string
+		switch dnskey.Flags {
+		case 257:
+			prefix = "ksk"
+		case 256:
+			prefix = "zsk"
+		default:
+			continue
+		}
+
+		algoName := dns.AlgorithmToString[dnskey.Algorithm]
+		if algoName == "" {
+			algoName = fmt.Sprintf("ALG%d", dnskey.Algorithm)
+		}
+
+		keyName := fmt.Sprintf("%s_%s_%s", prefix, strings.TrimSuffix(zoneApex, "."), algoName)
+		keyNames = append(keyNames, keyName)
+	}
+
+	return keyNames, nil
 }
 
 func ComputeKeyTag(flags uint16, protocol uint8, algorithm uint8, pubkey []byte) uint16 {

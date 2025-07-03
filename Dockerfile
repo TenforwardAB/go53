@@ -8,7 +8,7 @@ RUN go mod download
 
 COPY . .
 
-RUN go build -o /go53 ./cmd/server
+RUN go build -tags=dev -o /go53 ./cmd/server
 
 EXPOSE 53/udp 8053
 

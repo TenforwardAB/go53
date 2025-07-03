@@ -1,18 +1,19 @@
 package memory
 
 import (
-	"crypto/ecdsa"
-	"crypto/x509"
-	"encoding/json"
-	"encoding/pem"
+	"crypto"
 	"errors"
 	"fmt"
+	"github.com/TenforwardAB/slog"
 	"github.com/miekg/dns"
+	"go53/config"
 	"go53/internal"
 	"go53/security"
 	"go53/storage"
 	"go53/types"
 	"log"
+	"maps"
+	"reflect"
 	"strings"
 	"sync"
 )
@@ -69,7 +70,6 @@ func (z *InMemoryZoneStore) persist(zone string) error {
 
 func (z *InMemoryZoneStore) AddRecord(zone, rtype, name string, record any) error {
 	z.mu.Lock()
-	defer z.mu.Unlock()
 	zones := z.cache["zones"]
 	if _, ok := zones[zone]; !ok {
 		zones[zone] = make(map[string]map[string]any)
@@ -78,14 +78,15 @@ func (z *InMemoryZoneStore) AddRecord(zone, rtype, name string, record any) erro
 		zones[zone][rtype] = make(map[string]any)
 	}
 	zones[zone][rtype][name] = record
+	z.mu.Unlock()
 
 	//if config.DNSSECEnabled {
 	//	go z.maybeSignRRSet(zone, rtype, name, record)
 	//}
 
-	go z.maybeSignRRSet(zone, rtype, name, record)
+	go z.maybeSignRRSet(zone, rtype, name)
 
-	return z.persist(zone)
+	return nil //z.persist(zone)
 }
 
 func (z *InMemoryZoneStore) GetRecord(zone, rtype, name string) (string, string, any, bool) {
@@ -125,10 +126,10 @@ func (z *InMemoryZoneStore) GetZone(zone string) ([]dns.RR, error) {
 
 	for rtype, namesMap := range zoneMap {
 		builder, ok := internal.RRBuilders[rtype]
-		log.Println("rtype is: ", rtype)
-		log.Println("builder is:", builder)
+		slog.Crazy("[GetZone] rtype is: ", rtype)
+		slog.Crazy("[GetZone] builder is:", builder)
 		if !ok {
-			log.Println("NOT OK IN GetZone")
+			slog.Warn("NOT OK IN GetZone")
 			continue
 		}
 
@@ -143,8 +144,12 @@ func (z *InMemoryZoneStore) GetZone(zone string) ([]dns.RR, error) {
 				fqdn = name + "." + sanitizedZone
 			}
 			fqdn = dns.Fqdn(fqdn)
+			slog.Crazy("[GetZone] fqdn is: ", fqdn)
+			slog.Crazy("[GetZone] raw is: ", rawData)
+			slog.Crazy("[GetZone] reflect.TypeOf(rawData): %v", reflect.TypeOf(rawData))
 
 			rrs := builder(fqdn, rawData)
+			slog.Crazy("[GetZone] rrs is: ", rrs)
 			if len(rrs) > 0 {
 				allRRs = append(allRRs, rrs...)
 			}
@@ -179,61 +184,107 @@ func (z *InMemoryZoneStore) DeleteZone(zone string) error {
 	return nil
 }
 
-func (z *InMemoryZoneStore) maybeSignRRSet(zone, rtype, name string, record any) {
-	// Försök konvertera till []dns.RR
-	rrs, err := security.ToRRSet(record)
+func (z *InMemoryZoneStore) maybeSignRRSet(zone, rtype, name string) {
+	slog.Crazy("[maybeSignRRSet]", zone, rtype, name)
+
+	//Always persist
+	_ = z.persist(zone)
+
+	if !config.AppConfig.GetLive().DNSSECEnabled {
+		slog.Debug("[maybeSignRRSet] DNSSEC disabled, skipping signing, persisting zone only")
+		return
+	}
+
+	_, _, record, ok := z.GetRecord(zone, rtype, name)
+	if !ok {
+		slog.Debug("Record for zone: %s of type %s and name %s NOT FOUND", zone, rtype, name)
+	}
+
+	slog.Crazy("*****************[maybeSignRRSet] Record is: %s ", record)
+
+	rrs, err := security.ToRRSet(name, rtype, record)
+	slog.Crazy("rrs is: %v", rrs)
 	if err != nil || len(rrs) == 0 {
+		slog.Error("ERROR ToRRSet:", err)
 		return
 	}
 
-	// Hämta signer key
-	table, err := storage.Backend.LoadTable("dnssec_keys")
+	keyNames, err := security.GetDNSSECKeyNames(zone)
+	slog.Crazy("[maybeSignRRSet] keyNames", keyNames)
 	if err != nil {
 		return
 	}
 
-	var signerKey *ecdsa.PrivateKey
-	var keyTag uint16
-	var signerName string
+	isDNSKEY := rtype == string(types.TypeDNSKEY)
 
-	for _, data := range table {
-		var stored types.StoredKey
-		if err := json.Unmarshal(data, &stored); err != nil {
+	for _, keyName := range keyNames {
+		if isDNSKEY && !strings.HasPrefix(keyName, "ksk_") {
+			slog.Debug("Skipping key %q: not a KSK and DNSKEY is being signed", keyName)
 			continue
 		}
-		if stored.Zone != zone {
+		if !isDNSKEY && !strings.HasPrefix(keyName, "zsk_") {
+			slog.Debug("Skipping key %q: not a ZSK and non-DNSKEY record is being signed", keyName)
 			continue
 		}
-		block, _ := pem.Decode([]byte(stored.PrivatePEM))
-		if block == nil || block.Type != "EC PRIVATE KEY" {
-			continue
-		}
-		key, err := x509.ParseECPrivateKey(block.Bytes)
+
+		privKey, storedKey, err := security.LoadPrivateKeyFromStorage(keyName)
 		if err != nil {
+			slog.Alert("Failed to load private key %q: %v", keyName, err)
 			continue
 		}
-		signerKey = key
-		keyTag = stored.KeyTag
-		signerName = stored.Zone
-		break
+
+		signer, ok := privKey.(crypto.Signer)
+		if !ok {
+			slog.Alert("Key %q does not implement crypto.Signer", keyName)
+			continue
+		}
+
+		rrsig, err := security.SignRRSet(rrs, signer, storedKey.KeyTag, dns.Fqdn(storedKey.Zone))
+		slog.Crazy("!!!!!!!!!!!!!!!!!!!![maybeSignRRSet] rrsig is: %v !!!!!!!!!!!!!!!!!", rrsig)
+		if err != nil {
+			slog.Error("Failed to sign RRSet with key %q: %v", keyName, err)
+			continue
+		}
+
+		rrsigTyped := security.RRSIGFromDNS(rrsig)
+		typeName := dns.TypeToString[rrsig.TypeCovered]
+		name := dns.Fqdn(rrsig.Hdr.Name)
+
+		slog.Crazy("[maybeSignRRSet] rrsigTyped is: %s,  typeName: %s, name is %s", rrsigTyped, typeName, name)
+
+		z.mu.Lock()
+		if _, ok := z.cache["zones"][zone]["RRSIG"]; !ok {
+			slog.Crazy("[RRSIG->cache] Initializing RRSIG map for zone=%q", zone)
+			z.cache["zones"][zone]["RRSIG"] = make(map[string]any)
+		}
+
+		rMap := z.cache["zones"][zone]["RRSIG"]
+		slog.Crazy("[RRSIG->cache] rMap type=%T", rMap)
+
+		if _, ok := rMap[typeName]; !ok {
+			slog.Crazy("[RRSIG->cache] Creating type entry for typeName=%q", typeName)
+			rMap[typeName] = make(map[string]any)
+		} else {
+			slog.Crazy("[RRSIG->cache] Found existing typeName=%q entry", typeName)
+		}
+
+		typedMap := rMap[typeName].(map[string]any)
+		slog.Crazy("[RRSIG->cache] typedMap keys for type %q before insert: %v", typeName, maps.Keys(typedMap))
+
+		beforeLen := 0
+		if existing := typedMap[name]; existing != nil {
+			if list, ok := existing.([]interface{}); ok {
+				beforeLen = len(list)
+			}
+		}
+		typedMap[name] = []interface{}{rrsigTyped}
+		afterLen := len(typedMap[name].([]interface{}))
+
+		slog.Crazy("[RRSIG->cache] Stored RRSIG under name=%q, zone=%q, coveredType=%q, total=%d (was %d)", name, zone, typeName, afterLen, beforeLen)
+		z.mu.Unlock()
+
+		slog.Debug("Successfully signed RRSet for %q with key %q (keyTag=%d)", name, keyName, storedKey.KeyTag)
 	}
 
-	if signerKey == nil {
-		return
-	}
-
-	rrsig, err := security.SignRRSet(rrs, signerKey, keyTag, signerName)
-	if err != nil {
-		return
-	}
-
-	rrsigTyped := security.RRSIGFromDNS(rrsig)
-
-	z.mu.Lock()
-	defer z.mu.Unlock()
-
-	if _, ok := z.cache["zones"][zone][string(types.TypeRRSIG)]; !ok {
-		z.cache["zones"][zone][string(types.TypeRRSIG)] = make(map[string]any)
-	}
-	z.cache["zones"][zone][string(types.TypeRRSIG)][name] = []interface{}{rrsigTyped}
+	_ = z.persist(zone)
 }

@@ -13,6 +13,7 @@ var DefaultLiveConfig = LiveConfig{
 	AllowAXFR:      false,
 	DefaultNS:      "ns1.go53.local.",
 	EnforceTSIG:    false,
+	DNSSECEnabled:  true,
 
 	Primary: PrimaryConfig{
 		NotifyDebounceMs: 2000,

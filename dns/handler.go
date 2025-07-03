@@ -1,6 +1,7 @@
 package dns
 
 import (
+	"github.com/TenforwardAB/slog"
 	"github.com/miekg/dns"
 	"go53/config"
 	"go53/dns/dnsutils"
@@ -14,6 +15,9 @@ import (
 func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	log.Println("Incomming DNS request")
 	live := config.AppConfig.GetLive()
+	opt := r.IsEdns0()
+	wantsDNSSEC := opt != nil && opt.Do()
+
 	if r.Opcode == dns.OpcodeNotify && (live.Mode == "secondary" || live.Dev.DualMode) {
 		remoteIP, _, err := net.SplitHostPort(w.RemoteAddr().String())
 		if err != nil {
@@ -68,6 +72,28 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
+
+	if wantsDNSSEC {
+		slog.Crazy("Using DNSSEC")
+		for _, rr := range m.Answer {
+			name := rr.Header().Name
+			rrtype := rr.Header().Rrtype
+			slog.Crazy("[handleRequest] name is: %s", name)
+
+			// Look for matching RRSIGs (type = RRSIG, covered type = rrtype)
+			rrsigRecords, ok := zone.LookupRecord(dns.TypeRRSIG, name)
+			slog.Crazy("[handleRequest] rrsigRecords are: %v", rrsigRecords)
+			if !ok {
+				continue
+			}
+
+			for _, sig := range rrsigRecords {
+				if rrsig, ok := sig.(*dns.RRSIG); ok && rrsig.TypeCovered == rrtype {
+					m.Answer = append(m.Answer, rrsig)
+				}
+			}
+		}
+	}
 
 	for _, q := range r.Question {
 		var answered bool
@@ -192,6 +218,39 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				m.Ns = append(m.Ns, soaRec...)
 			}
 		}
+		if wantsDNSSEC {
+			slog.Crazy("Using DNSSEC")
+
+			seenRRSIG := make(map[string]bool)
+
+			for _, rr := range m.Answer {
+				if rr.Header().Rrtype == dns.TypeRRSIG {
+					continue // avoid processing RRSIGs themselves
+				}
+
+				name := rr.Header().Name
+				rrtype := rr.Header().Rrtype
+				slog.Crazy("[handleRequest] name is: %s", name)
+
+				rrsigRecords, ok := zone.LookupRecord(dns.TypeRRSIG, name+"___"+dns.TypeToString[rrtype])
+				slog.Crazy("[handleRequest] rrsigRecords are: %v", rrsigRecords)
+				if !ok {
+					continue
+				}
+
+				for _, sig := range rrsigRecords {
+					if rrsig, ok := sig.(*dns.RRSIG); ok && rrsig.TypeCovered == rrtype {
+						key := rrsig.String()
+						if !seenRRSIG[key] {
+							m.Answer = append(m.Answer, rrsig)
+							seenRRSIG[key] = true
+							slog.Crazy("##################[handleRequest] appended RRSIG: %s", rrsig)
+						}
+					}
+				}
+			}
+		}
+
 	}
 
 	_ = w.WriteMsg(m)

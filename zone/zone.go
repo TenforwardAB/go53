@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"github.com/miekg/dns"
 	"go53/zone/rtypes"
+	"go53/zonereader"
 )
 
 // AddRecord adds a DNS record of the specified type to the in-memory store for a given zone.
@@ -102,4 +103,8 @@ func DeleteZone(zone string) error {
 		return fmt.Errorf("memory store is not initialized")
 	}
 	return mem.DeleteZone(zone)
+}
+
+func init() {
+	zonereader.LookupRecordFunc = LookupRecord
 }
