@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/miekg/dns"
+	"go53/types"
 	"reflect"
 	"regexp"
 	"strings"
@@ -135,6 +136,31 @@ func MergeStructs(dst, src interface{}) {
 			}
 		}
 	}
+}
+
+func ParseToDNSKEYRecord(m map[string]interface{}) (types.DNSKEYRecord, bool) {
+	rec := types.DNSKEYRecord{
+		TTL:      3600,
+		Protocol: 3,
+	}
+
+	if f, ok := m["flags"].(float64); ok {
+		rec.Flags = uint16(f)
+	}
+	if p, ok := m["protocol"].(float64); ok {
+		rec.Protocol = uint8(p)
+	}
+	if a, ok := m["algorithm"].(float64); ok {
+		rec.Algorithm = uint8(a)
+	}
+	if pk, ok := m["public_key"].(string); ok {
+		rec.PublicKey = pk
+	}
+	if t, ok := m["ttl"].(float64); ok {
+		rec.TTL = uint32(t)
+	}
+
+	return rec, rec.PublicKey != ""
 }
 
 func isZeroValue(v reflect.Value) bool {

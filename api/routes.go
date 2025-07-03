@@ -50,6 +50,8 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 	r.HandleFunc("/api/dnskeys", disableSecondary(handlers.CreateDNSKeyHandler)).Methods("POST")
 	r.HandleFunc("/api/dnskeys/{keyid}", disableSecondary(handlers.DeleteDNSKeyHandler)).Methods("DELETE")
 
+	r.HandleFunc("/api/ds/{zone}", disableSecondary(handlers.GetDSHandler)).Methods("GET")
+
 	return r
 }
 

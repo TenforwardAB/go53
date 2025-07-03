@@ -101,7 +101,7 @@ func (DNSKEYRecord) Add(zone, name string, value interface{}, ttl *uint32) error
 		case []interface{}:
 			for _, item := range v {
 				if obj, ok := item.(map[string]interface{}); ok {
-					parsed, ok := parseToDNSKEYRecord(obj)
+					parsed, ok := internal.ParseToDNSKEYRecord(obj)
 					if ok {
 						current = append(current, parsed)
 					}
@@ -147,13 +147,13 @@ func (DNSKEYRecord) Lookup(host string) ([]dns.RR, bool) {
 	case []interface{}:
 		for _, item := range v {
 			if obj, ok := item.(map[string]interface{}); ok {
-				if rec, ok := parseToDNSKEYRecord(obj); ok {
+				if rec, ok := internal.ParseToDNSKEYRecord(obj); ok {
 					records = append(records, rec)
 				}
 			}
 		}
 	case map[string]interface{}:
-		if rec, ok := parseToDNSKEYRecord(v); ok {
+		if rec, ok := internal.ParseToDNSKEYRecord(v); ok {
 			records = append(records, rec)
 		}
 	case types.DNSKEYRecord:
@@ -203,7 +203,7 @@ func (DNSKEYRecord) Delete(host string, value interface{}) error {
 		return fmt.Errorf("DNSKEYRecord Delete expects a JSON object, got %T", value)
 	}
 
-	target, ok := parseToDNSKEYRecord(obj)
+	target, ok := internal.ParseToDNSKEYRecord(obj)
 	if !ok {
 		return errors.New("DNSKEYRecord Delete: invalid DNSKEY structure")
 	}
@@ -224,7 +224,7 @@ func (DNSKEYRecord) Delete(host string, value interface{}) error {
 	case []interface{}:
 		for _, item := range v {
 			if obj, ok := item.(map[string]interface{}); ok {
-				rec, ok := parseToDNSKEYRecord(obj)
+				rec, ok := internal.ParseToDNSKEYRecord(obj)
 				if ok && (rec.PublicKey != target.PublicKey || rec.Algorithm != target.Algorithm || rec.Flags != target.Flags) {
 					remaining = append(remaining, rec)
 				}
@@ -244,29 +244,4 @@ func (DNSKEYRecord) Type() uint16 {
 
 func init() {
 	Register(DNSKEYRecord{})
-}
-
-func parseToDNSKEYRecord(m map[string]interface{}) (types.DNSKEYRecord, bool) {
-	rec := types.DNSKEYRecord{
-		TTL:      3600,
-		Protocol: 3,
-	}
-
-	if f, ok := m["flags"].(float64); ok {
-		rec.Flags = uint16(f)
-	}
-	if p, ok := m["protocol"].(float64); ok {
-		rec.Protocol = uint8(p)
-	}
-	if a, ok := m["algorithm"].(float64); ok {
-		rec.Algorithm = uint8(a)
-	}
-	if pk, ok := m["public_key"].(string); ok {
-		rec.PublicKey = pk
-	}
-	if t, ok := m["ttl"].(float64); ok {
-		rec.TTL = uint32(t)
-	}
-
-	return rec, rec.PublicKey != ""
 }

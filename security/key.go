@@ -7,12 +7,16 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"github.com/miekg/dns"
+	"go53/internal"
 	"go53/storage"
 	"go53/types"
 	"go53/zonereader"
@@ -79,6 +83,74 @@ func GenerateAndStoreAllKeys(zone string) error {
 		}
 	}
 	return nil
+}
+
+func GetDS(zone string) ([]*dns.DS, error) {
+	sz, err := internal.SanitizeFQDN(zone)
+	if err != nil {
+		return nil, fmt.Errorf("FQDN sanitize check failed: %w", err)
+	}
+
+	recs, found := zonereader.LookupRecord(dns.TypeDNSKEY, sz)
+	if !found {
+		return nil, fmt.Errorf("no DNSKEYs found for zone %s", sz)
+	}
+
+	var dsList []*dns.DS
+	for _, rr := range recs {
+		dnskey, ok := rr.(*dns.DNSKEY)
+		if !ok || dnskey.Flags != 257 {
+			continue // Only consider KSKs
+		}
+
+		keyTag := dnskey.KeyTag()
+
+		wire := make([]byte, 1024)
+		off, err := dns.PackRR(dnskey, wire, 0, nil, true)
+		if err != nil {
+			return nil, fmt.Errorf("failed to pack DNSKEY: %w", err)
+		}
+		wire = wire[:off]
+		digestInput := wire[12:]
+
+		// SHA-1 digest (type 1)
+		sha1sum := sha1.Sum(digestInput)
+		ds1 := &dns.DS{
+			Hdr: dns.RR_Header{
+				Name:   dns.Fqdn(zone),
+				Rrtype: dns.TypeDS,
+				Class:  dns.ClassINET,
+				Ttl:    dnskey.Hdr.Ttl,
+			},
+			KeyTag:     keyTag,
+			Algorithm:  dnskey.Algorithm,
+			DigestType: dns.SHA1,
+			Digest:     hex.EncodeToString(sha1sum[:]),
+		}
+		dsList = append(dsList, ds1)
+
+		// SHA-256 digest (type 2)
+		sha256sum := sha256.Sum256(digestInput)
+		ds2 := &dns.DS{
+			Hdr: dns.RR_Header{
+				Name:   dns.Fqdn(zone),
+				Rrtype: dns.TypeDS,
+				Class:  dns.ClassINET,
+				Ttl:    dnskey.Hdr.Ttl,
+			},
+			KeyTag:     keyTag,
+			Algorithm:  dnskey.Algorithm,
+			DigestType: dns.SHA256,
+			Digest:     hex.EncodeToString(sha256sum[:]),
+		}
+		dsList = append(dsList, ds2)
+	}
+
+	if len(dsList) == 0 {
+		return nil, fmt.Errorf("no KSK found in DNSKEYs for zone %s", zone)
+	}
+
+	return dsList, nil
 }
 
 func generateKeyPair(algorithm uint8) (crypto.PrivateKey, crypto.PublicKey, error) {

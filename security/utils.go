@@ -1,41 +1,26 @@
 package security
 
 import (
-	"sort"
-	"strings"
-
+	"bytes"
 	"github.com/miekg/dns"
+	"sort"
 )
+
+func rrCanonicalLess(a, b dns.RR) bool {
+	msgA := make([]byte, 4096)
+	msgB := make([]byte, 4096)
+
+	offA, errA := dns.PackRR(a, msgA, 0, nil, true)
+	offB, errB := dns.PackRR(b, msgB, 0, nil, true)
+	if errA != nil || errB != nil {
+		return false // or decide how to handle packing errors
+	}
+
+	return bytes.Compare(msgA[:offA], msgB[:offB]) < 0
+}
 
 func SortRRCanonically(rrs []dns.RR) {
 	sort.SliceStable(rrs, func(i, j int) bool {
-		return rrCompareCanonical(rrs[i], rrs[j]) < 0
+		return rrCanonicalLess(rrs[i], rrs[j])
 	})
-}
-
-func rrCompareCanonical(a, b dns.RR) int {
-	nameA := dns.CanonicalName(a.Header().Name)
-	nameB := dns.CanonicalName(b.Header().Name)
-	if cmp := strings.Compare(nameA, nameB); cmp != 0 {
-		return cmp
-	}
-
-	if a.Header().Rrtype != b.Header().Rrtype {
-		return int(a.Header().Rrtype) - int(b.Header().Rrtype)
-	}
-
-	if a.Header().Class != b.Header().Class {
-		return int(a.Header().Class) - int(b.Header().Class)
-	}
-
-	if a.Header().Ttl != b.Header().Ttl {
-		return int(a.Header().Ttl) - int(b.Header().Ttl)
-	}
-	rdataA := rdataCanonicalString(a)
-	rdataB := rdataCanonicalString(b)
-	return strings.Compare(rdataA, rdataB)
-}
-
-func rdataCanonicalString(rr dns.RR) string {
-	return dns.CanonicalName(rr.String())
 }

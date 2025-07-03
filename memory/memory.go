@@ -187,7 +187,7 @@ func (z *InMemoryZoneStore) DeleteZone(zone string) error {
 func (z *InMemoryZoneStore) maybeSignRRSet(zone, rtype, name string) {
 	slog.Crazy("[maybeSignRRSet]", zone, rtype, name)
 
-	//Always persist
+	//always persist first to make sure the current data is avablee on disc.
 	_ = z.persist(zone)
 
 	if !config.AppConfig.GetLive().DNSSECEnabled {

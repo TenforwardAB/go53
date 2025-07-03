@@ -84,7 +84,7 @@ func (SOARecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 
 	rec.Serial = internal.NextSerial(existing.Serial)
 
-	return memStore.AddRecord(sanitizedZone, string(types.TypeSOA), sanitizedZone, rec)
+	return memStore.AddRecord(sanitizedZone, string(types.TypeSOA), "@.", rec)
 }
 
 func (SOARecord) Lookup(host string) ([]dns.RR, bool) {
@@ -99,7 +99,7 @@ func (SOARecord) Lookup(host string) ([]dns.RR, bool) {
 	if memStore == nil {
 		return nil, false
 	}
-	_, _, val, ok := memStore.GetRecord(sanitizedZone, string(types.TypeSOA), sanitizedZone)
+	_, _, val, ok := memStore.GetRecord(sanitizedZone, string(types.TypeSOA), "@.")
 	if !ok {
 		return nil, false
 	}
