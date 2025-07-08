@@ -349,7 +349,7 @@ func LoadAllKeysForZone(zone string) ([]*types.StoredKey, error) {
 }
 
 func GetDNSSECKeys(zoneName string) ([]*dns.DNSKEY, []*dns.DNSKEY, error) {
-	zoneApex := dns.Fqdn(zoneName)
+	zoneApex, _ := internal.SanitizeFQDN(zoneName)
 
 	recs, ok := zonereader.LookupRecord(dns.TypeDNSKEY, zoneApex)
 	if !ok {
@@ -378,7 +378,7 @@ func GetDNSSECKeys(zoneName string) ([]*dns.DNSKEY, []*dns.DNSKEY, error) {
 }
 
 func GetDNSSECKeyNames(zoneName string) ([]string, error) {
-	zoneApex := dns.Fqdn(zoneName)
+	zoneApex, _ := internal.SanitizeFQDN(zoneName)
 
 	recs, ok := zonereader.LookupRecord(dns.TypeDNSKEY, zoneApex)
 	if !ok {

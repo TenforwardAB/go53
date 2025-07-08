@@ -3,9 +3,11 @@ package internal
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/TenforwardAB/slog"
 	"github.com/miekg/dns"
 	"go53/types"
 	"net"
+	"reflect"
 	"strings"
 )
 
@@ -49,6 +51,7 @@ var RRBuilders = map[string]RRBuilder{
 	},
 
 	"NS": func(name string, data any) []dns.RR {
+		//fqdn, _ := SanitizeFQDN(name)
 		var rrs []dns.RR
 
 		switch v := data.(type) {
@@ -610,6 +613,7 @@ func RRToZoneData(rrs []dns.RR) types.ZoneData {
 	zd.SSHFP = map[string][]types.SSHFPRecord{}
 	zd.URI = map[string][]types.URIRecord{}
 	zd.APL = map[string][]types.APLRecord{}
+	zd.SOA = &types.SOARecord{}
 
 	for _, rr := range rrs {
 		name := strings.ToLower(strings.TrimSuffix(rr.Header().Name, "."))     // Normalize
@@ -622,6 +626,8 @@ func RRToZoneData(rrs []dns.RR) types.ZoneData {
 			name = "@"
 		}
 
+		slog.Crazy("[rrbuilder.go:RRToZoneData] rr.(type) is: %v", reflect.TypeOf(rr))
+		slog.Crazy("[rrbuilder.go:RRToZoneData] rr is: %v", rr)
 		switch v := rr.(type) {
 		case *dns.A:
 			zd.A[name] = append(zd.A[name], types.ARecord{IP: v.A.String(), TTL: v.Hdr.Ttl})
@@ -641,6 +647,14 @@ func RRToZoneData(rrs []dns.RR) types.ZoneData {
 			zd.CNAME[name] = types.CNAMERecord{Target: strings.TrimSuffix(v.Target, "."), TTL: v.Hdr.Ttl}
 		case *dns.SPF:
 			zd.SPF[name] = types.SPFRecord{Text: strings.Join(v.Txt, " "), TTL: v.Hdr.Ttl}
+		case *dns.DNSKEY:
+			zd.DNSKEY[name] = append(zd.DNSKEY[name], types.DNSKEYRecord{
+				Flags:     v.Flags,
+				Protocol:  v.Protocol,
+				Algorithm: v.Algorithm,
+				PublicKey: v.PublicKey,
+				TTL:       v.Hdr.Ttl,
+			})
 		case *dns.SOA:
 			zd.SOA = &types.SOARecord{
 				Ns:      strings.TrimSuffix(v.Ns, "."),
@@ -652,10 +666,11 @@ func RRToZoneData(rrs []dns.RR) types.ZoneData {
 				Minimum: v.Minttl,
 				TTL:     v.Hdr.Ttl,
 			}
+			slog.Crazy("[rrbuilder.go:RRToZoneData] zd.SOA is: %v", zd.SOA)
 			// TODO: Add remaining record types if needed
 		}
 	}
-
+	slog.Crazy("[rrbuilder.go:RRToZoneData] zoneData: %v", zd)
 	return zd
 }
 

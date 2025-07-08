@@ -3,6 +3,7 @@ package rtypes
 import (
 	"errors"
 	"fmt"
+	"github.com/TenforwardAB/slog"
 	"github.com/miekg/dns"
 	"go53/internal"
 	"go53/types"
@@ -17,6 +18,7 @@ func (DNSKEYRecord) Add(zone, name string, value interface{}, ttl *uint32) error
 	}
 
 	sn, err := internal.SanitizeFQDN(name)
+	slog.Crazy("[dnskey.go:Add] FQDN name to Sanitize", name)
 	if err != nil {
 		return fmt.Errorf("FQDN sanitize check failed for name: %w", err)
 	}

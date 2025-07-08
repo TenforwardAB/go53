@@ -3,7 +3,9 @@ package rtypes
 import (
 	"errors"
 	"fmt"
+	"github.com/TenforwardAB/slog"
 	"github.com/miekg/dns"
+	"go53/config"
 	"go53/internal"
 	"go53/types"
 )
@@ -11,6 +13,7 @@ import (
 type SOARecord struct{}
 
 func (SOARecord) Add(zone, name string, value interface{}, ttl *uint32) error {
+	slog.Crazy("[soa.go:Add] Adding SOA record for zone: ", zone, "with value: ", value)
 	sanitizedZone, err := internal.SanitizeFQDN(zone)
 	if err != nil {
 		return errors.New("FQDN Sanitize check failed")
@@ -56,35 +59,49 @@ func (SOARecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 	}
 
 	cfg, ok := value.(map[string]interface{})
+	slog.Crazy("[soa.go:Add] Cfg is: ", cfg)
+	for k, val := range cfg {
+		slog.Crazy("[soa.go:Add] cfg key: ", k, " ,and value is: ", val)
+	}
 	if !ok {
 		return fmt.Errorf("SOA Add expects a JSON object")
 	}
 
-	if v, ok := cfg["Ns"].(string); ok {
-		rec.Ns = v
+	if v, ok := cfg["ns"].(string); ok {
+
+		rec.Ns = dns.Fqdn(v)
 	}
-	if v, ok := cfg["Mbox"].(string); ok {
-		rec.Mbox = v
+	if v, ok := cfg["mbox"].(string); ok {
+		rec.Mbox = dns.Fqdn(v)
 	}
-	if v, ok := cfg["Refresh"].(float64); ok {
+	if v, ok := cfg["refresh"].(float64); ok {
 		rec.Refresh = uint32(v)
 	}
-	if v, ok := cfg["Retry"].(float64); ok {
+	if v, ok := cfg["retry"].(float64); ok {
 		rec.Retry = uint32(v)
 	}
-	if v, ok := cfg["Expire"].(float64); ok {
+	if v, ok := cfg["expire"].(float64); ok {
 		rec.Expire = uint32(v)
 	}
-	if v, ok := cfg["Minimum"].(float64); ok {
+	if v, ok := cfg["minimum"].(float64); ok {
 		rec.Minimum = uint32(v)
 	}
 	if ttl != nil {
 		rec.TTL = *ttl
 	}
 
-	rec.Serial = internal.NextSerial(existing.Serial)
+	slog.Crazy("[soa.go:Add] SOA record from cfg: ", rec)
 
-	return memStore.AddRecord(sanitizedZone, string(types.TypeSOA), "@.", rec)
+	if config.AppConfig.GetLive().Mode == "secondary" {
+		if v, ok := cfg["serial"].(float64); ok {
+			rec.Serial = uint32(v)
+		}
+	} else {
+		rec.Serial = internal.NextSerial(existing.Serial)
+	}
+
+	slog.Crazy("[soa.go:Add] Actually Adding SOA record: ", rec)
+	return memStore.AddRecord(sanitizedZone, string(types.TypeSOA), "@", rec)
 }
 
 func (SOARecord) Lookup(host string) ([]dns.RR, bool) {
@@ -99,7 +116,7 @@ func (SOARecord) Lookup(host string) ([]dns.RR, bool) {
 	if memStore == nil {
 		return nil, false
 	}
-	_, _, val, ok := memStore.GetRecord(sanitizedZone, string(types.TypeSOA), "@.")
+	_, _, val, ok := memStore.GetRecord(sanitizedZone, string(types.TypeSOA), "@")
 	if !ok {
 		return nil, false
 	}
@@ -156,7 +173,7 @@ func (SOARecord) Delete(host string, value interface{}) error {
 	}
 
 	// SOA only supports one record, delete unconditionally
-	return memStore.DeleteRecord(sanitizedZone, string(types.TypeSOA), sanitizedZone)
+	return memStore.DeleteRecord(sanitizedZone, string(types.TypeSOA), "@")
 }
 
 func (SOARecord) Type() uint16 {

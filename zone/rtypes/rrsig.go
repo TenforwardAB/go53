@@ -31,7 +31,7 @@ func (RRSIGRecord) Lookup(host string) ([]dns.RR, bool) {
 	slog.Crazy("[handleRequest] rtype is: %s", rtypeStr)
 
 	zone, shortName, ok := internal.SplitName(name)
-	shortName = dns.Fqdn(shortName)
+	//shortName, _ = internal.SanitizeFQDN(shortName)
 	if !ok {
 		return nil, false
 	}
@@ -80,10 +80,11 @@ func (RRSIGRecord) Lookup(host string) ([]dns.RR, bool) {
 			slog.Crazy("[handleRequest] unknown TypeCovered: %q", sig.TypeCovered)
 			continue
 		}
+		fqdn, _ := internal.SanitizeFQDN(name)
 
 		s := &dns.RRSIG{
 			Hdr: dns.RR_Header{
-				Name:   dns.Fqdn(name),
+				Name:   dns.Fqdn(fqdn),
 				Rrtype: dns.TypeRRSIG,
 				Class:  dns.ClassINET,
 				Ttl:    sig.TTL,

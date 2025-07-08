@@ -26,6 +26,7 @@ func main() {
 	config.AppConfig.Init()
 	config.AppConfig.InitLiveConfig()
 	base := config.AppConfig.GetBase()
+	slog.Crazy("Live Config DNSSEC ENABLE is: %b", config.AppConfig.GetLive().DNSSECEnabled)
 
 	const table = "tsig-keys"
 	const keyName = "xxfr-key"

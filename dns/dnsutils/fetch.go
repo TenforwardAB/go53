@@ -11,13 +11,14 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/TenforwardAB/slog"
 	"github.com/miekg/dns"
 )
 
 func ImportRecords(rrtype string, zoneName string, data interface{}) error {
 	var zoneData types.ZoneData
 	var fromAPI bool
-
+	slog.Crazy("[fetch.go:ImportRecords] data is: ", data)
 	switch v := data.(type) {
 
 	case []dns.RR:
@@ -27,7 +28,9 @@ func ImportRecords(rrtype string, zoneName string, data interface{}) error {
 		if err != nil {
 			return err
 		}
+		slog.Crazy("[fetch.go:ImportRecords] v in data.(type) is: ", v)
 		zoneData = internal.RRToZoneData(v)
+		slog.Crazy("[fetch.go:ImportRecords] zoneData: %v", zoneData)
 
 	case map[string]interface{}:
 		// JSON input for 'multi'
@@ -107,9 +110,16 @@ func importFromZoneData(zoneName string, zd types.ZoneData, fromAPI bool) error 
 				continue
 			}
 			if field.Name == "SOA" {
-				r := value.Interface()
-				ttl := reflect.ValueOf(r).Elem().FieldByName("TTL").Uint()
-				if err := add(dns.TypeSOA, zoneName, r, uint32(ttl)); err != nil {
+				elem := value.Elem()
+				if !elem.IsValid() {
+					continue
+				}
+				ttlField := elem.FieldByName("TTL")
+				var ttl uint32
+				if ttlField.IsValid() && ttlField.Kind() == reflect.Uint32 {
+					ttl = uint32(ttlField.Uint())
+				}
+				if err := add(dns.TypeSOA, zoneName, value.Interface(), ttl); err != nil {
 					return err
 				}
 			}

@@ -80,11 +80,13 @@ func (z *InMemoryZoneStore) AddRecord(zone, rtype, name string, record any) erro
 	zones[zone][rtype][name] = record
 	z.mu.Unlock()
 
-	//if config.DNSSECEnabled {
-	//	go z.maybeSignRRSet(zone, rtype, name, record)
-	//}
+	if !config.AppConfig.GetLive().DNSSECEnabled || config.AppConfig.GetLive().Mode == "secondary" {
+		z.persist(zone)
+	} else {
+		go z.maybeSignRRSet(zone, rtype, name)
+	}
 
-	go z.maybeSignRRSet(zone, rtype, name)
+	//go z.maybeSignRRSet(zone, rtype, name)
 
 	return nil //z.persist(zone)
 }
@@ -111,7 +113,7 @@ func (z *InMemoryZoneStore) GetZone(zone string) ([]dns.RR, error) {
 	defer z.mu.RUnlock()
 
 	zonesMap, ok := z.cache["zones"]
-	log.Println("zonesMap", zonesMap)
+	log.Println("zonesMap: %v with length: %d", zonesMap, len(zonesMap))
 	if !ok {
 		return nil, errors.New("zones cache missing")
 	}
@@ -143,7 +145,7 @@ func (z *InMemoryZoneStore) GetZone(zone string) ([]dns.RR, error) {
 			default:
 				fqdn = name + "." + sanitizedZone
 			}
-			fqdn = dns.Fqdn(fqdn)
+			fqdn, _ = internal.SanitizeFQDN(fqdn)
 			slog.Crazy("[GetZone] fqdn is: ", fqdn)
 			slog.Crazy("[GetZone] raw is: ", rawData)
 			slog.Crazy("[GetZone] reflect.TypeOf(rawData): %v", reflect.TypeOf(rawData))
@@ -189,9 +191,12 @@ func (z *InMemoryZoneStore) maybeSignRRSet(zone, rtype, name string) {
 
 	//always persist first to make sure the current data is avablee on disc.
 	_ = z.persist(zone)
-
+	slog.Crazy("[maybeSignRRSet] DNSSEC is: %v", config.AppConfig.GetLive().DNSSECEnabled)
 	if !config.AppConfig.GetLive().DNSSECEnabled {
-		slog.Debug("[maybeSignRRSet] DNSSEC disabled, skipping signing, persisting zone only")
+		slog.Debug("[maybeSignRRSet] DNSSEC disabled, skipping signing")
+		return
+	} else if config.AppConfig.GetLive().Mode == "secondary" {
+		slog.Warn("[maybeSignRRSet] Is secondary, skipping signing, done in primary only")
 		return
 	}
 
@@ -200,7 +205,7 @@ func (z *InMemoryZoneStore) maybeSignRRSet(zone, rtype, name string) {
 		slog.Debug("Record for zone: %s of type %s and name %s NOT FOUND", zone, rtype, name)
 	}
 
-	slog.Crazy("*****************[maybeSignRRSet] Record is: %s ", record)
+	slog.Crazy("[maybeSignRRSet] Record is: %s ", record)
 
 	rrs, err := security.ToRRSet(name, rtype, record)
 	slog.Crazy("rrs is: %v", rrs)
@@ -238,8 +243,9 @@ func (z *InMemoryZoneStore) maybeSignRRSet(zone, rtype, name string) {
 			slog.Alert("Key %q does not implement crypto.Signer", keyName)
 			continue
 		}
+		fqdn, _ := internal.SanitizeFQDN(storedKey.Zone)
 
-		rrsig, err := security.SignRRSet(rrs, signer, storedKey.KeyTag, dns.Fqdn(storedKey.Zone))
+		rrsig, err := security.SignRRSet(rrs, signer, storedKey.KeyTag, fqdn)
 		slog.Crazy("!!!!!!!!!!!!!!!!!!!![maybeSignRRSet] rrsig is: %v !!!!!!!!!!!!!!!!!", rrsig)
 		if err != nil {
 			slog.Error("Failed to sign RRSet with key %q: %v", keyName, err)
@@ -248,7 +254,7 @@ func (z *InMemoryZoneStore) maybeSignRRSet(zone, rtype, name string) {
 
 		rrsigTyped := security.RRSIGFromDNS(rrsig)
 		typeName := dns.TypeToString[rrsig.TypeCovered]
-		name := dns.Fqdn(rrsig.Hdr.Name)
+		//name, _ = internal.SanitizeFQDN(rrsig.Hdr.Name)
 
 		slog.Crazy("[maybeSignRRSet] rrsigTyped is: %s,  typeName: %s, name is %s", rrsigTyped, typeName, name)
 

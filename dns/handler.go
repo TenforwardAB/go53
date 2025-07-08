@@ -5,6 +5,7 @@ import (
 	"github.com/miekg/dns"
 	"go53/config"
 	"go53/dns/dnsutils"
+	"go53/internal"
 	"go53/security"
 	"go53/zone"
 	"log"
@@ -16,7 +17,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	log.Println("Incomming DNS request")
 	live := config.AppConfig.GetLive()
 	opt := r.IsEdns0()
-	wantsDNSSEC := opt != nil && opt.Do()
+	wantsDNSSEC := config.AppConfig.GetLive().DNSSECEnabled && opt != nil && opt.Do()
 
 	if r.Opcode == dns.OpcodeNotify && (live.Mode == "secondary" || live.Dev.DualMode) {
 		remoteIP, _, err := net.SplitHostPort(w.RemoteAddr().String())
@@ -136,7 +137,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			}
 
 		case dns.TypeDNSKEY:
-			zoneApex := dns.Fqdn(q.Name)
+			zoneApex, _ := internal.SanitizeFQDN(q.Name) //TODO: manage error
 			if rec, ok := zone.LookupRecord(dns.TypeDNSKEY, zoneApex); ok {
 				log.Println("DNSKEY record found:", rec)
 				m.Answer = append(m.Answer, rec...)

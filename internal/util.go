@@ -36,38 +36,27 @@ func RRTypeStringToUint16(s string) (uint16, error) {
 
 func NextSerial(old uint32) uint32 {
 	now := time.Now().UTC()
-	date := uint32(now.Year()*1e4 + int(now.Month())*1e2 + now.Day()) // t.ex. 20250610
+	// YYMDD format: 2-digit year, month, day
+	year := now.Year() % 100
+	date := uint32(year*1e4 + int(now.Month())*1e2 + now.Day()) // e.g. 2507130
 
 	if old == 0 {
-		return date*10 + 1
+		return date*1e3 + 1 // start with 001
 	}
 
-	tmp := old
-	digits := 0
-	for tmp > 0 {
-		tmp /= 10
-		digits++
-	}
-	seqDigits := digits - 8
-	if seqDigits < 1 {
-		seqDigits = 1
-	}
-
-	pow10 := uint32(1)
-	for i := 0; i < seqDigits; i++ {
-		pow10 *= 10
-	}
-
-	oldDate := old / pow10
-	oldSeq := old % pow10
+	oldDate := old / 1e3
+	oldSeq := old % 1e3
 
 	if oldDate == date {
-		return oldDate*pow10 + (oldSeq + 1)
+		return oldDate*1e3 + (oldSeq + 1)
 	}
-	return date*10 + 1
+	return date*1e3 + 1
 }
 
 func SanitizeFQDN(fqdn string) (string, error) {
+	if fqdn == "@" || fqdn == "@." {
+		return "@", nil
+	}
 
 	var validFQDN = regexp.MustCompile(`(?i)^[a-z0-9-\.]+$`)
 	fqdn = strings.TrimSpace(fqdn)
@@ -80,19 +69,7 @@ func SanitizeFQDN(fqdn string) (string, error) {
 		return "", errors.New("FQDN contains invalid characters")
 	}
 
-	labels := strings.Split(strings.TrimSuffix(fqdn, "."), ".")
-	for _, label := range labels {
-		if label == "" {
-			return "", errors.New("FQDN has empty label")
-		}
-		if strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
-			return "", errors.New("FQDN label cannot start or end with '-'")
-		}
-	}
-
-	if !strings.HasSuffix(fqdn, ".") {
-		fqdn += "."
-	}
+	fqdn = dns.Fqdn(fqdn)
 
 	return fqdn, nil
 }

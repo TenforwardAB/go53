@@ -42,7 +42,7 @@ func AddRecordHandler(w http.ResponseWriter, r *http.Request) {
 		name = zoneName
 	case dns.TypeDNSKEY:
 		// Always default to zone apex for DNSKEY
-		name = dns.Fqdn(zoneName)
+		name, _ = internal.SanitizeFQDN(zoneName)
 
 		// Support keyid usage (optional)
 		keyidRaw, ok := body["keyid"]
@@ -84,7 +84,7 @@ func AddRecordHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Set zone apex
-		name = dns.Fqdn(zoneName)
+		name, _ = internal.SanitizeFQDN(zoneName)
 		value = dnskey
 
 		// Remove 'name' if it exists (we don't use it for DNSKEY)

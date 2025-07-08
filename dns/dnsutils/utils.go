@@ -20,9 +20,9 @@ func UpdateSOASerial(zoneName string) error {
 		return err
 	}
 
-	_, _, raw, found := store.GetRecord(sanitizedZone, string(types.TypeSOA), sanitizedZone)
+	_, _, raw, found := store.GetRecord(sanitizedZone, string(types.TypeSOA), "@")
 	if !found {
-		err := zone.AddRecord(dns.TypeSOA, sanitizedZone, sanitizedZone, map[string]interface{}{}, nil)
+		err := zone.AddRecord(dns.TypeSOA, sanitizedZone, "@", map[string]interface{}{}, nil)
 		if err != nil {
 			return err
 		}
@@ -49,5 +49,5 @@ func UpdateSOASerial(zoneName string) error {
 	}
 
 	existing.Serial = internal.NextSerial(existing.Serial)
-	return store.AddRecord(sanitizedZone, string(types.TypeSOA), sanitizedZone, existing) //TODO: why not use zone.AddRecord?
+	return store.AddRecord(sanitizedZone, string(types.TypeSOA), "@", existing) //TODO: why not use zone.AddRecord?
 }

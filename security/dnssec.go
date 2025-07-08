@@ -34,8 +34,9 @@ func ToRRSet(name string, rtype string, raw any) ([]dns.RR, error) {
 		return nil, fmt.Errorf("no RRBuilder for rtype %q", rtype)
 	}
 
-	rrs := builder(dns.Fqdn(name), raw)
-	slog.Crazy("[ToRRSet] name2 is:", name)
+	fqdn, _ := internal.SanitizeFQDN(name)
+	rrs := builder(fqdn, raw)
+	slog.Crazy("[ToRRSet] name2 is:", fqdn)
 	slog.Crazy("[ToRRSet] rrs is:", rrs)
 	if len(rrs) == 0 {
 		return nil, fmt.Errorf("no RRs built for %q", rtype)
@@ -52,6 +53,7 @@ func SignRRSet(rrs []dns.RR, key crypto.Signer, keyTag uint16, signerName string
 	}
 
 	SortRRCanonically(rrs)
+	fqdn, _ := internal.SanitizeFQDN(signerName)
 
 	hdr := rrs[0].Header()
 	rrsig := &dns.RRSIG{
@@ -62,14 +64,14 @@ func SignRRSet(rrs []dns.RR, key crypto.Signer, keyTag uint16, signerName string
 			Ttl:    hdr.Ttl,
 		},
 		TypeCovered: hdr.Rrtype,
-		Algorithm:   10, // RSASHA512 for now
+		Algorithm:   10, //TODO: Fix RSASHA512 for now
 
 		Labels:     uint8(dns.CountLabel(hdr.Name)),
 		OrigTtl:    hdr.Ttl,
 		Expiration: uint32(time.Now().Add(7 * 24 * time.Hour).Unix()),
 		Inception:  uint32(time.Now().Add(-1 * time.Hour).Unix()),
 		KeyTag:     keyTag,
-		SignerName: dns.Fqdn(signerName),
+		SignerName: fqdn,
 	}
 
 	if err := rrsig.Sign(key, rrs); err != nil {

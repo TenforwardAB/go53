@@ -10,6 +10,7 @@ echo "Updating config for secondary..."
 curl -s -X PATCH "$BASE_URL/api/config" -H "$JSON_HEADER" -d '{
   "log_level": "debug",
   "dnssec_enabled": true,
+  "enforce_tsig": false,
   "mode": "secondary",
   "allow_transfer": "",
   "allow_recursion": false,
