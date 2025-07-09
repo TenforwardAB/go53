@@ -128,13 +128,31 @@ func (z *InMemoryZoneStore) GetZone(zone string) ([]dns.RR, error) {
 
 	for rtype, namesMap := range zoneMap {
 		builder, ok := internal.RRBuilders[rtype]
-		slog.Crazy("[GetZone] rtype is: ", rtype)
-		slog.Crazy("[GetZone] builder is:", builder)
 		if !ok {
-			slog.Warn("NOT OK IN GetZone")
+			slog.Warn("[GetZone] no builder for rtype", "rtype", rtype)
 			continue
 		}
 
+		if rtype == "RRSIG" {
+			// Special nested handling for RRSIG
+			for _, innerData := range namesMap {
+				innerMap, ok := innerData.(map[string]any)
+				if !ok {
+					slog.Warn("[GetZone] RRSIG innerData unexpected type", "type", reflect.TypeOf(innerData))
+					continue
+				}
+				for innerName, rawData := range innerMap {
+					//fqdn, _ := internal.SanitizeFQDN(innerName)
+					slog.Emerg("[GetZone] RRSIG innerData fqdn: %s and data : %+v", innerName, rawData)
+					rrs := builder(innerName, rawData)
+					slog.Error("[GetZone] RRSIG rrs: %+v", rrs)
+					allRRs = append(allRRs, rrs...)
+				}
+			}
+			continue
+		}
+
+		// Handle other record types normally
 		for name, rawData := range namesMap {
 			var fqdn string
 			switch {
@@ -146,12 +164,7 @@ func (z *InMemoryZoneStore) GetZone(zone string) ([]dns.RR, error) {
 				fqdn = name + "." + sanitizedZone
 			}
 			fqdn, _ = internal.SanitizeFQDN(fqdn)
-			slog.Crazy("[GetZone] fqdn is: ", fqdn)
-			slog.Crazy("[GetZone] raw is: ", rawData)
-			slog.Crazy("[GetZone] reflect.TypeOf(rawData): %v", reflect.TypeOf(rawData))
-
 			rrs := builder(fqdn, rawData)
-			slog.Crazy("[GetZone] rrs is: ", rrs)
 			if len(rrs) > 0 {
 				allRRs = append(allRRs, rrs...)
 			}

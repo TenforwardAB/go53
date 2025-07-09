@@ -539,6 +539,7 @@ var RRBuilders = map[string]RRBuilder{
 
 	"RRSIG": func(name string, data any) []dns.RR {
 		var rrs []dns.RR
+		slog.Crazy("[rrbuilder.go:RRBuilder] data for RSIG is: %+v", data)
 
 		switch v := data.(type) {
 		case []*types.RRSIGRecord:
@@ -564,22 +565,44 @@ var RRBuilders = map[string]RRBuilder{
 				}
 			}
 		case []interface{}:
-			for _, raw := range v {
-				if rec, ok := raw.(map[string]interface{}); ok {
+			// <--- THIS CASE IS WHAT YOU ACTUALLY GET!
+			for _, item := range v {
+				switch rec := item.(type) {
+				case *types.RRSIGRecord:
+					rr, err := toDNSRRSIG(name, rec)
+					if err == nil {
+						rrs = append(rrs, rr)
+					}
+				case map[string]interface{}:
+					// Defensive: convert to struct
 					b, err := json.Marshal(rec)
 					if err != nil {
 						continue
 					}
-					var rec types.RRSIGRecord
-					if err := json.Unmarshal(b, &rec); err != nil {
+					var recObj types.RRSIGRecord
+					if err := json.Unmarshal(b, &recObj); err != nil {
 						continue
 					}
-					rr, err := toDNSRRSIG(name, &rec)
+					rr, err := toDNSRRSIG(name, &recObj)
+					if err == nil {
+						rrs = append(rrs, rr)
+					}
+				default:
+					slog.Warn("[rrbuilder.go:RRBuilder] unknown type in []interface{}: %T", rec)
+				}
+			}
+		case map[string][]*types.RRSIGRecord:
+			for _, records := range v {
+				for _, rec := range records {
+					rr, err := toDNSRRSIG(name, rec)
+					slog.Crazy("[rrbuilder.go:RRBuilder] rr for RSIG is: %+v", rr)
 					if err == nil {
 						rrs = append(rrs, rr)
 					}
 				}
 			}
+		default:
+			slog.Warn("[rrbuilder.go:RRBuilder] unknown type for data: %T", v)
 		}
 
 		return rrs
@@ -655,6 +678,27 @@ func RRToZoneData(rrs []dns.RR) types.ZoneData {
 				PublicKey: v.PublicKey,
 				TTL:       v.Hdr.Ttl,
 			})
+		case *dns.RRSIG:
+			// Use .TypeCovered to group RRSIGs for different RRsets
+			covered := dns.TypeToString[v.TypeCovered]
+			if covered == "" {
+				covered = "UNKNOWN"
+			}
+			rec := &types.RRSIGRecord{
+				Name:        name,
+				TypeCovered: covered,
+				Algorithm:   v.Algorithm,
+				Labels:      v.Labels,
+				OrigTTL:     v.OrigTtl,
+				Expiration:  v.Expiration,
+				Inception:   v.Inception,
+				KeyTag:      v.KeyTag,
+				SignerName:  v.SignerName,
+				Signature:   v.Signature,
+				TTL:         v.Hdr.Ttl,
+			}
+			zd.RRSIG[covered] = append(zd.RRSIG[covered], rec)
+
 		case *dns.SOA:
 			zd.SOA = &types.SOARecord{
 				Ns:      strings.TrimSuffix(v.Ns, "."),

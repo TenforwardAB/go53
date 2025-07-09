@@ -1,6 +1,8 @@
 package rtypes
 
 import (
+	"encoding/json"
+	"fmt"
 	"github.com/TenforwardAB/slog"
 	"go53/internal"
 	"go53/internal/errors"
@@ -13,11 +15,76 @@ import (
 type RRSIGRecord struct{}
 
 func (RRSIGRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
-	return errors.NotImplemented("RRSIGRecord.Add")
-}
+	valMap, ok := value.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("RRSIGRecord.Add: value is not a map[string]interface{}")
+	}
 
-func (RRSIGRecord) Delete(host string, value interface{}) error {
-	return errors.NotImplemented("RRSIGRecord.Delete")
+	// Normalize/map to struct
+	var rec types.RRSIGRecord
+	b, err := json.Marshal(valMap)
+	if err != nil {
+		return fmt.Errorf("RRSIGRecord.Add: marshal: %w", err)
+	}
+	if err := json.Unmarshal(b, &rec); err != nil {
+		return fmt.Errorf("RRSIGRecord.Add: unmarshal: %w", err)
+	}
+	if ttl != nil {
+		rec.TTL = *ttl
+	}
+
+	recMap := map[string]interface{}{
+		"type_covered": rec.TypeCovered,
+		"algorithm":    rec.Algorithm,
+		"labels":       rec.Labels,
+		"original_ttl": rec.OrigTTL,
+		"expiration":   rec.Expiration,
+		"inception":    rec.Inception,
+		"key_tag":      rec.KeyTag,
+		"signer_name":  rec.SignerName,
+		"signature":    rec.Signature,
+		"ttl":          rec.TTL,
+	}
+
+	// Now: fetch existing map for the covered type ("DNSKEY", etc)
+	_, _, current, ok := memStore.GetRecord(zone, "RRSIG", rec.TypeCovered)
+	var nameMap map[string][]map[string]interface{}
+	if ok {
+		// Defensive: attempt to type-assert and use if map[string][]map[string]interface{}
+		switch v := current.(type) {
+		case map[string][]map[string]interface{}:
+			nameMap = v
+		case map[string]interface{}:
+			// Convert if possible
+			nameMap = map[string][]map[string]interface{}{}
+			for k, vv := range v {
+				switch slice := vv.(type) {
+				case []map[string]interface{}:
+					nameMap[k] = slice
+				case []interface{}:
+					for _, item := range slice {
+						if mm, ok := item.(map[string]interface{}); ok {
+							nameMap[k] = append(nameMap[k], mm)
+						}
+					}
+				}
+			}
+		}
+	}
+	if nameMap == nil {
+		nameMap = map[string][]map[string]interface{}{}
+	}
+
+	// Deduplication (optional)
+	for _, existing := range nameMap[name] {
+		if existing["signature"] == rec.Signature && existing["key_tag"] == rec.KeyTag && existing["expiration"] == rec.Expiration {
+			return nil // Already present, skip
+		}
+	}
+
+	nameMap[name] = append(nameMap[name], recMap)
+
+	return memStore.AddRecord(zone, "RRSIG", rec.TypeCovered, nameMap)
 }
 
 func (RRSIGRecord) Lookup(host string) ([]dns.RR, bool) {
@@ -49,29 +116,61 @@ func (RRSIGRecord) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
-	valMap, ok := val.(map[string]any)
-	if !ok {
-		slog.Crazy("[handleRequest] val is not a map[string]any")
+	var rrsigList []interface{}
+
+	switch vv := val.(type) {
+	case map[string]interface{}:
+		// e.g. "@": []interface{}{(*types.RRSIGRecord), ...}
+		if raw, found := vv[shortName]; found {
+			switch lst := raw.(type) {
+			case []interface{}:
+				rrsigList = lst
+			case []*types.RRSIGRecord:
+				for _, rec := range lst {
+					rrsigList = append(rrsigList, rec)
+				}
+			}
+		}
+	case map[string][]interface{}:
+		if list, found := vv[shortName]; found {
+			rrsigList = list
+		}
+	case map[string][]map[string]interface{}:
+		if list, found := vv[shortName]; found {
+			for _, m := range list {
+				rrsigList = append(rrsigList, m)
+			}
+		}
+	default:
+		slog.Crazy("[handleRequest] val has unexpected type: %T", val)
 		return nil, false
 	}
 
-	raw, ok := valMap[shortName]
-	if !ok {
-		slog.Crazy("[handleRequest] no entry for shortName %q", shortName)
-		return nil, false
-	}
-
-	rawSlice, ok := raw.([]interface{})
-	if !ok {
-		slog.Crazy("[handleRequest] shortName %q did not contain []interface{}", shortName)
+	if len(rrsigList) == 0 {
+		slog.Crazy("[handleRequest] no RRSIGs for %q", shortName)
 		return nil, false
 	}
 
 	var results []dns.RR
-	for _, item := range rawSlice {
-		sig, ok := item.(*types.RRSIGRecord)
-		if !ok {
-			slog.Crazy("[handleRequest] item is not *types.RRSIGRecord: %#v", item)
+	for _, item := range rrsigList {
+		var sig types.RRSIGRecord
+		switch v := item.(type) {
+		case *types.RRSIGRecord:
+			sig = *v
+		case types.RRSIGRecord:
+			sig = v
+		case map[string]interface{}:
+			b, err := json.Marshal(v)
+			if err != nil {
+				slog.Crazy("[handleRequest] marshal fail: %v", err)
+				continue
+			}
+			if err := json.Unmarshal(b, &sig); err != nil {
+				slog.Crazy("[handleRequest] unmarshal fail: %v", err)
+				continue
+			}
+		default:
+			slog.Crazy("[handleRequest] unknown type: %T", item)
 			continue
 		}
 
@@ -105,6 +204,10 @@ func (RRSIGRecord) Lookup(host string) ([]dns.RR, bool) {
 	slog.Crazy("[handleRequest] final RRSIG count: %d", len(results))
 	return results, len(results) > 0
 
+}
+
+func (RRSIGRecord) Delete(host string, value interface{}) error {
+	return errors.NotImplemented("RRSIGRecord.Delete")
 }
 
 func (RRSIGRecord) Type() uint16 {

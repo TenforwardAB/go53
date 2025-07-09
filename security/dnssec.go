@@ -15,7 +15,7 @@ import (
 
 func ToRRSet(name string, rtype string, raw any) ([]dns.RR, error) {
 	if rtype == "DNSKEY" {
-		name = "go53.test."
+		name = "go53.test." //TODO: !!!!!!!NO HARDCODED DOMAIN!!!!!!!
 	}
 
 	switch r := raw.(type) {

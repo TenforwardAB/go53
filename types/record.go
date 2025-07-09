@@ -105,6 +105,7 @@ type DNSKEYRecord struct {
 }
 
 type RRSIGRecord struct {
+	Name        string `json:"name"`         // <-- not wire, just internal
 	TypeCovered string `json:"type_covered"` // e.g., "A", "NS", etc.
 	Algorithm   uint8  `json:"algorithm"`
 	Labels      uint8  `json:"labels"`

@@ -98,7 +98,40 @@ func importFromZoneData(zoneName string, zd types.ZoneData, fromAPI bool) error 
 				// multiple records per name (slices)
 				for j := 0; j < recVal.Len(); j++ {
 					rec := recVal.Index(j).Interface()
-					ttl := recVal.Index(j).FieldByName("TTL").Uint()
+
+					// Support struct or pointer to struct
+					var ttlField reflect.Value
+					switch recVal.Index(j).Kind() {
+					case reflect.Struct:
+						ttlField = recVal.Index(j).FieldByName("TTL")
+					case reflect.Ptr:
+						slog.Emerg("[fetch.go:importFromZoneData] record %s is of type %+v", rrType, rec)
+						elem := recVal.Index(j).Elem()
+						if elem.IsValid() && elem.Kind() == reflect.Struct {
+							ttlField = elem.FieldByName("TTL")
+						}
+
+					}
+					var ttl uint64
+					if ttlField.IsValid() && ttlField.Kind() == reflect.Uint32 {
+						ttl = ttlField.Uint()
+					}
+					if r, ok := rec.(*types.RRSIGRecord); ok {
+						recCopy := *r
+						n := strings.TrimLeft(recCopy.Name, `\`) //TODO: why do we have \
+						if err := add(rrType, n, recCopy, uint32(ttl)); err != nil {
+							return err
+						}
+						continue
+					} else if r, ok := rec.(types.RRSIGRecord); ok {
+						recCopy := r
+						n := strings.TrimLeft(recCopy.Name, `\`) //TODO: why do we have \
+						if err := add(rrType, n, recCopy, uint32(ttl)); err != nil {
+							return err
+						}
+						continue
+					}
+					// fallback for all other record types
 					if err := add(rrType, name, rec, uint32(ttl)); err != nil {
 						return err
 					}
