@@ -12,6 +12,7 @@ func GetDistributedStatusHandler(w http.ResponseWriter, r *http.Request) {
 	status := map[string]any{
 		"enabled":       distributed.Enabled(),
 		"tcp_transport": distributed.TCPTransportEnabled(),
+		"tls_transport": distributed.TLSTransportEnabled(),
 	}
 	if distributed.Default != nil {
 		if pub, err := distributed.Default.PublicKey(); err == nil {
@@ -95,7 +96,7 @@ func PostDistributedEventHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if distributed.TCPTransportEnabled() && r.URL.Query().Get("resync") != "true" {
-		http.Error(w, "HTTP event ingest is disabled when distributed transport is tcp; use ?resync=true for manual recovery only", http.StatusConflict)
+		http.Error(w, "HTTP event ingest is disabled when distributed transport uses socket mode; use ?resync=true for manual recovery only", http.StatusConflict)
 		return
 	}
 	var event distributed.Event

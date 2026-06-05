@@ -64,13 +64,17 @@ type EntityClock struct {
 }
 
 type NodeInfo struct {
-	NodeID       string `json:"node_id"`
-	Mode         string `json:"mode"`
-	Transport    string `json:"transport"`
-	SyncEndpoint string `json:"sync_endpoint"`
-	PublicKey    string `json:"public_key,omitempty"`
-	Fingerprint  string `json:"fingerprint,omitempty"`
-	Version      string `json:"version"`
+	NodeID          string `json:"node_id"`
+	Mode            string `json:"mode"`
+	Transport       string `json:"transport"`
+	SyncEndpoint    string `json:"sync_endpoint"`
+	PublicKey       string `json:"public_key,omitempty"`
+	Fingerprint     string `json:"fingerprint,omitempty"`
+	TLSEnabled      bool   `json:"tls_enabled"`
+	TLSCertificate  string `json:"tls_certificate,omitempty"`
+	TLSFingerprint  string `json:"tls_fingerprint,omitempty"`
+	TLSPublicKeyPin string `json:"tls_public_key_pin,omitempty"`
+	Version         string `json:"version"`
 }
 
 type Service struct {
@@ -128,7 +132,11 @@ func Enabled() bool {
 }
 
 func TCPTransportEnabled() bool {
-	return strings.EqualFold(liveConfig().Distributed.Transport, "tcp")
+	return socketTransportEnabled()
+}
+
+func TLSTransportEnabled() bool {
+	return tlsTransportEnabled()
 }
 
 func (s *Service) PublishUpsert(zone, rrtype, name string, value any) error {
@@ -388,6 +396,7 @@ func (s *Service) NodeInfo() (NodeInfo, error) {
 		Mode:         live.Mode,
 		Transport:    distributedTransport(),
 		SyncEndpoint: advertisedSyncEndpoint(),
+		TLSEnabled:   tlsTransportEnabled(),
 		Version:      live.Version,
 	}
 	if s != nil {
@@ -397,6 +406,15 @@ func (s *Service) NodeInfo() (NodeInfo, error) {
 		}
 		info.PublicKey = pub
 		info.Fingerprint = PublicKeyFingerprint(pub)
+		if info.TLSEnabled {
+			cert, err := localTLSCertificate()
+			if err != nil {
+				return info, err
+			}
+			info.TLSCertificate = TLSCertificatePEM(cert)
+			info.TLSFingerprint = TLSCertificateFingerprint(cert)
+			info.TLSPublicKeyPin = info.Fingerprint
+		}
 	}
 	return info, nil
 }
@@ -526,7 +544,7 @@ func (s *Service) deliverPeerEvent(ctx context.Context, peer string, event Event
 }
 
 func (s *Service) pushEvent(ctx context.Context, peer string, event Event) error {
-	if useTCPTransport(peer) {
+	if useSocketTransport(peer) {
 		return s.pushEventTCP(ctx, peer, event)
 	}
 	body, err := json.Marshal(event)
@@ -551,7 +569,7 @@ func (s *Service) pushEvent(ctx context.Context, peer string, event Event) error
 }
 
 func (s *Service) fetchPeerVector(ctx context.Context, peer string) (map[string]uint64, error) {
-	if useTCPTransport(peer) {
+	if useSocketTransport(peer) {
 		return s.fetchPeerVectorTCP(ctx, peer)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, peerURL(peer, "/api/distributed/vector"), nil)
@@ -577,7 +595,7 @@ func (s *Service) fetchPeerVector(ctx context.Context, peer string) (map[string]
 }
 
 func (s *Service) fetchPeerEvents(ctx context.Context, peer, origin string, after uint64) ([]Event, error) {
-	if useTCPTransport(peer) {
+	if useSocketTransport(peer) {
 		return s.fetchPeerEventsTCP(ctx, peer, origin, after)
 	}
 	url := peerURL(peer, "/api/distributed/events") + "?origin=" + origin + "&after=" + strconv.FormatUint(after, 10)
@@ -914,14 +932,18 @@ func peerURL(peer, path string) string {
 }
 
 func useTCPTransport(peer string) bool {
+	return useSocketTransport(peer)
+}
+
+func useSocketTransport(peer string) bool {
 	peer = strings.TrimSpace(strings.ToLower(peer))
-	if strings.HasPrefix(peer, "tcp://") {
+	if strings.HasPrefix(peer, "tcp://") || strings.HasPrefix(peer, "tls://") || strings.HasPrefix(peer, "mtls://") {
 		return true
 	}
 	if strings.HasPrefix(peer, "http://") || strings.HasPrefix(peer, "https://") {
 		return false
 	}
-	return strings.EqualFold(liveConfig().Distributed.Transport, "tcp")
+	return socketTransportEnabled()
 }
 
 func distributedTransport() string {
@@ -934,10 +956,15 @@ func distributedTransport() string {
 
 func advertisedSyncEndpoint() string {
 	live := liveConfig()
-	if distributedTransport() == "tcp" {
+	transport := distributedTransport()
+	if transport == "tcp" || transport == "tls" || transport == "mtls" {
 		addr := strings.TrimSpace(live.Distributed.SyncPort)
 		if addr == "" {
 			return ""
+		}
+		scheme := "tcp"
+		if transport == "tls" || transport == "mtls" {
+			scheme = "tls"
 		}
 		host := strings.TrimSpace(live.Distributed.SyncBindHost)
 		if host == "" || host == "0.0.0.0" || host == "::" {
@@ -945,13 +972,18 @@ func advertisedSyncEndpoint() string {
 		}
 		if strings.Contains(addr, ":") {
 			if strings.HasPrefix(addr, ":") {
-				return "tcp://" + host + addr
+				return scheme + "://" + host + addr
 			}
-			return "tcp://" + addr
+			return scheme + "://" + addr
 		}
-		return "tcp://" + host + ":" + addr
+		return scheme + "://" + host + ":" + addr
 	}
 	return ""
+}
+
+func socketTransportEnabled() bool {
+	transport := distributedTransport()
+	return transport == "tcp" || transport == "tls" || transport == "mtls"
 }
 
 func PublicKeyFingerprint(publicKeyB64 string) string {

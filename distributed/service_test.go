@@ -129,6 +129,18 @@ func TestNodeInfoIncludesDiscoveryFields(t *testing.T) {
 	if got := PublicKeyFingerprint(info.PublicKey); got != info.Fingerprint {
 		t.Fatalf("fingerprint = %q, want %q", got, info.Fingerprint)
 	}
+
+	config.AppConfig.Live.Distributed.Transport = "tls"
+	info, err = svc.NodeInfo()
+	if err != nil {
+		t.Fatalf("TLS NodeInfo: %v", err)
+	}
+	if info.Transport != "tls" || info.SyncEndpoint != "tls://127.0.0.1:19090" || !info.TLSEnabled {
+		t.Fatalf("unexpected TLS NodeInfo transport fields: %#v", info)
+	}
+	if info.TLSCertificate == "" || info.TLSFingerprint == "" || info.TLSPublicKeyPin != info.Fingerprint {
+		t.Fatalf("incomplete TLS NodeInfo: %#v", info)
+	}
 }
 
 func TestApplyConfigEventPreservesLocalDistributedIdentity(t *testing.T) {

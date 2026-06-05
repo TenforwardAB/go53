@@ -4,16 +4,23 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -28,6 +35,12 @@ const (
 	frameTypeError         = "ERROR"
 
 	maxFrameBytes = 16 << 20
+)
+
+var (
+	tlsCertMu       sync.Mutex
+	tlsCertCacheKey string
+	tlsCertCache    tls.Certificate
 )
 
 type frame struct {
@@ -93,12 +106,27 @@ func (s *Service) serveTCPListener(ctx context.Context, addr string) error {
 				return err
 			}
 		}
+		if tlsTransportEnabled() {
+			cfg, err := serverTLSConfig()
+			if err != nil {
+				_ = conn.Close()
+				log.Printf("distributed: TLS config failed: %v", err)
+				continue
+			}
+			conn = tls.Server(conn, cfg)
+		}
 		go s.handleTCPConn(ctx, conn)
 	}
 }
 
 func (s *Service) handleTCPConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		if err := tlsConn.Handshake(); err != nil {
+			log.Printf("distributed: TLS handshake failed: %v", err)
+			return
+		}
+	}
 	if err := s.acceptTCPHello(conn); err != nil {
 		log.Printf("distributed: TCP hello failed: %v", err)
 		return
@@ -211,6 +239,17 @@ func (s *Service) roundTripTCP(ctx context.Context, peer string, req frame) (fra
 		return frame{}, err
 	}
 	defer conn.Close()
+	if useTLSTransport(peer) {
+		cfg, err := clientTLSConfig(peer)
+		if err != nil {
+			return frame{}, err
+		}
+		tlsConn := tls.Client(conn, cfg)
+		if err := tlsConn.Handshake(); err != nil {
+			return frame{}, err
+		}
+		conn = tlsConn
+	}
 	_ = conn.SetDeadline(time.Now().Add(timeout))
 	if err := s.dialTCPHello(conn); err != nil {
 		return frame{}, err
@@ -239,7 +278,10 @@ func (s *Service) dialTCPHello(conn net.Conn) error {
 	if resp.Type != frameTypeHello {
 		return fmt.Errorf("unexpected TCP hello response %q", resp.Type)
 	}
-	return verifyHelloFrame(resp)
+	if err := verifyHelloFrame(resp); err != nil {
+		return err
+	}
+	return verifyTLSConnNode(conn, resp.NodeID)
 }
 
 func (s *Service) acceptTCPHello(conn net.Conn) error {
@@ -252,6 +294,10 @@ func (s *Service) acceptTCPHello(conn net.Conn) error {
 		return errors.New("missing HELLO")
 	}
 	if err := verifyHelloFrame(req); err != nil {
+		_ = writeFrame(conn, frame{Type: frameTypeError, Error: err.Error()})
+		return err
+	}
+	if err := verifyTLSConnNode(conn, req.NodeID); err != nil {
 		_ = writeFrame(conn, frame{Type: frameTypeError, Error: err.Error()})
 		return err
 	}
@@ -325,6 +371,155 @@ func newNonce() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b[:]), nil
 }
 
+func serverTLSConfig() (*tls.Config, error) {
+	cert, err := localTLSCertificate()
+	if err != nil {
+		return nil, err
+	}
+	return &tls.Config{
+		MinVersion:               tls.VersionTLS13,
+		Certificates:             []tls.Certificate{cert},
+		ClientAuth:               tls.RequireAnyClientCert,
+		VerifyPeerCertificate:    verifyPeerCertificate,
+		PreferServerCipherSuites: false,
+	}, nil
+}
+
+func clientTLSConfig(peer string) (*tls.Config, error) {
+	cert, err := localTLSCertificate()
+	if err != nil {
+		return nil, err
+	}
+	serverName := tlsServerName(peer)
+	return &tls.Config{
+		MinVersion:            tls.VersionTLS13,
+		ServerName:            serverName,
+		Certificates:          []tls.Certificate{cert},
+		InsecureSkipVerify:    true,
+		VerifyPeerCertificate: verifyPeerCertificate,
+	}, nil
+}
+
+func localTLSCertificate() (tls.Certificate, error) {
+	live := liveConfig()
+	nodeID := strings.TrimSpace(live.Distributed.NodeID)
+	if nodeID == "" {
+		return tls.Certificate{}, errors.New("distributed node_id is required")
+	}
+	cacheKey := nodeID + "\x00" + strings.TrimSpace(live.Distributed.PrivateKey)
+	tlsCertMu.Lock()
+	if tlsCertCacheKey == cacheKey && len(tlsCertCache.Certificate) > 0 {
+		cert := tlsCertCache
+		tlsCertMu.Unlock()
+		return cert, nil
+	}
+	tlsCertMu.Unlock()
+
+	priv, err := privateKey(live.Distributed.PrivateKey)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	pub := priv.Public().(ed25519.PublicKey)
+	serialBytes := sha256.Sum256([]byte("go53-sync-tls-v1:" + nodeID + ":" + base64.StdEncoding.EncodeToString(pub)))
+	serial := new(big.Int).SetBytes(serialBytes[:16])
+	template := &x509.Certificate{
+		SerialNumber: serial,
+		Subject: pkix.Name{
+			CommonName: nodeID,
+		},
+		NotBefore:             time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:              time.Date(2124, 1, 1, 0, 0, 0, 0, time.UTC),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+		DNSNames:              []string{nodeID},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, priv.Public(), priv)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	cert := tls.Certificate{
+		Certificate: [][]byte{der},
+		PrivateKey:  priv,
+		Leaf:        leaf,
+	}
+	tlsCertMu.Lock()
+	tlsCertCacheKey = cacheKey
+	tlsCertCache = cert
+	tlsCertMu.Unlock()
+	return cert, nil
+}
+
+func TLSCertificatePEM(cert tls.Certificate) string {
+	if len(cert.Certificate) == 0 {
+		return ""
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]}))
+}
+
+func TLSCertificateFingerprint(cert tls.Certificate) string {
+	if len(cert.Certificate) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(cert.Certificate[0])
+	return "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:])
+}
+
+func verifyPeerCertificate(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+	if len(rawCerts) == 0 {
+		return errors.New("missing peer TLS certificate")
+	}
+	cert, err := x509.ParseCertificate(rawCerts[0])
+	if err != nil {
+		return err
+	}
+	pub, ok := cert.PublicKey.(ed25519.PublicKey)
+	if !ok {
+		return errors.New("peer TLS certificate must use Ed25519")
+	}
+	for _, configured := range liveConfig().Distributed.PeerPublicKeys {
+		allowed, err := publicKey(configured)
+		if err != nil {
+			continue
+		}
+		if pub.Equal(allowed) {
+			return nil
+		}
+	}
+	return errors.New("peer TLS certificate public key is not trusted")
+}
+
+func verifyTLSConnNode(conn net.Conn, nodeID string) error {
+	tlsConn, ok := conn.(*tls.Conn)
+	if !ok {
+		return nil
+	}
+	state := tlsConn.ConnectionState()
+	if len(state.PeerCertificates) == 0 {
+		return errors.New("missing peer TLS certificate")
+	}
+	expectedB64 := liveConfig().Distributed.PeerPublicKeys[nodeID]
+	if expectedB64 == "" {
+		return fmt.Errorf("no public key configured for distributed peer %q", nodeID)
+	}
+	expected, err := publicKey(expectedB64)
+	if err != nil {
+		return err
+	}
+	actual, ok := state.PeerCertificates[0].PublicKey.(ed25519.PublicKey)
+	if !ok {
+		return errors.New("peer TLS certificate must use Ed25519")
+	}
+	if !actual.Equal(expected) {
+		return fmt.Errorf("peer TLS certificate does not match distributed node %q", nodeID)
+	}
+	return nil
+}
+
 func writeFrame(w io.Writer, f frame) error {
 	data, err := json.Marshal(f)
 	if err != nil {
@@ -384,6 +579,8 @@ func syncListenAddr() string {
 func tcpPeerAddr(peer string) string {
 	peer = strings.TrimSpace(peer)
 	peer = strings.TrimPrefix(peer, "tcp://")
+	peer = strings.TrimPrefix(peer, "tls://")
+	peer = strings.TrimPrefix(peer, "mtls://")
 	if strings.Contains(peer, "://") {
 		return peer
 	}
@@ -391,4 +588,29 @@ func tcpPeerAddr(peer string) string {
 		return net.JoinHostPort("127.0.0.1", peer)
 	}
 	return peer
+}
+
+func tlsTransportEnabled() bool {
+	transport := distributedTransport()
+	return transport == "tls" || transport == "mtls"
+}
+
+func useTLSTransport(peer string) bool {
+	peer = strings.TrimSpace(strings.ToLower(peer))
+	if strings.HasPrefix(peer, "tls://") || strings.HasPrefix(peer, "mtls://") {
+		return true
+	}
+	if strings.HasPrefix(peer, "tcp://") || strings.HasPrefix(peer, "http://") || strings.HasPrefix(peer, "https://") {
+		return false
+	}
+	return tlsTransportEnabled()
+}
+
+func tlsServerName(peer string) string {
+	addr := tcpPeerAddr(peer)
+	host, _, err := net.SplitHostPort(addr)
+	if err == nil && host != "" {
+		return host
+	}
+	return strings.Trim(addr, "[]")
 }
