@@ -297,6 +297,7 @@
         <li><a href="#records">Zones And Records</a></li>
         <li><a href="#dnssec">DNSSEC</a></li>
         <li><a href="#transfers">Transfers</a></li>
+        <li><a href="#distributed">Distributed Mode</a></li>
         <li><a href="#tsig">TSIG</a></li>
         <li><a href="#routes">API Routes</a></li>
         <li><a href="#operations">Operations</a></li>
@@ -307,7 +308,7 @@
     <main>
       <header>
         <h1>go53 Administrator Guide</h1>
-        <p class="lead">This page documents how to configure go53, operate primary and secondary nodes, manage zones and records through the API, and run DNSSEC with stored keys and query-time signing.</p>
+        <p class="lead">This page documents how to configure go53, operate primary, secondary, and distributed nodes, manage zones and records through the API, and run DNSSEC with stored keys and query-time signing.</p>
         <div class="meta">
           <span class="pill">Static docs path: /config/</span>
           <span class="pill">API base: /api</span>
@@ -404,7 +405,7 @@ curl -X PATCH http://127.0.0.1:8053/api/config \
           </thead>
           <tbody>
             <tr><td><code>log_level</code></td><td><code>info</code></td><td>Logging level used by the server.</td></tr>
-            <tr><td><code>mode</code></td><td><code>primary</code></td><td><code>primary</code> allows record changes and sends NOTIFY. <code>secondary</code> blocks zone and key mutations and fetches from the primary.</td></tr>
+            <tr><td><code>mode</code></td><td><code>primary</code></td><td><code>primary</code> allows record changes and sends NOTIFY. <code>secondary</code> blocks zone and key mutations and fetches from the primary. <code>distributed</code> enables multi-node event replication.</td></tr>
             <tr><td><code>allow_transfer</code></td><td><code>["127.0.0.1"]</code></td><td>Client IP allowlist for AXFR and IXFR.</td></tr>
             <tr><td><code>allow_recursion</code></td><td><code>false</code></td><td>Reserved for resolver behavior. go53 is intended as an authoritative DNS server.</td></tr>
             <tr><td><code>dnssec_enabled</code></td><td><code>true</code></td><td>Enables DNSSEC material in answers when DNSSEC is requested.</td></tr>
@@ -423,6 +424,15 @@ curl -X PATCH http://127.0.0.1:8053/api/config \
             <tr><td><code>secondary.min_fetch_interval_sec</code></td><td><code>10</code></td><td>Minimum interval between secondary fetches for the same zone.</td></tr>
             <tr><td><code>secondary.max_parallel_fetches</code></td><td><code>5</code></td><td>Maximum concurrent secondary transfer fetches.</td></tr>
             <tr><td><code>dev.dual_mode</code></td><td><code>false</code></td><td>Development helper for running primary and secondary behavior in one process.</td></tr>
+            <tr><td><code>distributed.node_id</code></td><td><code>""</code></td><td>Stable unique node name used in event origins, vectors, TLS identity, and peer trust maps.</td></tr>
+            <tr><td><code>distributed.peers</code></td><td><code>""</code></td><td>Comma-separated peer endpoints. Use <code>tls://host:port</code> or <code>mtls://host:port</code> for encrypted socket replication.</td></tr>
+            <tr><td><code>distributed.transport</code></td><td><code>http</code></td><td>Replication transport: <code>http</code>, <code>tcp</code>, <code>tls</code>, or <code>mtls</code>. Production distributed clusters should use <code>tls</code> or <code>mtls</code>.</td></tr>
+            <tr><td><code>distributed.sync_bind_host</code></td><td><code>0.0.0.0</code></td><td>Address for the persistent distributed sync listener.</td></tr>
+            <tr><td><code>distributed.sync_port</code></td><td><code>:53530</code></td><td>Port or host-port for the distributed sync listener.</td></tr>
+            <tr><td><code>distributed.private_key</code></td><td><code>""</code></td><td>Base64 Ed25519 private key for event signatures, HELLO proof, and automatic TLS certificate generation.</td></tr>
+            <tr><td><code>distributed.peer_public_keys</code></td><td><code>{}</code></td><td>Map of trusted peer <code>node_id</code> to base64 Ed25519 public key.</td></tr>
+            <tr><td><code>distributed.push_timeout_ms</code></td><td><code>2000</code></td><td>Timeout for peer push, vector, event, Merkle, and repair requests.</td></tr>
+            <tr><td><code>distributed.resync_interval_s</code></td><td><code>30</code></td><td>Periodic background sync interval. Each pass compares vectors first, then Merkle roots per zone for integrity repair.</td></tr>
           </tbody>
         </table>
       </section>
@@ -531,6 +541,164 @@ curl http://127.0.0.1:8053/api/cdnskey/example.com.</code></pre>
         <p>Transfer responses should include complete DNSSEC material for signed zones. IXFR support exists on the transfer path; validate incremental behavior against your production resolver and secondary mix before relying on IXFR-only operation.</p>
       </section>
 
+      <section id="distributed">
+        <h2>Distributed Mode</h2>
+        <p>Distributed mode is go53's multi-node replication mode. All nodes run with <code>mode=distributed</code>, accept local mutations, and exchange signed events with peers. Zone records, SOA updates, TSIG keys, DNSSEC keys, and selected live config changes are replicated. Node-local distributed settings are not replicated through config events.</p>
+        <div class="note">
+          <p><strong>Recommended transport:</strong> use <code>tls</code> or <code>mtls</code>. The sync socket is persistent TCP with length-prefixed frames. TLS certificates are generated automatically from each node's Ed25519 distributed key, and peers are trusted by <code>distributed.peer_public_keys</code>.</p>
+        </div>
+        <h3>What Replicates</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Behavior</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Zone records</td><td>Record add/delete events replicate per RRset entity. SOA serial changes are published as SOA events.</td></tr>
+            <tr><td>TSIG keys</td><td>TSIG add/update/delete events persist to the peer and refresh the in-memory TSIG cache.</td></tr>
+            <tr><td>DNSSEC keys</td><td>DNSSEC key create/update/delete events persist to the peer, refresh the DNSSEC key cache, and refresh zone DNSSEC key material when applicable.</td></tr>
+            <tr><td>Live config</td><td>Non-distributed live config can replicate. The <code>distributed</code> block itself is stripped so a peer does not overwrite its own identity, private key, peers, or sync listener.</td></tr>
+            <tr><td>Integrity repair</td><td>Periodic sync compares vectors, then Merkle roots per zone. Mismatched branches are narrowed to leaves and repaired from latest signed events.</td></tr>
+          </tbody>
+        </table>
+        <h3>Frame Protocol</h3>
+        <p>The socket transport uses <code>HELLO</code>, <code>VECTOR_REQUEST</code>/<code>VECTOR</code>, <code>EVENT</code>/<code>ACK</code>, <code>EVENTS_REQUEST</code>/<code>EVENTS</code>, and Merkle frames for roots, branches, leaves, and repair events. <code>HELLO</code> is signed with the node Ed25519 private key. Event payloads are also Ed25519 signed.</p>
+        <h3>Required Ports</h3>
+        <p>Each node needs its DNS listener, API listener, and distributed sync listener. The API is used for administration and discovery. Peer-to-peer replication uses <code>distributed.sync_bind_host</code> and <code>distributed.sync_port</code>.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Port</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><code>DNS_PORT</code></td><td>Authoritative DNS UDP/TCP listener.</td></tr>
+            <tr><td><code>API_PORT</code></td><td>Admin API and <code>/.well-known/go53-node.json</code> discovery.</td></tr>
+            <tr><td><code>distributed.sync_port</code></td><td>Persistent distributed socket listener. Open this between all distributed peers.</td></tr>
+          </tbody>
+        </table>
+        <h3>Bootstrap Two Nodes</h3>
+        <p>The examples below use node A at <code>10.0.0.10</code> and node B at <code>10.0.0.11</code>. Replace addresses and ports with your deployment values.</p>
+        <pre><code># On node A
+curl -s -X POST http://10.0.0.10:8053/api/distributed/keypair
+
+# On node B
+curl -s -X POST http://10.0.0.11:8053/api/distributed/keypair</code></pre>
+        <p>Save both responses. Each response contains one <code>private_key</code> and one <code>public_key</code>. The private key stays on that node. The public key is configured on peer nodes under that node's <code>node_id</code>.</p>
+        <pre><code># Configure node A
+curl -X PATCH http://10.0.0.10:8053/api/config \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "mode": "distributed",
+    "distributed": {
+      "node_id": "node-a",
+      "transport": "tls",
+      "sync_bind_host": "0.0.0.0",
+      "sync_port": ":53530",
+      "peers": "tls://10.0.0.11:53530",
+      "private_key": "NODE_A_PRIVATE_KEY",
+      "peer_public_keys": {
+        "node-b": "NODE_B_PUBLIC_KEY"
+      },
+      "push_timeout_ms": 2000,
+      "resync_interval_s": 30
+    }
+  }'
+
+# Configure node B
+curl -X PATCH http://10.0.0.11:8053/api/config \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "mode": "distributed",
+    "distributed": {
+      "node_id": "node-b",
+      "transport": "tls",
+      "sync_bind_host": "0.0.0.0",
+      "sync_port": ":53530",
+      "peers": "tls://10.0.0.10:53530",
+      "private_key": "NODE_B_PRIVATE_KEY",
+      "peer_public_keys": {
+        "node-a": "NODE_A_PUBLIC_KEY"
+      },
+      "push_timeout_ms": 2000,
+      "resync_interval_s": 30
+    }
+  }'</code></pre>
+        <p>Verify both nodes expose their advertised identity and TLS material:</p>
+        <pre><code>curl http://10.0.0.10:8053/.well-known/go53-node.json
+curl http://10.0.0.11:8053/.well-known/go53-node.json
+
+curl http://10.0.0.10:8053/api/distributed/status
+curl http://10.0.0.11:8053/api/distributed/status</code></pre>
+        <h3>Add A New Node</h3>
+        <p>When adding node C, generate its keypair, configure node C with all existing peers, then patch every existing node to include node C in both <code>distributed.peers</code> and <code>distributed.peer_public_keys</code>.</p>
+        <pre><code># 1. Generate node C keypair
+curl -s -X POST http://10.0.0.12:8053/api/distributed/keypair
+
+# 2. Configure node C with node A and B as trusted peers
+curl -X PATCH http://10.0.0.12:8053/api/config \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "mode": "distributed",
+    "distributed": {
+      "node_id": "node-c",
+      "transport": "tls",
+      "sync_bind_host": "0.0.0.0",
+      "sync_port": ":53530",
+      "peers": "tls://10.0.0.10:53530,tls://10.0.0.11:53530",
+      "private_key": "NODE_C_PRIVATE_KEY",
+      "peer_public_keys": {
+        "node-a": "NODE_A_PUBLIC_KEY",
+        "node-b": "NODE_B_PUBLIC_KEY"
+      },
+      "push_timeout_ms": 2000,
+      "resync_interval_s": 30
+    }
+  }'
+
+# 3. Patch node A to trust and dial node C
+curl -X PATCH http://10.0.0.10:8053/api/config \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "distributed": {
+      "peers": "tls://10.0.0.11:53530,tls://10.0.0.12:53530",
+      "peer_public_keys": {
+        "node-b": "NODE_B_PUBLIC_KEY",
+        "node-c": "NODE_C_PUBLIC_KEY"
+      }
+    }
+  }'
+
+# 4. Patch node B to trust and dial node C
+curl -X PATCH http://10.0.0.11:8053/api/config \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "distributed": {
+      "peers": "tls://10.0.0.10:53530,tls://10.0.0.12:53530",
+      "peer_public_keys": {
+        "node-a": "NODE_A_PUBLIC_KEY",
+        "node-c": "NODE_C_PUBLIC_KEY"
+      }
+    }
+  }'</code></pre>
+        <div class="warning">
+          <p><strong>Do not reuse distributed private keys.</strong> Each node must have a unique <code>node_id</code> and private key. Reusing either breaks event identity and conflict resolution.</p>
+        </div>
+        <h3>Validation</h3>
+        <p>Create or change a record on any node, then check DNS or the distributed vector on the others. The vector should advance for the origin node. Merkle repair will also converge zone state if a peer missed or drifted from an event.</p>
+        <pre><code>curl -X POST http://10.0.0.10:8053/api/zones/example.com./records/A \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"www.example.com.","ttl":300,"ip":"192.0.2.10"}'
+
+dig @10.0.0.11 www.example.com. A +short
+
+curl http://10.0.0.11:8053/api/distributed/vector
+curl http://10.0.0.11:8053/api/distributed/merkle/roots</code></pre>
+      </section>
+
       <section id="tsig">
         <h2>TSIG</h2>
         <p>TSIG keys are stored separately from DNSSEC keys. Add shared TSIG secrets before enforcing TSIG for transfers.</p>
@@ -587,6 +755,16 @@ curl -X DELETE http://127.0.0.1:8053/api/tsig/transfer-key.</code></pre>
             <tr><td><code>GET</code></td><td><code>/api/ds/{zone}</code></td><td>Return DS records for parent publication.</td></tr>
             <tr><td><code>GET</code></td><td><code>/api/cds/{zone}</code></td><td>Return CDS records or CDS delete signaling.</td></tr>
             <tr><td><code>GET</code></td><td><code>/api/cdnskey/{zone}</code></td><td>Return CDNSKEY records or CDNSKEY delete signaling.</td></tr>
+            <tr><td><code>GET</code></td><td><code>/.well-known/go53-node.json</code></td><td>Distributed node discovery document with node ID, public key, fingerprint, advertised sync endpoint, and TLS certificate material.</td></tr>
+            <tr><td><code>GET</code></td><td><code>/api/distributed/status</code></td><td>Show distributed enablement, transport flags, local public key, vector, and node discovery info.</td></tr>
+            <tr><td><code>POST</code></td><td><code>/api/distributed/keypair</code></td><td>Generate an Ed25519 distributed keypair. Store the private key only on the local node.</td></tr>
+            <tr><td><code>GET</code></td><td><code>/api/distributed/vector</code></td><td>Return the local event vector.</td></tr>
+            <tr><td><code>GET</code></td><td><code>/api/distributed/events</code></td><td>Return eventlog entries. Optional query: <code>origin</code>, <code>after</code>.</td></tr>
+            <tr><td><code>POST</code></td><td><code>/api/distributed/events</code></td><td>Manual event ingest. In socket transport mode this is disabled unless <code>?resync=true</code> is supplied.</td></tr>
+            <tr><td><code>GET</code></td><td><code>/api/distributed/merkle/roots</code></td><td>Debug/fallback endpoint for Merkle zone roots.</td></tr>
+            <tr><td><code>GET</code></td><td><code>/api/distributed/merkle/branches?zone=example.com.</code></td><td>Debug/fallback endpoint for one zone's Merkle branches.</td></tr>
+            <tr><td><code>POST</code></td><td><code>/api/distributed/merkle/leaves</code></td><td>Debug/fallback endpoint for Merkle leaves. Body fields: <code>zone</code>, <code>prefixes</code>.</td></tr>
+            <tr><td><code>POST</code></td><td><code>/api/distributed/merkle/repair-events</code></td><td>Debug/fallback endpoint returning latest signed events for requested entities.</td></tr>
           </tbody>
         </table>
       </section>
@@ -603,6 +781,9 @@ curl -X DELETE http://127.0.0.1:8053/api/tsig/transfer-key.</code></pre>
           <li>If AXFR or IXFR fails, check <code>allow_axfr</code>, <code>allow_transfer</code>, source address matching, and TSIG policy.</li>
           <li>If DNSSEC answers are unsigned, check <code>dnssec_enabled</code>, key lifecycle state, and whether the zone has active signing keys.</li>
           <li>If DS, CDS, or CDNSKEY output is empty, verify that the zone has an active KSK and that key metadata is loaded.</li>
+          <li>If distributed peers do not connect, check that both sides have each other's <code>node_id</code> in <code>peer_public_keys</code>, use matching <code>tls://</code> peer endpoints, and can reach the sync port.</li>
+          <li>If TLS handshakes fail, compare <code>public_key</code> and <code>tls_public_key_pin</code> from <code>/.well-known/go53-node.json</code> with the configured peer public key.</li>
+          <li>If vectors match but zone data differs, check <code>/api/distributed/merkle/roots</code>; the background sync loop should repair differing branches from signed events.</li>
           <li>If <code>GET /api/zones</code> returns <code>401</code>, that matches current router behavior until auth middleware is enabled or the handler is adjusted.</li>
         </ul>
       </section>
