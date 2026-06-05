@@ -103,6 +103,32 @@ func TestReceiveEventRejectsSequenceGap(t *testing.T) {
 	}
 }
 
+func TestNodeInfoIncludesDiscoveryFields(t *testing.T) {
+	priv, pub, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	svc := newTestService(t, "node-a", priv, map[string]string{"node-b": pub})
+	config.AppConfig.Live.Version = "go53 test"
+	config.AppConfig.Live.Distributed.Transport = "tcp"
+	config.AppConfig.Live.Distributed.SyncBindHost = "127.0.0.1"
+	config.AppConfig.Live.Distributed.SyncPort = ":19090"
+
+	info, err := svc.NodeInfo()
+	if err != nil {
+		t.Fatalf("NodeInfo: %v", err)
+	}
+	if info.NodeID != "node-a" || info.Transport != "tcp" || info.SyncEndpoint != "tcp://127.0.0.1:19090" {
+		t.Fatalf("unexpected NodeInfo: %#v", info)
+	}
+	if info.PublicKey == "" || info.Fingerprint == "" || info.Version != "go53 test" {
+		t.Fatalf("incomplete NodeInfo: %#v", info)
+	}
+	if got := PublicKeyFingerprint(info.PublicKey); got != info.Fingerprint {
+		t.Fatalf("fingerprint = %q, want %q", got, info.Fingerprint)
+	}
+}
+
 func newTestService(t *testing.T, nodeID, privateKey string, peerKeys map[string]string) *Service {
 	t.Helper()
 	mock := &storage.MockStorage{}

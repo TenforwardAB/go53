@@ -34,6 +34,7 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 
 	r.HandleFunc("/api/config", handlers.UpdateLiveConfigHandler).Methods("PATCH")
 	r.HandleFunc("/api/config", handlers.GetLiveConfigHandler).Methods("GET")
+	r.HandleFunc("/.well-known/go53-node.json", handlers.GetWellKnownNodeHandler).Methods("GET")
 
 	r.HandleFunc("/api/zones", handlers.GetZonesHandler).Methods("GET")
 

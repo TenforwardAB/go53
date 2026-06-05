@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -50,6 +51,16 @@ type Event struct {
 type EntityClock struct {
 	Origin string `json:"origin"`
 	Seq    uint64 `json:"seq"`
+}
+
+type NodeInfo struct {
+	NodeID       string `json:"node_id"`
+	Mode         string `json:"mode"`
+	Transport    string `json:"transport"`
+	SyncEndpoint string `json:"sync_endpoint"`
+	PublicKey    string `json:"public_key,omitempty"`
+	Fingerprint  string `json:"fingerprint,omitempty"`
+	Version      string `json:"version"`
 }
 
 type Service struct {
@@ -104,6 +115,10 @@ func Start(ctx context.Context) {
 
 func Enabled() bool {
 	return enabled()
+}
+
+func TCPTransportEnabled() bool {
+	return strings.EqualFold(liveConfig().Distributed.Transport, "tcp")
 }
 
 func (s *Service) PublishUpsert(zone, rrtype, name string, value any) error {
@@ -278,6 +293,26 @@ func (s *Service) PublicKey() (string, error) {
 	}
 	pub := priv.Public().(ed25519.PublicKey)
 	return base64.StdEncoding.EncodeToString(pub), nil
+}
+
+func (s *Service) NodeInfo() (NodeInfo, error) {
+	live := liveConfig()
+	info := NodeInfo{
+		NodeID:       strings.TrimSpace(live.Distributed.NodeID),
+		Mode:         live.Mode,
+		Transport:    distributedTransport(),
+		SyncEndpoint: advertisedSyncEndpoint(),
+		Version:      live.Version,
+	}
+	if s != nil {
+		pub, err := s.PublicKey()
+		if err != nil {
+			return info, err
+		}
+		info.PublicKey = pub
+		info.Fingerprint = PublicKeyFingerprint(pub)
+	}
+	return info, nil
 }
 
 func (s *Service) SyncAllPeers(ctx context.Context) {
@@ -702,6 +737,45 @@ func useTCPTransport(peer string) bool {
 		return false
 	}
 	return strings.EqualFold(liveConfig().Distributed.Transport, "tcp")
+}
+
+func distributedTransport() string {
+	transport := strings.TrimSpace(strings.ToLower(liveConfig().Distributed.Transport))
+	if transport == "" {
+		return "http"
+	}
+	return transport
+}
+
+func advertisedSyncEndpoint() string {
+	live := liveConfig()
+	if distributedTransport() == "tcp" {
+		addr := strings.TrimSpace(live.Distributed.SyncPort)
+		if addr == "" {
+			return ""
+		}
+		host := strings.TrimSpace(live.Distributed.SyncBindHost)
+		if host == "" || host == "0.0.0.0" || host == "::" {
+			host = "127.0.0.1"
+		}
+		if strings.Contains(addr, ":") {
+			if strings.HasPrefix(addr, ":") {
+				return "tcp://" + host + addr
+			}
+			return "tcp://" + addr
+		}
+		return "tcp://" + host + ":" + addr
+	}
+	return ""
+}
+
+func PublicKeyFingerprint(publicKeyB64 string) string {
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(publicKeyB64))
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:])
 }
 
 func newEventID() string {
