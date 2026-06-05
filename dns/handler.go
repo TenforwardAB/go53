@@ -72,6 +72,15 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 	m := new(dns.Msg)
 	m.SetReply(r)
+
+	if len(r.Question) != 1 {
+		log.Printf("Refusing DNS request with QDCOUNT=%d; only one question is supported", len(r.Question))
+		m.SetRcode(r, dns.RcodeFormatError)
+		m.Authoritative = false
+		_ = w.WriteMsg(m)
+		return
+	}
+
 	m.Authoritative = true
 
 	for _, q := range r.Question {
