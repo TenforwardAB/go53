@@ -21,6 +21,7 @@ import (
 	"go53/types"
 	"go53/zonereader"
 	"log"
+	"math/big"
 	"strings"
 )
 
@@ -36,7 +37,6 @@ var supportedAlgos = []struct {
 	{13, "ECDSAP256SHA256", []uint16{256, 257}},
 	{14, "ECDSAP384SHA384", []uint16{256, 257}},
 	{15, "ED25519", []uint16{256, 257}},
-	{16, "ED448", []uint16{256, 257}},
 }
 
 func GenerateAndStoreAllKeys(zone string) error {
@@ -207,7 +207,16 @@ func PublicKeyToDNS(pub crypto.PublicKey, algorithm uint8) ([]byte, error) {
 	switch algorithm {
 	case 8, 10:
 		if k, ok := pub.(*rsa.PublicKey); ok {
-			return x509.MarshalPKIXPublicKey(k)
+			exponent := new(big.Int).SetInt64(int64(k.E)).Bytes()
+			modulus := k.N.Bytes()
+			if len(exponent) < 256 {
+				return append(append([]byte{byte(len(exponent))}, exponent...), modulus...), nil
+			}
+
+			out := []byte{0, byte(len(exponent) >> 8), byte(len(exponent))}
+			out = append(out, exponent...)
+			out = append(out, modulus...)
+			return out, nil
 		}
 		return nil, fmt.Errorf("expected RSA public key")
 

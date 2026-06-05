@@ -105,6 +105,30 @@ func DeleteZone(zone string) error {
 	return mem.DeleteZone(zone)
 }
 
+func EnsureSignedRRSet(rrs []dns.RR) ([]dns.RR, error) {
+	mem := rtypes.GetMemStore()
+	if mem == nil {
+		return nil, fmt.Errorf("memory store is not initialized")
+	}
+	return mem.EnsureSignedRRSet(rrs)
+}
+
+func FindNSECProof(name string) ([]dns.RR, bool) {
+	mem := rtypes.GetMemStore()
+	if mem == nil {
+		return nil, false
+	}
+	return mem.FindNSECProof(name)
+}
+
+func FindNSEC3Proof(name string) ([]dns.RR, bool) {
+	mem := rtypes.GetMemStore()
+	if mem == nil {
+		return nil, false
+	}
+	return mem.FindNSEC3Proof(name)
+}
+
 func init() {
 	zonereader.LookupRecordFunc = LookupRecord
 }

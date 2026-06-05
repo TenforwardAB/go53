@@ -52,8 +52,25 @@ func (NSRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 	var current []types.NSRecord
 	_, _, existing, found := memStore.GetRecord(sanitizedZone, string(types.TypeNS), key)
 	if found {
-		if list, ok := existing.([]types.NSRecord); ok {
+		switch list := existing.(type) {
+		case []types.NSRecord:
 			current = list
+		case []interface{}:
+			for _, item := range list {
+				obj, ok := item.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				ns, _ := obj["ns"].(string)
+				if ns == "" {
+					continue
+				}
+				ttl := uint32(3600)
+				if t, ok := obj["ttl"].(float64); ok {
+					ttl = uint32(t)
+				}
+				current = append(current, types.NSRecord{NS: ns, TTL: ttl})
+			}
 		}
 	}
 
@@ -95,7 +112,26 @@ func (NSRecord) Lookup(host string) ([]dns.RR, bool) {
 	}
 
 	records, ok := val.([]types.NSRecord)
-	if !ok || len(records) == 0 {
+	if !ok {
+		if list, ok := val.([]interface{}); ok {
+			for _, raw := range list {
+				item, ok := raw.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				ns, _ := item["ns"].(string)
+				if ns == "" {
+					continue
+				}
+				ttl := uint32(3600)
+				if t, ok := item["ttl"].(float64); ok {
+					ttl = uint32(t)
+				}
+				records = append(records, types.NSRecord{NS: ns, TTL: ttl})
+			}
+		}
+	}
+	if len(records) == 0 {
 		return nil, false
 	}
 

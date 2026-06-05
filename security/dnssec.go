@@ -14,10 +14,6 @@ import (
 )
 
 func ToRRSet(name string, rtype string, raw any) ([]dns.RR, error) {
-	if rtype == "DNSKEY" {
-		name = "go53.test." //TODO: !!!!!!!NO HARDCODED DOMAIN!!!!!!!
-	}
-
 	switch r := raw.(type) {
 	case []types.DNSKEYRecord:
 		slog.Crazy("[ToRRSet] raw är []types.DNSKEYRecord med längd %d", len(r))
@@ -45,7 +41,7 @@ func ToRRSet(name string, rtype string, raw any) ([]dns.RR, error) {
 	return rrs, nil
 }
 
-func SignRRSet(rrs []dns.RR, key crypto.Signer, keyTag uint16, signerName string) (*dns.RRSIG, error) {
+func SignRRSet(rrs []dns.RR, key crypto.Signer, keyTag uint16, signerName string, algorithm uint8) (*dns.RRSIG, error) {
 	slog.Crazy("[SignRRSet] len(rrs): %d", len(rrs))
 	slog.Crazy("[SignRRSet] keyTag: %d", keyTag)
 	if len(rrs) == 0 {
@@ -64,7 +60,7 @@ func SignRRSet(rrs []dns.RR, key crypto.Signer, keyTag uint16, signerName string
 			Ttl:    hdr.Ttl,
 		},
 		TypeCovered: hdr.Rrtype,
-		Algorithm:   10, //TODO: Fix RSASHA512 for now
+		Algorithm:   algorithm,
 
 		Labels:     uint8(dns.CountLabel(hdr.Name)),
 		OrigTtl:    hdr.Ttl,

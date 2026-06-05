@@ -1,6 +1,8 @@
 package internal
 
 import (
+	"encoding/base32"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/TenforwardAB/slog"
@@ -8,6 +10,7 @@ import (
 	"go53/types"
 	"net"
 	"reflect"
+	"sort"
 	"strings"
 )
 
@@ -44,6 +47,42 @@ var RRBuilders = map[string]RRBuilder{
 						A:   ip,
 					})
 				}
+			}
+		}
+
+		return rrs
+	},
+
+	"AAAA": func(name string, data any) []dns.RR {
+		var rrs []dns.RR
+
+		switch v := data.(type) {
+		case []types.AAAARecord:
+			for _, rec := range v {
+				ip := net.ParseIP(rec.IP)
+				if ip == nil || ip.To4() != nil {
+					continue
+				}
+				rrs = append(rrs, &dns.AAAA{
+					Hdr:  dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: rec.TTL},
+					AAAA: ip,
+				})
+			}
+		case []interface{}:
+			for _, raw := range v {
+				rec, ok := raw.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				ipStr, _ := rec["ip"].(string)
+				ip := net.ParseIP(ipStr)
+				if ip == nil || ip.To4() != nil {
+					continue
+				}
+				rrs = append(rrs, &dns.AAAA{
+					Hdr:  dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: toTTL(rec)},
+					AAAA: ip,
+				})
 			}
 		}
 
@@ -443,6 +482,93 @@ var RRBuilders = map[string]RRBuilder{
 		}
 	},
 
+	"NSEC": func(name string, data any) []dns.RR {
+		var rec types.NSECRecord
+		switch v := data.(type) {
+		case types.NSECRecord:
+			rec = v
+		case map[string]interface{}:
+			if err := decodeRecord(v, &rec); err != nil {
+				return nil
+			}
+		default:
+			return nil
+		}
+
+		return []dns.RR{&dns.NSEC{
+			Hdr: dns.RR_Header{
+				Name:   dns.Fqdn(name),
+				Rrtype: dns.TypeNSEC,
+				Class:  dns.ClassINET,
+				Ttl:    rec.TTL,
+			},
+			NextDomain: dns.Fqdn(rec.NextDomain),
+			TypeBitMap: typeBitmap(rec.Types),
+		}}
+	},
+
+	"NSEC3": func(name string, data any) []dns.RR {
+		var rec types.NSEC3Record
+		switch v := data.(type) {
+		case types.NSEC3Record:
+			rec = v
+		case map[string]interface{}:
+			if err := decodeRecord(v, &rec); err != nil {
+				return nil
+			}
+		default:
+			return nil
+		}
+		if !validNSEC3Hash(rec.NextHashed) {
+			return nil
+		}
+
+		return []dns.RR{&dns.NSEC3{
+			Hdr: dns.RR_Header{
+				Name:   dns.Fqdn(name),
+				Rrtype: dns.TypeNSEC3,
+				Class:  dns.ClassINET,
+				Ttl:    rec.TTL,
+			},
+			Hash:       rec.HashAlg,
+			Flags:      rec.Flags,
+			Iterations: rec.Iterations,
+			SaltLength: uint8(nsec3SaltLength(rec.Salt)),
+			Salt:       rec.Salt,
+			HashLength: uint8(nsec3HashLength(rec.NextHashed)),
+			NextDomain: rec.NextHashed,
+			TypeBitMap: typeBitmap(rec.Types),
+		}}
+	},
+
+	"NSEC3PARAM": func(name string, data any) []dns.RR {
+		var rec types.NSEC3ParamRecord
+		switch v := data.(type) {
+		case types.NSEC3ParamRecord:
+			rec = v
+		case map[string]interface{}:
+			if err := decodeRecord(v, &rec); err != nil {
+				return nil
+			}
+		default:
+			return nil
+		}
+
+		return []dns.RR{&dns.NSEC3PARAM{
+			Hdr: dns.RR_Header{
+				Name:   dns.Fqdn(name),
+				Rrtype: dns.TypeNSEC3PARAM,
+				Class:  dns.ClassINET,
+				Ttl:    rec.TTL,
+			},
+			Hash:       rec.HashAlgorithm,
+			Flags:      rec.Flags,
+			Iterations: rec.Iterations,
+			SaltLength: uint8(nsec3SaltLength(rec.Salt)),
+			Salt:       rec.Salt,
+		}}
+	},
+
 	"DNSKEY": func(name string, data any) []dns.RR {
 		switch v := data.(type) {
 		case []types.DNSKEYRecord:
@@ -730,6 +856,55 @@ func getFloat64(v interface{}) float64 {
 		return f
 	}
 	return 0
+}
+
+func decodeRecord(raw map[string]interface{}, out interface{}) error {
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+func typeBitmap(types []string) []uint16 {
+	var bitmap []uint16
+	for _, t := range types {
+		if code, ok := dns.StringToType[strings.ToUpper(t)]; ok {
+			bitmap = append(bitmap, code)
+		}
+	}
+	sort.Slice(bitmap, func(i, j int) bool {
+		return bitmap[i] < bitmap[j]
+	})
+	return bitmap
+}
+
+func validNSEC3Hash(value string) bool {
+	return nsec3HashLength(value) > 0
+}
+
+func nsec3HashLength(value string) int {
+	value = strings.ToUpper(strings.TrimSpace(value))
+	if value == "" {
+		return 0
+	}
+	decoded, err := base32.HexEncoding.WithPadding(base32.NoPadding).DecodeString(value)
+	if err != nil {
+		return 0
+	}
+	return len(decoded)
+}
+
+func nsec3SaltLength(value string) int {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "-" {
+		return 0
+	}
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		return 0
+	}
+	return len(decoded)
 }
 
 func toDNSRRSIG(name string, r *types.RRSIGRecord) (*dns.RRSIG, error) {

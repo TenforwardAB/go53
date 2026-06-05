@@ -10,24 +10,22 @@ import (
 )
 
 func Start(cfg config.BaseConfig) error {
-	tsigSecrets := make(map[string]string)
-	for k, v := range security.TSIGSecrets {
-		tsigSecrets[k] = v.Secret
-	}
 	dns.HandleFunc(".", handleRequest)
 
 	addr := fmt.Sprintf("%s%s", cfg.BindHost, cfg.DNSPort)
+	tsigProvider := security.DynamicTSIGProvider{}
 
 	udpServer := &dns.Server{
-		Addr:    addr,
-		Net:     "udp",
-		Handler: dns.DefaultServeMux,
+		Addr:         addr,
+		Net:          "udp",
+		TsigProvider: tsigProvider,
+		Handler:      dns.DefaultServeMux,
 	}
 
 	tcpServer := &dns.Server{
 		Addr:          addr,
 		Net:           "tcp",
-		TsigSecret:    tsigSecrets,
+		TsigProvider:  tsigProvider,
 		Handler:       dns.DefaultServeMux,
 		ReadTimeout:   5 * time.Second,
 		WriteTimeout:  5 * time.Second,

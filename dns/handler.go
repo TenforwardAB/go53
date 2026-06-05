@@ -37,7 +37,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		switch {
 		case tsig != nil:
 			// TSIG is present — must be validated regardless of config is (RFC 2845  §4.6)
-			if _, ok := security.TSIGSecrets[tsig.Hdr.Name]; !ok {
+			if _, ok := security.GetTSIGKey(tsig.Hdr.Name); !ok {
 				log.Printf("TSIG key not recognized: %s — rejecting", tsig.Hdr.Name)
 				m := new(dns.Msg)
 				m.SetRcode(r, dns.RcodeRefused)
@@ -73,28 +73,6 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
-
-	if wantsDNSSEC {
-		slog.Crazy("Using DNSSEC")
-		for _, rr := range m.Answer {
-			name := rr.Header().Name
-			rrtype := rr.Header().Rrtype
-			slog.Crazy("[handleRequest] name is: %s", name)
-
-			// Look for matching RRSIGs (type = RRSIG, covered type = rrtype)
-			rrsigRecords, ok := zone.LookupRecord(dns.TypeRRSIG, name)
-			slog.Crazy("[handleRequest] rrsigRecords are: %v", rrsigRecords)
-			if !ok {
-				continue
-			}
-
-			for _, sig := range rrsigRecords {
-				if rrsig, ok := sig.(*dns.RRSIG); ok && rrsig.TypeCovered == rrtype {
-					m.Answer = append(m.Answer, rrsig)
-				}
-			}
-		}
-	}
 
 	for _, q := range r.Question {
 		var answered bool
@@ -153,6 +131,20 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			}
 
 		case dns.TypeAXFR, dns.TypeIXFR:
+			if !live.AllowAXFR {
+				log.Println("AXFR/IXFR disabled by configuration")
+				m.SetRcode(r, dns.RcodeRefused)
+				_ = w.WriteMsg(m)
+				return
+			}
+
+			if !transferClientAllowed(w.RemoteAddr().String(), live.AllowTransfer) {
+				log.Printf("AXFR/IXFR refused for unauthorized client %s", w.RemoteAddr().String())
+				m.SetRcode(r, dns.RcodeRefused)
+				_ = w.WriteMsg(m)
+				return
+			}
+
 			// RFC 2845 §4.5: If TSIG is present, it MUST be validated. If not present, only require it if EnforceTSIG is true.
 			tsig := r.IsTsig()
 			enforceTSIG := config.AppConfig.GetLive().EnforceTSIG
@@ -160,7 +152,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			switch {
 			case tsig != nil:
 				// TSIG present: validate it
-				if _, ok := security.TSIGSecrets[tsig.Hdr.Name]; !ok {
+				if _, ok := security.GetTSIGKey(tsig.Hdr.Name); !ok {
 					log.Printf("TSIG key not recognized: %s — rejecting", tsig.Hdr.Name)
 					m.SetRcode(r, dns.RcodeRefused)
 					_ = w.WriteMsg(m)
@@ -215,44 +207,166 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		}
 
 		if !answered {
-			if soaRec, ok := zone.LookupRecord(dns.TypeSOA, q.Name); ok {
+			if !nameExists(q.Name) {
+				m.Rcode = dns.RcodeNameError
+			}
+			if soaRec, ok := lookupApexSOA(q.Name); ok {
 				m.Ns = append(m.Ns, soaRec...)
 			}
-		}
-		if wantsDNSSEC {
-			slog.Crazy("Using DNSSEC")
-
-			seenRRSIG := make(map[string]bool)
-
-			for _, rr := range m.Answer {
-				if rr.Header().Rrtype == dns.TypeRRSIG {
-					continue // avoid processing RRSIGs themselves
-				}
-
-				name := rr.Header().Name
-				rrtype := rr.Header().Rrtype
-				slog.Crazy("[handleRequest] name is: %s", name)
-
-				rrsigRecords, ok := zone.LookupRecord(dns.TypeRRSIG, name+"___"+dns.TypeToString[rrtype])
-				slog.Crazy("[handleRequest] rrsigRecords are: %v", rrsigRecords)
-				if !ok {
-					continue
-				}
-
-				for _, sig := range rrsigRecords {
-					if rrsig, ok := sig.(*dns.RRSIG); ok && rrsig.TypeCovered == rrtype {
-						key := rrsig.String()
-						if !seenRRSIG[key] {
-							m.Answer = append(m.Answer, rrsig)
-							seenRRSIG[key] = true
-							slog.Crazy("##################[handleRequest] appended RRSIG: %s", rrsig)
-						}
-					}
-				}
+			if wantsDNSSEC {
+				m.Ns = append(m.Ns, denialRecords(q.Name)...)
 			}
 		}
 
+		if wantsDNSSEC {
+			slog.Crazy("Using DNSSEC")
+			m.Answer = appendRRSIGs(m.Answer)
+			m.Ns = appendRRSIGs(m.Ns)
+		}
 	}
 
 	_ = w.WriteMsg(m)
+}
+
+func appendRRSIGs(section []dns.RR) []dns.RR {
+	seen := make(map[string]bool)
+	for _, rr := range section {
+		if rr.Header().Rrtype == dns.TypeRRSIG {
+			seen[rr.String()] = true
+		}
+	}
+
+	rrsets := make(map[string][]dns.RR)
+	for _, rr := range section {
+		if rr.Header().Rrtype == dns.TypeRRSIG {
+			continue
+		}
+		hdr := rr.Header()
+		key := strings.ToLower(hdr.Name) + "|" + dns.TypeToString[hdr.Rrtype]
+		rrsets[key] = append(rrsets[key], rr)
+	}
+
+	for _, rrset := range rrsets {
+		rrsigRecords, err := zone.EnsureSignedRRSet(rrset)
+		if err != nil {
+			slog.Warn("DNSSEC query-time signing failed: %v", err)
+			continue
+		}
+		for _, sig := range rrsigRecords {
+			rrsig, ok := sig.(*dns.RRSIG)
+			if !ok {
+				continue
+			}
+			key := rrsig.String()
+			if seen[key] {
+				continue
+			}
+			section = append(section, rrsig)
+			seen[key] = true
+		}
+	}
+
+	return section
+}
+
+func lookupApexSOA(name string) ([]dns.RR, bool) {
+	zoneName, _, ok := internal.SplitName(name)
+	if !ok {
+		return nil, false
+	}
+	apex, err := internal.SanitizeFQDN(zoneName)
+	if err != nil {
+		return nil, false
+	}
+	return zone.LookupRecord(dns.TypeSOA, apex)
+}
+
+func denialRecords(name string) []dns.RR {
+	if nsec3 := matchingNSEC3(name); len(nsec3) > 0 {
+		return nsec3
+	}
+	if nsec, ok := zone.LookupRecord(dns.TypeNSEC, name); ok {
+		return nsec
+	}
+	if nsec, ok := zone.FindNSECProof(name); ok {
+		return nsec
+	}
+	return nil
+}
+
+func matchingNSEC3(name string) []dns.RR {
+	if nsec3, ok := zone.FindNSEC3Proof(name); ok {
+		return nsec3
+	}
+	return nil
+}
+
+func nameExists(name string) bool {
+	for _, rrtype := range []uint16{
+		dns.TypeA,
+		dns.TypeAAAA,
+		dns.TypeCNAME,
+		dns.TypeMX,
+		dns.TypeNS,
+		dns.TypeSOA,
+		dns.TypeTXT,
+		dns.TypeSRV,
+		dns.TypePTR,
+		dns.TypeCAA,
+		dns.TypeDNAME,
+		dns.TypeDNSKEY,
+		dns.TypeDS,
+		dns.TypeNAPTR,
+		dns.TypeSPF,
+		dns.TypeHTTPS,
+		dns.TypeSVCB,
+		dns.TypeLOC,
+		dns.TypeCERT,
+		dns.TypeSSHFP,
+		dns.TypeURI,
+		dns.TypeAPL,
+	} {
+		if _, ok := zone.LookupRecord(rrtype, name); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func transferClientAllowed(remoteAddr string, allowTransfer string) bool {
+	allowTransfer = strings.TrimSpace(allowTransfer)
+	if allowTransfer == "" {
+		return true
+	}
+
+	remoteIP, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		remoteIP = remoteAddr
+	}
+	remote := net.ParseIP(remoteIP)
+	if remote == nil {
+		return false
+	}
+
+	for _, entry := range strings.Split(allowTransfer, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+
+		if ip := net.ParseIP(entry); ip != nil {
+			if ip.Equal(remote) {
+				return true
+			}
+			continue
+		}
+
+		if ip, _, err := net.SplitHostPort(entry); err == nil {
+			if parsed := net.ParseIP(ip); parsed != nil && parsed.Equal(remote) {
+				return true
+			}
+		}
+	}
+
+	return false
 }

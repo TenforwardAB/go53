@@ -105,7 +105,7 @@ func importFromZoneData(zoneName string, zd types.ZoneData, fromAPI bool) error 
 					case reflect.Struct:
 						ttlField = recVal.Index(j).FieldByName("TTL")
 					case reflect.Ptr:
-						slog.Emerg("[fetch.go:importFromZoneData] record %s is of type %+v", rrType, rec)
+						slog.Emerg("[fetch.go:importFromZoneData] record %d is of type %+v", rrType, rec)
 						elem := recVal.Index(j).Elem()
 						if elem.IsValid() && elem.Kind() == reflect.Struct {
 							ttlField = elem.FieldByName("TTL")

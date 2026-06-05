@@ -105,8 +105,11 @@ func (SOARecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 }
 
 func (SOARecord) Lookup(host string) ([]dns.RR, bool) {
-	zone, _, ok := internal.SplitName(host)
+	zone, name, ok := internal.SplitName(host)
 	if !ok {
+		return nil, false
+	}
+	if name != "@" {
 		return nil, false
 	}
 	sanitizedZone, err := internal.SanitizeFQDN(zone)

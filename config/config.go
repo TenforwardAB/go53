@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"reflect"
-	"strconv"
 	"sync"
 
 	"go53/storage"
@@ -115,21 +114,28 @@ func (cm *ConfigManager) InitLiveConfig() {
 
 		switch f.Kind() {
 		case reflect.String:
-			f.SetString(string(data))
+			var s string
+			if err := json.Unmarshal(data, &s); err != nil {
+				log.Printf("  • unmarshal string %s: %v", key, err)
+				continue
+			}
+			f.SetString(s)
 
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			if x, err := strconv.ParseInt(string(data), 10, 64); err == nil {
-				f.SetInt(x)
-			} else {
-				log.Printf("  • parse int %s: %v", key, err)
+			var x int64
+			if err := json.Unmarshal(data, &x); err != nil {
+				log.Printf("  • unmarshal int %s: %v", key, err)
+				continue
 			}
+			f.SetInt(x)
 
 		case reflect.Bool:
-			if b, err := strconv.ParseBool(string(data)); err == nil {
-				f.SetBool(b)
-			} else {
-				log.Printf("  • parse bool %s: %v", key, err)
+			var b bool
+			if err := json.Unmarshal(data, &b); err != nil {
+				log.Printf("  • unmarshal bool %s: %v", key, err)
+				continue
 			}
+			f.SetBool(b)
 
 		case reflect.Struct:
 			// unmarshal nested JSON into the struct field
@@ -190,32 +196,28 @@ func (cm *ConfigManager) loadLiveConfig() error {
 
 		switch field.Kind() {
 		case reflect.String:
-			field.SetString(string(data))
+			var s string
+			if err := json.Unmarshal(data, &s); err != nil {
+				log.Printf("config: invalid JSON string for %s: %v", key, err)
+				continue
+			}
+			field.SetString(s)
 
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			var (
-				i64 int64
-				err error
-			)
-
-			if err = json.Unmarshal(data, &i64); err != nil {
-				i64, err = strconv.ParseInt(string(data), 10, 64)
+			var i64 int64
+			if err := json.Unmarshal(data, &i64); err != nil {
+				log.Printf("config: invalid JSON int for %s: %v", key, err)
+				continue
 			}
-			if err == nil {
-				field.SetInt(i64)
-			} else {
-				log.Printf("config: failed to parse int for %s: %v", key, err)
-			}
+			field.SetInt(i64)
 
 		case reflect.Bool:
 			var b bool
-			if err := json.Unmarshal(data, &b); err == nil {
-				field.SetBool(b)
-			} else if parsed, err2 := strconv.ParseBool(string(data)); err2 == nil {
-				field.SetBool(parsed)
-			} else {
-				log.Printf("config: failed to parse bool for %s: %v", key, err)
+			if err := json.Unmarshal(data, &b); err != nil {
+				log.Printf("config: invalid JSON bool for %s: %v", key, err)
+				continue
 			}
+			field.SetBool(b)
 
 		case reflect.Struct:
 			ptr := field.Addr().Interface()
@@ -260,17 +262,7 @@ func (cm *ConfigManager) persistLiveConfigUnlocked(live LiveConfig) error {
 		var err error
 
 		switch field.Kind() {
-		case reflect.String:
-			data = []byte(field.String())
-
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			data = []byte(fmt.Sprintf("%d", field.Int()))
-
-		case reflect.Bool:
-			data = []byte(fmt.Sprintf("%t", field.Bool()))
-
-		case reflect.Struct:
-			// marshal nested struct to JSON
+		case reflect.String, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Bool, reflect.Struct:
 			data, err = json.Marshal(field.Interface())
 			if err != nil {
 				return fmt.Errorf("config: failed to marshal %s: %w", key, err)

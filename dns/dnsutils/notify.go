@@ -81,7 +81,7 @@ func SendNotify(inzone string) {
 
 	const tsigKeyName = "xxfr-key" //TODO: We have this set in too many locations need a central place for all constants
 	fqdnKeyName, _ := internal.SanitizeFQDN(tsigKeyName)
-	tsigKey, tsigExists := security.TSIGSecrets[fqdnKeyName]
+	tsigKey, tsigExists := security.GetTSIGKey(fqdnKeyName)
 
 	for _, target := range targets {
 		target = strings.TrimSpace(target)
@@ -308,11 +308,15 @@ func fetchZone(zoneName string) {
 	}
 
 	if config.AppConfig.GetLive().EnforceTSIG {
-		tsigSecret := security.TSIGSecrets[tsigKeyName].Secret
+		tsigKey, ok := security.GetTSIGKey(tsigKeyName)
+		if !ok {
+			log.Printf("[fetchZone] TSIG is enforced but key %s is not loaded", tsigKeyName)
+			return
+		}
 
 		req.SetTsig(tsigKeyName, dns.HmacSHA256, 300, time.Now().Unix())
 		tran.TsigSecret = map[string]string{
-			tsigKeyName: tsigSecret,
+			tsigKeyName: tsigKey.Secret,
 		}
 	}
 

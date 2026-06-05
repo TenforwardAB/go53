@@ -33,7 +33,7 @@ var DefaultLiveConfig = LiveConfig{
 }
 
 var DefaultBaseConfig = BaseConfig{
-	DNSPort:        ":53",
+	DNSPort:        ":2053",
 	BindHost:       "0.0.0.0",
 	APIPort:        ":8053",
 	StorageBackend: "badger",
