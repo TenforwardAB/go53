@@ -59,8 +59,9 @@ type Event struct {
 }
 
 type EntityClock struct {
-	Origin string `json:"origin"`
-	Seq    uint64 `json:"seq"`
+	Origin string            `json:"origin"`
+	Seq    uint64            `json:"seq"`
+	Vector map[string]uint64 `json:"vector"`
 }
 
 type NodeInfo struct {
@@ -283,7 +284,7 @@ func (s *Service) publish(event Event) error {
 	if err := s.saveVector(vector); err != nil {
 		return err
 	}
-	if err := s.saveEntityClock(event.Entity, EntityClock{Origin: event.Origin, Seq: event.Seq}); err != nil {
+	if err := s.saveEntityClock(event.Entity, entityClockForEvent(event)); err != nil {
 		return err
 	}
 
@@ -325,7 +326,7 @@ func (s *Service) ReceiveEvent(ctx context.Context, event Event) (bool, error) {
 		if err := s.applyEventLocked(ctx, event); err != nil {
 			return false, err
 		}
-		if err := s.saveEntityClock(event.Entity, EntityClock{Origin: event.Origin, Seq: event.Seq}); err != nil {
+		if err := s.saveEntityClock(event.Entity, entityClockForEvent(event)); err != nil {
 			return false, err
 		}
 	}
@@ -906,15 +907,14 @@ func (s *Service) applyRepairEvent(ctx context.Context, event Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	current, ok := s.loadEntityClock(event.Entity)
-	apply := !ok || event.Seq > current.Seq || (event.Seq == current.Seq && event.Origin >= current.Origin)
+	apply := s.eventWinsLocked(event) || s.eventMatchesEntityClockLocked(event)
 	if !apply {
 		return nil
 	}
 	if err := s.applyEventLocked(ctx, event); err != nil {
 		return err
 	}
-	if err := s.saveEntityClock(event.Entity, EntityClock{Origin: event.Origin, Seq: event.Seq}); err != nil {
+	if err := s.saveEntityClock(event.Entity, entityClockForEvent(event)); err != nil {
 		return err
 	}
 	if err := s.saveEvent(event); err != nil {
@@ -959,7 +959,7 @@ func (s *Service) latestEventsForEntities(entities []string) ([]Event, error) {
 			continue
 		}
 		current, ok := latest[event.Entity]
-		if !ok || event.Seq > current.Seq || (event.Seq == current.Seq && event.Origin > current.Origin) {
+		if !ok || eventWinsEvent(event, current) {
 			latest[event.Entity] = event
 		}
 	}
@@ -985,10 +985,132 @@ func (s *Service) eventWinsLocked(event Event) bool {
 	if !ok {
 		return true
 	}
-	if event.Seq != current.Seq {
-		return event.Seq > current.Seq
+	return eventWinsClock(event, current)
+}
+
+func (s *Service) eventMatchesEntityClockLocked(event Event) bool {
+	if event.Entity == "" {
+		event.Entity = eventEntityKey(event)
 	}
-	return event.Origin > current.Origin
+	current, ok := s.loadEntityClock(event.Entity)
+	if !ok {
+		return false
+	}
+	if current.Origin != event.Origin || current.Seq != event.Seq {
+		return false
+	}
+	eventVector := normalizedEventVector(event)
+	currentVector := normalizedClockVector(current)
+	return vectorsEqual(eventVector, currentVector)
+}
+
+func entityClockForEvent(event Event) EntityClock {
+	return EntityClock{
+		Origin: event.Origin,
+		Seq:    event.Seq,
+		Vector: cloneVector(normalizedEventVector(event)),
+	}
+}
+
+func eventWinsClock(event Event, current EntityClock) bool {
+	eventVector := normalizedEventVector(event)
+	currentVector := normalizedClockVector(current)
+	eventDominates := vectorDominates(eventVector, currentVector)
+	currentDominates := vectorDominates(currentVector, eventVector)
+	switch {
+	case eventDominates && !currentDominates:
+		return true
+	case currentDominates && !eventDominates:
+		return false
+	case eventDominates && currentDominates:
+		return eventTieBreak(event.Origin, event.Seq, current.Origin, current.Seq)
+	default:
+		return eventTieBreak(event.Origin, event.Seq, current.Origin, current.Seq)
+	}
+}
+
+func eventWinsEvent(candidate, current Event) bool {
+	candidateVector := normalizedEventVector(candidate)
+	currentVector := normalizedEventVector(current)
+	candidateDominates := vectorDominates(candidateVector, currentVector)
+	currentDominates := vectorDominates(currentVector, candidateVector)
+	switch {
+	case candidateDominates && !currentDominates:
+		return true
+	case currentDominates && !candidateDominates:
+		return false
+	case candidateDominates && currentDominates:
+		return eventTieBreak(candidate.Origin, candidate.Seq, current.Origin, current.Seq)
+	default:
+		return eventTieBreak(candidate.Origin, candidate.Seq, current.Origin, current.Seq)
+	}
+}
+
+func normalizedEventVector(event Event) map[string]uint64 {
+	vector := cloneVector(event.Vector)
+	if vector == nil {
+		vector = map[string]uint64{}
+	}
+	if strings.TrimSpace(event.Origin) != "" && vector[event.Origin] < event.Seq {
+		vector[event.Origin] = event.Seq
+	}
+	return vector
+}
+
+func normalizedClockVector(clock EntityClock) map[string]uint64 {
+	vector := cloneVector(clock.Vector)
+	if vector == nil {
+		vector = map[string]uint64{}
+	}
+	if strings.TrimSpace(clock.Origin) != "" && vector[clock.Origin] < clock.Seq {
+		vector[clock.Origin] = clock.Seq
+	}
+	return vector
+}
+
+func vectorDominates(a, b map[string]uint64) bool {
+	strict := false
+	nodes := map[string]bool{}
+	for node := range a {
+		nodes[node] = true
+	}
+	for node := range b {
+		nodes[node] = true
+	}
+	for node := range nodes {
+		av := a[node]
+		bv := b[node]
+		if av < bv {
+			return false
+		}
+		if av > bv {
+			strict = true
+		}
+	}
+	return strict
+}
+
+func vectorsEqual(a, b map[string]uint64) bool {
+	nodes := map[string]bool{}
+	for node := range a {
+		nodes[node] = true
+	}
+	for node := range b {
+		nodes[node] = true
+	}
+	for node := range nodes {
+		if a[node] != b[node] {
+			return false
+		}
+	}
+	return true
+}
+
+func eventTieBreak(candidateOrigin string, candidateSeq uint64, currentOrigin string, currentSeq uint64) bool {
+	if candidateSeq != currentSeq {
+		return candidateSeq > currentSeq
+	}
+	return candidateOrigin > currentOrigin
 }
 
 func (s *Service) loadVector() (map[string]uint64, error) {

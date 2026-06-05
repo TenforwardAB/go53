@@ -229,6 +229,84 @@ func TestApplyDNSSECKeyEventUpdatesStorageCache(t *testing.T) {
 	}
 }
 
+func TestEventWinsUsesVectorDominancePerRRSet(t *testing.T) {
+	priv, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	svc := newTestService(t, "node-local", priv, nil)
+	entity := entityKey("example.com.", "A", "www")
+
+	if err := svc.saveEntityClock(entity, EntityClock{
+		Origin: "node-b",
+		Seq:    10,
+		Vector: map[string]uint64{"node-a": 1, "node-b": 10},
+	}); err != nil {
+		t.Fatalf("saveEntityClock: %v", err)
+	}
+	dominating := Event{
+		Origin: "node-a",
+		Seq:    2,
+		Entity: entity,
+		Vector: map[string]uint64{"node-a": 2, "node-b": 10},
+	}
+	if !svc.eventWinsLocked(dominating) {
+		t.Fatalf("dominating event with lower origin seq did not win")
+	}
+
+	if err := svc.saveEntityClock(entity, EntityClock{
+		Origin: "node-b",
+		Seq:    10,
+		Vector: map[string]uint64{"node-a": 2, "node-b": 10},
+	}); err != nil {
+		t.Fatalf("saveEntityClock current: %v", err)
+	}
+	stale := Event{
+		Origin: "node-a",
+		Seq:    3,
+		Entity: entity,
+		Vector: map[string]uint64{"node-a": 3, "node-b": 5},
+	}
+	if svc.eventWinsLocked(stale) {
+		t.Fatalf("non-dominating event won only because of higher origin seq")
+	}
+}
+
+func TestEventWinsFallsBackToTieBreakForConcurrentVectors(t *testing.T) {
+	priv, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	svc := newTestService(t, "node-local", priv, nil)
+	entity := entityKey("example.com.", "A", "www")
+
+	if err := svc.saveEntityClock(entity, EntityClock{
+		Origin: "node-b",
+		Seq:    1,
+		Vector: map[string]uint64{"node-b": 1},
+	}); err != nil {
+		t.Fatalf("saveEntityClock: %v", err)
+	}
+	concurrentLowerNode := Event{
+		Origin: "node-a",
+		Seq:    1,
+		Entity: entity,
+		Vector: map[string]uint64{"node-a": 1},
+	}
+	if svc.eventWinsLocked(concurrentLowerNode) {
+		t.Fatalf("concurrent lower node id unexpectedly won tie-break")
+	}
+	concurrentHigherSeq := Event{
+		Origin: "node-a",
+		Seq:    2,
+		Entity: entity,
+		Vector: map[string]uint64{"node-a": 2},
+	}
+	if !svc.eventWinsLocked(concurrentHigherSeq) {
+		t.Fatalf("concurrent higher seq did not win deterministic tie-break")
+	}
+}
+
 func TestMerkleRepairDetectsAndRepairsZoneDrift(t *testing.T) {
 	aPriv, aPub, err := GenerateKeyPair()
 	if err != nil {
