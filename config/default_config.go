@@ -42,6 +42,9 @@ var DefaultLiveConfig = LiveConfig{
 	Distributed: DistributedConfig{
 		NodeID:          "",
 		Peers:           "",
+		Transport:       "http",
+		SyncBindHost:    "0.0.0.0",
+		SyncPort:        ":53530",
 		PrivateKey:      "",
 		PeerPublicKeys:  map[string]string{},
 		PushTimeoutMs:   2000,

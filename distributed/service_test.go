@@ -122,8 +122,9 @@ func newTestService(t *testing.T, nodeID, privateKey string, peerKeys map[string
 		t.Fatalf("NewZoneStore: %v", err)
 	}
 	return &Service{
-		store:   mem,
-		storage: mock,
-		client:  nil,
+		store:      mem,
+		storage:    mock,
+		client:     nil,
+		peerQueues: make(map[string]chan Event),
 	}
 }

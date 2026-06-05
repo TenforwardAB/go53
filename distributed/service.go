@@ -53,10 +53,12 @@ type EntityClock struct {
 }
 
 type Service struct {
-	store   *memory.InMemoryZoneStore
-	storage storage.Storage
-	client  *http.Client
-	mu      sync.Mutex
+	store      *memory.InMemoryZoneStore
+	storage    storage.Storage
+	client     *http.Client
+	mu         sync.Mutex
+	peerMu     sync.Mutex
+	peerQueues map[string]chan Event
 }
 
 var Default *Service
@@ -67,9 +69,10 @@ func Init(store *memory.InMemoryZoneStore) *Service {
 		timeout = 2 * time.Second
 	}
 	Default = &Service{
-		store:   store,
-		storage: storage.Backend,
-		client:  &http.Client{Timeout: timeout},
+		store:      store,
+		storage:    storage.Backend,
+		client:     &http.Client{Timeout: timeout},
+		peerQueues: make(map[string]chan Event),
 	}
 	return Default
 }
@@ -78,6 +81,8 @@ func Start(ctx context.Context) {
 	if Default == nil {
 		return
 	}
+	go Default.StartTCPListener(ctx)
+	go Default.StartPeerWorkers(ctx)
 	interval := time.Duration(liveConfig().Distributed.ResyncIntervalS) * time.Second
 	if interval <= 0 {
 		interval = 30 * time.Second
@@ -315,13 +320,94 @@ func (s *Service) syncPeer(ctx context.Context, peer string) error {
 
 func (s *Service) pushToPeers(ctx context.Context, event Event) {
 	for _, peer := range peers() {
-		if err := s.pushEvent(ctx, peer, event); err != nil {
-			log.Printf("distributed: push to %s failed: %v", peer, err)
+		s.enqueuePeerEvent(ctx, peer, event)
+	}
+}
+
+func (s *Service) StartPeerWorkers(ctx context.Context) {
+	if s == nil {
+		return
+	}
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !enabled() {
+				continue
+			}
+			for _, peer := range peers() {
+				s.ensurePeerWorker(ctx, peer)
+			}
 		}
 	}
 }
 
+func (s *Service) enqueuePeerEvent(ctx context.Context, peer string, event Event) {
+	q := s.ensurePeerWorker(ctx, peer)
+	select {
+	case q <- event:
+	default:
+		go func() {
+			select {
+			case q <- event:
+			case <-ctx.Done():
+			}
+		}()
+	}
+}
+
+func (s *Service) ensurePeerWorker(ctx context.Context, peer string) chan Event {
+	s.peerMu.Lock()
+	defer s.peerMu.Unlock()
+	if s.peerQueues == nil {
+		s.peerQueues = make(map[string]chan Event)
+	}
+	if q, ok := s.peerQueues[peer]; ok {
+		return q
+	}
+	q := make(chan Event, 1024)
+	s.peerQueues[peer] = q
+	go s.peerWorker(ctx, peer, q)
+	return q
+}
+
+func (s *Service) peerWorker(ctx context.Context, peer string, q <-chan Event) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event := <-q:
+			s.deliverPeerEvent(ctx, peer, event)
+		}
+	}
+}
+
+func (s *Service) deliverPeerEvent(ctx context.Context, peer string, event Event) {
+	backoff := 100 * time.Millisecond
+	for attempt := 0; attempt < 5; attempt++ {
+		if err := s.pushEvent(ctx, peer, event); err != nil {
+			log.Printf("distributed: push to %s failed: %v", peer, err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			if backoff < 2*time.Second {
+				backoff *= 2
+			}
+			continue
+		}
+		return
+	}
+}
+
 func (s *Service) pushEvent(ctx context.Context, peer string, event Event) error {
+	if useTCPTransport(peer) {
+		return s.pushEventTCP(ctx, peer, event)
+	}
 	body, err := json.Marshal(event)
 	if err != nil {
 		return err
@@ -344,6 +430,9 @@ func (s *Service) pushEvent(ctx context.Context, peer string, event Event) error
 }
 
 func (s *Service) fetchPeerVector(ctx context.Context, peer string) (map[string]uint64, error) {
+	if useTCPTransport(peer) {
+		return s.fetchPeerVectorTCP(ctx, peer)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, peerURL(peer, "/api/distributed/vector"), nil)
 	if err != nil {
 		return nil, err
@@ -367,6 +456,9 @@ func (s *Service) fetchPeerVector(ctx context.Context, peer string) (map[string]
 }
 
 func (s *Service) fetchPeerEvents(ctx context.Context, peer, origin string, after uint64) ([]Event, error) {
+	if useTCPTransport(peer) {
+		return s.fetchPeerEventsTCP(ctx, peer, origin, after)
+	}
 	url := peerURL(peer, "/api/distributed/events") + "?origin=" + origin + "&after=" + strconv.FormatUint(after, 10)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -599,6 +691,17 @@ func peers() []string {
 
 func peerURL(peer, path string) string {
 	return strings.TrimRight(peer, "/") + path
+}
+
+func useTCPTransport(peer string) bool {
+	peer = strings.TrimSpace(strings.ToLower(peer))
+	if strings.HasPrefix(peer, "tcp://") {
+		return true
+	}
+	if strings.HasPrefix(peer, "http://") || strings.HasPrefix(peer, "https://") {
+		return false
+	}
+	return strings.EqualFold(liveConfig().Distributed.Transport, "tcp")
 }
 
 func newEventID() string {

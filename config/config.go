@@ -48,6 +48,9 @@ type DNSSECSignaturePolicy struct {
 type DistributedConfig struct {
 	NodeID          string            `json:"node_id"`
 	Peers           string            `json:"peers"`
+	Transport       string            `json:"transport"`
+	SyncBindHost    string            `json:"sync_bind_host"`
+	SyncPort        string            `json:"sync_port"`
 	PrivateKey      string            `json:"private_key"`
 	PeerPublicKeys  map[string]string `json:"peer_public_keys"`
 	PushTimeoutMs   int               `json:"push_timeout_ms"`
