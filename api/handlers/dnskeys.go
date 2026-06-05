@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/gorilla/mux"
 	"go53/security"
-	"go53/storage"
 	"go53/types"
 	zonepkg "go53/zone"
 	"net/http"
@@ -14,21 +13,10 @@ import (
 )
 
 func ListDNSKeysHandler(w http.ResponseWriter, r *http.Request) {
-	table, err := storage.Backend.LoadTable("dnssec_keys")
+	response, err := security.ListStoredKeys()
 	if err != nil {
 		http.Error(w, "Failed to load dnssec_keys table", http.StatusInternalServerError)
 		return
-	}
-
-	response := make(map[string]types.StoredKey)
-
-	for keyID, raw := range table {
-		var key types.StoredKey
-		if err := json.Unmarshal(raw, &key); err != nil {
-			continue
-		}
-
-		response[keyID] = key
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -39,7 +27,7 @@ func GetDNSKeyHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	zone := vars["keyid"]
 
-	table, err := storage.Backend.LoadTable("dnssec_keys")
+	table, err := security.ListStoredKeys()
 	if err != nil {
 		http.Error(w, "Failed to load dnssec_keys table", http.StatusInternalServerError)
 		return
@@ -47,12 +35,7 @@ func GetDNSKeyHandler(w http.ResponseWriter, r *http.Request) {
 
 	response := make(map[string]types.StoredKey)
 
-	for keyID, raw := range table {
-		var key types.StoredKey
-		if err := json.Unmarshal(raw, &key); err != nil {
-			continue
-		}
-
+	for keyID, key := range table {
 		if key.Zone != zone {
 			continue
 		}
@@ -183,7 +166,7 @@ func DeleteDNSKeyHandler(w http.ResponseWriter, r *http.Request) {
 	keyID := mux.Vars(r)["keyid"]
 	storedKey, _ := security.LoadStoredKey(keyID)
 
-	if err := storage.Backend.DeleteFromTable("dnssec_keys", keyID); err != nil {
+	if err := security.DeleteStoredKey(keyID); err != nil {
 		http.Error(w, "Failed to delete key", http.StatusInternalServerError)
 		return
 	}

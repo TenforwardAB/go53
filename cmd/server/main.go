@@ -25,6 +25,9 @@ func main() {
 
 	config.AppConfig.Init()
 	config.AppConfig.InitLiveConfig()
+	if err := security.InitDNSSECKeyCache(); err != nil {
+		log.Fatalf("Failed to load DNSSEC key cache: %v", err)
+	}
 	base := config.AppConfig.GetBase()
 	slog.Crazy("Live Config DNSSEC ENABLE is: %b", config.AppConfig.GetLive().DNSSECEnabled)
 

@@ -21,6 +21,7 @@ import (
 	"math/big"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -47,6 +48,93 @@ var supportedAlgos = []struct {
 	{13, "ECDSAP256SHA256", []uint16{256, 257}},
 	{14, "ECDSAP384SHA384", []uint16{256, 257}},
 	{15, "ED25519", []uint16{256, 257}},
+}
+
+var dnssecKeyCache = struct {
+	sync.RWMutex
+	initialized bool
+	backendID   string
+	keys        map[string]types.StoredKey
+}{
+	keys: make(map[string]types.StoredKey),
+}
+
+func InitDNSSECKeyCache() error {
+	table, err := storage.Backend.LoadTable(dnssecKeyTable)
+	if err != nil {
+		return fmt.Errorf("load table: %w", err)
+	}
+
+	keys := make(map[string]types.StoredKey, len(table))
+	for keyID, raw := range table {
+		var stored types.StoredKey
+		if err := json.Unmarshal(raw, &stored); err != nil {
+			return fmt.Errorf("unmarshal StoredKey for %q: %w", keyID, err)
+		}
+		normalizeStoredKey(&stored)
+		keys[keyID] = stored
+	}
+
+	dnssecKeyCache.Lock()
+	dnssecKeyCache.keys = keys
+	dnssecKeyCache.backendID = currentStorageBackendID()
+	dnssecKeyCache.initialized = true
+	dnssecKeyCache.Unlock()
+	return nil
+}
+
+func currentStorageBackendID() string {
+	return fmt.Sprintf("%T:%p", storage.Backend, storage.Backend)
+}
+
+func ensureDNSSECKeyCache() error {
+	backendID := currentStorageBackendID()
+	dnssecKeyCache.RLock()
+	ready := dnssecKeyCache.initialized && dnssecKeyCache.backendID == backendID
+	dnssecKeyCache.RUnlock()
+	if ready {
+		return nil
+	}
+	return InitDNSSECKeyCache()
+}
+
+func cachedDNSSECKeyTable() (map[string]types.StoredKey, error) {
+	if err := ensureDNSSECKeyCache(); err != nil {
+		return nil, err
+	}
+	dnssecKeyCache.RLock()
+	defer dnssecKeyCache.RUnlock()
+	out := make(map[string]types.StoredKey, len(dnssecKeyCache.keys))
+	for keyID, stored := range dnssecKeyCache.keys {
+		copy := stored
+		normalizeStoredKey(&copy)
+		out[keyID] = copy
+	}
+	return out, nil
+}
+
+func cacheStoredKey(keyID string, stored *types.StoredKey) {
+	if stored == nil {
+		return
+	}
+	copy := *stored
+	normalizeStoredKey(&copy)
+	dnssecKeyCache.Lock()
+	if dnssecKeyCache.keys == nil {
+		dnssecKeyCache.keys = make(map[string]types.StoredKey)
+	}
+	dnssecKeyCache.keys[keyID] = copy
+	dnssecKeyCache.backendID = currentStorageBackendID()
+	dnssecKeyCache.initialized = true
+	dnssecKeyCache.Unlock()
+}
+
+func uncacheStoredKey(keyID string) {
+	dnssecKeyCache.Lock()
+	delete(dnssecKeyCache.keys, keyID)
+	dnssecKeyCache.backendID = currentStorageBackendID()
+	dnssecKeyCache.initialized = true
+	dnssecKeyCache.Unlock()
 }
 
 func GenerateAndStoreAllKeys(zone string) error {
@@ -87,12 +175,7 @@ func GenerateAndStoreAllKeys(zone string) error {
 				ActivateAt: now,
 			}
 
-			serialized, err := json.Marshal(stored)
-			if err != nil {
-				return fmt.Errorf("marshal key: %w", err)
-			}
-
-			if err := storage.Backend.SaveTable(dnssecKeyTable, keyID, serialized); err != nil {
+			if err := saveStoredKey(keyID, &stored); err != nil {
 				return fmt.Errorf("store key: %w", err)
 			}
 		}
@@ -387,6 +470,7 @@ func SavePrivateKeyToStorage(zone, keyID, algorithmName string, priv crypto.Priv
 	if err := storage.Backend.SaveTable(dnssecKeyTable, keyID, data); err != nil {
 		return fmt.Errorf("save to backend: %w", err)
 	}
+	cacheStoredKey(keyID, &stored)
 
 	return nil
 }
@@ -445,6 +529,7 @@ func GenerateRolloverKey(zone, role, algorithmName string, publishAt, activateAt
 	if err := storage.Backend.SaveTable(dnssecKeyTable, keyID, data); err != nil {
 		return "", nil, err
 	}
+	cacheStoredKey(keyID, stored)
 	return keyID, stored, nil
 }
 
@@ -514,20 +599,20 @@ func RevokeKey(keyID string, removeAfter time.Duration) (*types.StoredKey, error
 }
 
 func LoadStoredKey(keyID string) (*types.StoredKey, error) {
-	table, err := storage.Backend.LoadTable(dnssecKeyTable)
+	table, err := cachedDNSSECKeyTable()
 	if err != nil {
-		return nil, fmt.Errorf("load table: %w", err)
+		return nil, err
 	}
-	data, ok := table[keyID]
+	stored, ok := table[keyID]
 	if !ok {
 		return nil, fmt.Errorf("key %q not found", keyID)
 	}
-	var stored types.StoredKey
-	if err := json.Unmarshal(data, &stored); err != nil {
-		return nil, fmt.Errorf("unmarshal StoredKey: %w", err)
-	}
 	normalizeStoredKey(&stored)
 	return &stored, nil
+}
+
+func ListStoredKeys() (map[string]types.StoredKey, error) {
+	return cachedDNSSECKeyTable()
 }
 
 func saveStoredKey(keyID string, stored *types.StoredKey) error {
@@ -536,25 +621,19 @@ func saveStoredKey(keyID string, stored *types.StoredKey) error {
 	if err != nil {
 		return err
 	}
-	return storage.Backend.SaveTable(dnssecKeyTable, keyID, data)
+	if err := storage.Backend.SaveTable(dnssecKeyTable, keyID, data); err != nil {
+		return err
+	}
+	cacheStoredKey(keyID, stored)
+	return nil
 }
 
 func LoadPrivateKeyFromStorage(keyID string) (crypto.PrivateKey, *types.StoredKey, error) {
-	table, err := storage.Backend.LoadTable(dnssecKeyTable)
+	stored, err := LoadStoredKey(keyID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("load table: %w", err)
+		return nil, nil, err
 	}
-
-	data, ok := table[keyID]
-	if !ok {
-		return nil, nil, fmt.Errorf("key %q not found", keyID)
-	}
-
-	var stored types.StoredKey
-	if err := json.Unmarshal(data, &stored); err != nil {
-		return nil, nil, fmt.Errorf("unmarshal StoredKey: %w", err)
-	}
-	normalizeStoredKey(&stored)
+	normalizeStoredKey(stored)
 
 	block, _ := pem.Decode([]byte(stored.PrivatePEM))
 	if block == nil {
@@ -577,24 +656,29 @@ func LoadPrivateKeyFromStorage(keyID string) (crypto.PrivateKey, *types.StoredKe
 		return nil, nil, fmt.Errorf("parse private key: %w", err)
 	}
 
-	return privKey, &stored, nil
+	return privKey, stored, nil
+}
+
+func DeleteStoredKey(keyID string) error {
+	if err := storage.Backend.DeleteFromTable(dnssecKeyTable, keyID); err != nil {
+		return err
+	}
+	uncacheStoredKey(keyID)
+	return nil
 }
 
 func LoadAllKeysForZone(zone string) ([]*types.StoredKey, error) {
-	table, err := storage.Backend.LoadTable(dnssecKeyTable)
+	table, err := cachedDNSSECKeyTable()
 	if err != nil {
-		return nil, fmt.Errorf("load table: %w", err)
+		return nil, err
 	}
 
 	var keys []*types.StoredKey
-	for keyID, raw := range table {
+	for keyID, stored := range table {
 		if strings.Contains(keyID, zone) {
-			var stored types.StoredKey
-			if err := json.Unmarshal(raw, &stored); err != nil {
-				return nil, fmt.Errorf("unmarshal StoredKey for %q: %w", keyID, err)
-			}
 			normalizeStoredKey(&stored)
-			keys = append(keys, &stored)
+			copy := stored
+			keys = append(keys, &copy)
 		}
 	}
 
@@ -602,17 +686,13 @@ func LoadAllKeysForZone(zone string) ([]*types.StoredKey, error) {
 }
 
 func LoadPublishedKeysForZone(zone string, now int64) (map[string]*types.StoredKey, error) {
-	table, err := storage.Backend.LoadTable(dnssecKeyTable)
+	table, err := cachedDNSSECKeyTable()
 	if err != nil {
-		return nil, fmt.Errorf("load table: %w", err)
+		return nil, err
 	}
 	zone = strings.TrimSuffix(dns.Fqdn(zone), ".")
 	out := make(map[string]*types.StoredKey)
-	for keyID, raw := range table {
-		var stored types.StoredKey
-		if err := json.Unmarshal(raw, &stored); err != nil {
-			return nil, fmt.Errorf("unmarshal StoredKey for %q: %w", keyID, err)
-		}
+	for keyID, stored := range table {
 		normalizeStoredKey(&stored)
 		if !strings.EqualFold(strings.TrimSuffix(dns.Fqdn(stored.Zone), "."), zone) {
 			continue
@@ -626,17 +706,13 @@ func LoadPublishedKeysForZone(zone string, now int64) (map[string]*types.StoredK
 }
 
 func ActiveSigningKeyIDs(zone string, isDNSKEY bool, now int64) ([]string, error) {
-	table, err := storage.Backend.LoadTable(dnssecKeyTable)
+	table, err := cachedDNSSECKeyTable()
 	if err != nil {
-		return nil, fmt.Errorf("load table: %w", err)
+		return nil, err
 	}
 	zone = strings.TrimSuffix(dns.Fqdn(zone), ".")
 	var ids []string
-	for keyID, raw := range table {
-		var stored types.StoredKey
-		if err := json.Unmarshal(raw, &stored); err != nil {
-			return nil, fmt.Errorf("unmarshal StoredKey for %q: %w", keyID, err)
-		}
+	for keyID, stored := range table {
 		normalizeStoredKey(&stored)
 		if !strings.EqualFold(strings.TrimSuffix(dns.Fqdn(stored.Zone), "."), zone) {
 			continue
