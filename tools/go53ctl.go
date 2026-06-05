@@ -133,8 +133,7 @@ Zone storage tools:
 
 Examples:
   go53ctl cluster invite
-  go53ctl cluster invite --join-node-id node-b --join-api-endpoint http://10.0.0.11:8053 --join-sync-endpoint tls://10.0.0.11:53530
-  go53ctl cluster join --token TOKEN
+  go53ctl cluster join --token TOKEN --api http://10.0.0.11:8053 --sync-endpoint tls://10.0.0.11:53530
   go53ctl --list-all-zones --count-only`)
 		os.Exit(0)
 	}
@@ -309,17 +308,17 @@ func handleCluster(args []string) {
 
 func printClusterUsage() {
 	fmt.Println(`Usage:
-  go53ctl cluster invite [--join-node-id NODE --join-api-endpoint URL --join-sync-endpoint tls://HOST:PORT]
-  go53ctl cluster join --token TOKEN [--api http://127.0.0.1:8053] [--dry-run]
+  go53ctl cluster invite [--usage-count 1]
+  go53ctl cluster join --token TOKEN [--api http://127.0.0.1:8053] [--sync-endpoint tls://HOST:PORT] [--dry-run]
 
 cluster invite flags:
   --api                 Local issuer API endpoint, default http://127.0.0.1:8053
   --issuer-node         Existing node_id that signs the invite
   --issuer-private-key  Base64 Ed25519 private key for issuer node
   --cluster-id          Stable cluster identifier
-  --join-node-id        Node ID for the new node
-  --join-api-endpoint   API endpoint where existing nodes can reach the new node
-  --join-sync-endpoint  Distributed sync endpoint for the new node
+  --join-node-id        Optional node ID for the new node; otherwise set during join
+  --join-api-endpoint   Optional API endpoint for the new node; otherwise set during join
+  --join-sync-endpoint  Optional distributed sync endpoint for the new node; otherwise set during join
   --node                Existing node API endpoint. Repeat for every current node.
   --ttl                 Invite lifetime, default 10m
   --usage-count         Number of allowed uses to record for this invite, default 1
@@ -332,6 +331,7 @@ cluster invite flags:
 cluster join flags:
   --token               JWT invite token
   --api                 Local node API endpoint, default from token join_api_endpoint or http://127.0.0.1:8053
+  --sync-endpoint       Advertised sync endpoint for this joining node, default from token or local discovery
   --dry-run             Print generated config and remote patches without applying them`)
 }
 
@@ -387,19 +387,10 @@ func handleClusterInvite(args []string) {
 			nodes = append(nodes, peerAPI)
 		}
 	}
-	if joinNodeID == "" {
-		joinNodeID = "node-" + time.Now().UTC().Format("20060102150405")
-	}
-	if joinAPIEndpoint == "" {
-		joinAPIEndpoint = "http://127.0.0.1:8053"
-	}
-	if joinSyncEndpoint == "" {
-		joinSyncEndpoint = "tls://127.0.0.1:53530"
-	}
 	if usageCount <= 0 {
 		log.Fatalf("--usage-count must be greater than zero")
 	}
-	if issuerNode == "" || issuerPrivateKey == "" || clusterID == "" || joinNodeID == "" || joinAPIEndpoint == "" || joinSyncEndpoint == "" || len(nodes) == 0 {
+	if issuerNode == "" || issuerPrivateKey == "" || clusterID == "" || len(nodes) == 0 {
 		log.Fatalf("missing required invite data; ensure local node is distributed or pass explicit flags")
 	}
 	duration, err := time.ParseDuration(ttl)
@@ -490,10 +481,11 @@ func handleClusterInvite(args []string) {
 
 func handleClusterJoin(args []string) {
 	fs := flag.NewFlagSet("cluster join", flag.ExitOnError)
-	var token, apiEndpoint string
+	var token, apiEndpoint, syncEndpoint string
 	var dryRun bool
 	fs.StringVar(&token, "token", "", "JWT invite token")
 	fs.StringVar(&apiEndpoint, "api", "", "Local node API endpoint")
+	fs.StringVar(&syncEndpoint, "sync-endpoint", "", "Advertised sync endpoint for this joining node")
 	fs.BoolVar(&dryRun, "dry-run", false, "Print config and remote patches without applying them")
 	_ = fs.Parse(args)
 	if token == "" {
@@ -510,15 +502,19 @@ func handleClusterJoin(args []string) {
 	if apiEndpoint == "" {
 		apiEndpoint = "http://127.0.0.1:8053"
 	}
-	privateKey, publicKey, err := generateDistributedKeyPair()
+
+	localConfig, _ := fetchLiveConfig(apiEndpoint)
+	localInfo, _ := fetchNodeDiscovery(apiEndpoint)
+	claims = completeJoinClaims(claims, apiEndpoint, syncEndpoint, localConfig, localInfo)
+	privateKey, publicKey, err := joinKeyPair(localConfig)
 	if err != nil {
 		log.Fatal(err)
 	}
-	localConfig := joinLocalConfig(claims, privateKey)
+	localPatch := joinLocalConfig(claims, privateKey)
 	remotePatches := joinRemotePatches(claims, publicKey)
 
 	if dryRun {
-		printJSON("local config patch", localConfig)
+		printJSON("local config patch", localPatch)
 		for endpoint, patch := range remotePatches {
 			printJSON("remote config patch "+endpoint, patch)
 		}
@@ -527,7 +523,7 @@ func handleClusterJoin(args []string) {
 	if err := consumeDistributedInvite(claims); err != nil {
 		log.Fatalf("consume invite: %v", err)
 	}
-	if err := patchConfig(apiEndpoint, localConfig); err != nil {
+	if err := patchConfig(apiEndpoint, localPatch); err != nil {
 		log.Fatalf("patch local node %s: %v", apiEndpoint, err)
 	}
 	for endpoint, patch := range remotePatches {
@@ -647,6 +643,63 @@ func peerAPIEndpointsFromConfig(root map[string]any) []string {
 		}
 	}
 	return out
+}
+
+func completeJoinClaims(claims clusterInviteClaims, apiEndpoint, syncEndpoint string, localConfig map[string]any, localInfo nodeDiscovery) clusterInviteClaims {
+	if syncEndpoint != "" {
+		claims.JoinSyncEndpoint = strings.TrimSpace(syncEndpoint)
+		claims.SyncPort = syncPortFromEndpoint(claims.JoinSyncEndpoint)
+	}
+	if claims.JoinNodeID == "" {
+		claims.JoinNodeID = strings.TrimSpace(localInfo.NodeID)
+	}
+	if claims.JoinNodeID == "" {
+		claims.JoinNodeID = stringFromPath(localConfig, "distributed", "node_id")
+	}
+	if claims.JoinNodeID == "" {
+		claims.JoinNodeID = "node-" + time.Now().UTC().Format("20060102150405")
+	}
+	if claims.JoinAPIEndpoint == "" {
+		claims.JoinAPIEndpoint = strings.TrimRight(apiEndpoint, "/")
+	}
+	if claims.JoinSyncEndpoint == "" {
+		claims.JoinSyncEndpoint = strings.TrimSpace(syncEndpoint)
+	}
+	if claims.JoinSyncEndpoint == "" {
+		claims.JoinSyncEndpoint = strings.TrimSpace(localInfo.SyncEndpoint)
+	}
+	if claims.JoinSyncEndpoint == "" {
+		claims.JoinSyncEndpoint = "tls://127.0.0.1" + syncPortOrDefault(claims.SyncPort)
+	}
+	if claims.SyncPort == "" {
+		claims.SyncPort = syncPortFromEndpoint(claims.JoinSyncEndpoint)
+	}
+	if claims.Transport == "" {
+		claims.Transport = "tls"
+	}
+	if claims.SyncBindHost == "" {
+		claims.SyncBindHost = "0.0.0.0"
+	}
+	if claims.PushTimeoutMs <= 0 {
+		claims.PushTimeoutMs = 2000
+	}
+	if claims.ResyncIntervalS <= 0 {
+		claims.ResyncIntervalS = 30
+	}
+	return claims
+}
+
+func joinKeyPair(localConfig map[string]any) (privateKeyB64 string, publicKeyB64 string, err error) {
+	existing := strings.TrimSpace(stringFromPath(localConfig, "distributed", "private_key"))
+	if existing == "" {
+		return generateDistributedKeyPair()
+	}
+	privateKey, err := decodeEd25519PrivateKey(existing)
+	if err != nil {
+		return "", "", fmt.Errorf("local distributed private_key is invalid: %w", err)
+	}
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	return existing, base64.StdEncoding.EncodeToString(publicKey), nil
 }
 
 func joinLocalConfig(claims clusterInviteClaims, privateKey string) map[string]any {
@@ -828,8 +881,8 @@ func verifyInviteJWT(token string) (clusterInviteClaims, error) {
 	if !ed25519.Verify(publicKey, []byte(parts[0]+"."+parts[1]), signature) {
 		return clusterInviteClaims{}, errors.New("invite JWT signature verification failed")
 	}
-	if claims.JoinNodeID == "" || claims.JoinSyncEndpoint == "" || len(claims.Nodes) == 0 {
-		return clusterInviteClaims{}, errors.New("invite JWT missing join node or cluster nodes")
+	if len(claims.Nodes) == 0 {
+		return clusterInviteClaims{}, errors.New("invite JWT missing cluster nodes")
 	}
 	return claims, nil
 }
@@ -901,6 +954,17 @@ func syncPortFromEndpoint(endpoint string) string {
 	port := endpoint[idx+1:]
 	if _, err := strconv.Atoi(port); err != nil {
 		return ":53530"
+	}
+	return ":" + port
+}
+
+func syncPortOrDefault(port string) string {
+	port = strings.TrimSpace(port)
+	if port == "" {
+		return ":53530"
+	}
+	if strings.HasPrefix(port, ":") {
+		return port
 	}
 	return ":" + port
 }
