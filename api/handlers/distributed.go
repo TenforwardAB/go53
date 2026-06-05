@@ -6,6 +6,8 @@ import (
 	"strconv"
 
 	"go53/distributed"
+
+	"github.com/gorilla/mux"
 )
 
 func GetDistributedStatusHandler(w http.ResponseWriter, r *http.Request) {
@@ -193,4 +195,35 @@ func PostDistributedMerkleRepairEventsHandler(w http.ResponseWriter, r *http.Req
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(events)
+}
+
+func PostDistributedInviteHandler(w http.ResponseWriter, r *http.Request) {
+	if distributed.Default == nil {
+		http.Error(w, "distributed service is not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	var record distributed.InviteRecord
+	if err := json.NewDecoder(r.Body).Decode(&record); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if err := distributed.Default.SaveInvite(record); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func PostDistributedInviteConsumeHandler(w http.ResponseWriter, r *http.Request) {
+	if distributed.Default == nil {
+		http.Error(w, "distributed service is not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	record, err := distributed.Default.ConsumeInvite(mux.Vars(r)["jti"])
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(record)
 }

@@ -3,21 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>go53 Admin Configuration</title>
-  <meta name="description" content="Administrator configuration and API reference for go53 authoritative DNS.">
+  <title>go53 Config Reference</title>
+  <meta name="description" content="Technical configuration parameter reference for go53 authoritative DNS.">
   <style>
     :root {
-      --bg: #f7f6f2;
+      --bg: #f6f7f8;
       --surface: #ffffff;
-      --text: #1e2428;
-      --muted: #5f6970;
-      --line: #d9ddd7;
-      --accent: #0f766e;
-      --accent-strong: #0b4f49;
-      --code-bg: #172026;
-      --code-text: #e9f1ee;
-      --warn-bg: #fff7df;
-      --warn-border: #e3b341;
+      --text: #172026;
+      --muted: #5b6670;
+      --line: #d7dde2;
+      --accent: #286f8f;
+      --code-bg: #e8eef2;
     }
 
     * {
@@ -33,13 +29,12 @@
       background: var(--bg);
       color: var(--text);
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      line-height: 1.55;
+      line-height: 1.5;
     }
 
     a {
-      color: var(--accent-strong);
-      text-decoration-thickness: 0.08em;
-      text-underline-offset: 0.18em;
+      color: var(--accent);
+      text-underline-offset: 0.16em;
     }
 
     .layout {
@@ -53,14 +48,14 @@
       top: 0;
       height: 100vh;
       overflow: auto;
-      padding: 32px 24px;
+      padding: 30px 24px;
       border-right: 1px solid var(--line);
-      background: #eef2ee;
+      background: #eef2f4;
     }
 
     nav .brand {
       margin: 0 0 4px;
-      font-size: 1.5rem;
+      font-size: 1.45rem;
       font-weight: 800;
     }
 
@@ -93,7 +88,7 @@
     }
 
     main {
-      width: min(1120px, 100%);
+      width: min(1180px, 100%);
       padding: 44px clamp(20px, 5vw, 72px) 80px;
     }
 
@@ -104,32 +99,25 @@
 
     h1 {
       margin: 0 0 12px;
-      font-size: clamp(2rem, 5vw, 3.6rem);
-      line-height: 1.02;
+      font-size: clamp(2rem, 5vw, 3.4rem);
+      line-height: 1.04;
       letter-spacing: 0;
     }
 
     h2 {
       margin: 44px 0 14px;
-      font-size: 1.7rem;
-      letter-spacing: 0;
-    }
-
-    h3 {
-      margin: 28px 0 10px;
-      font-size: 1.15rem;
+      font-size: 1.6rem;
       letter-spacing: 0;
     }
 
     p {
-      max-width: 78ch;
+      max-width: 82ch;
       margin: 0 0 16px;
     }
 
     .lead {
       color: var(--muted);
-      font-size: 1.08rem;
-      max-width: 82ch;
+      font-size: 1.06rem;
     }
 
     .meta {
@@ -148,14 +136,10 @@
       font-size: 0.86rem;
     }
 
-    section {
-      max-width: 980px;
-    }
-
     table {
       width: 100%;
       border-collapse: collapse;
-      margin: 14px 0 28px;
+      margin: 14px 0 30px;
       background: var(--surface);
       border: 1px solid var(--line);
     }
@@ -166,11 +150,11 @@
       border-bottom: 1px solid var(--line);
       text-align: left;
       vertical-align: top;
-      font-size: 0.94rem;
+      font-size: 0.93rem;
     }
 
     th {
-      background: #edf1ed;
+      background: #e9eef2;
       font-weight: 700;
     }
 
@@ -181,70 +165,9 @@
     code {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
       font-size: 0.92em;
-    }
-
-    p code,
-    li code,
-    td code {
-      padding: 0.08rem 0.26rem;
+      padding: 0.08rem 0.24rem;
       border-radius: 4px;
-      background: #e7ece8;
-    }
-
-    pre {
-      max-width: 100%;
-      margin: 12px 0 24px;
-      padding: 16px;
-      overflow: auto;
-      border-radius: 8px;
       background: var(--code-bg);
-      color: var(--code-text);
-    }
-
-    pre code {
-      font-size: 0.9rem;
-      white-space: pre;
-    }
-
-    .note {
-      margin: 16px 0 24px;
-      padding: 14px 16px;
-      border-left: 4px solid var(--accent);
-      background: #e8f3ef;
-    }
-
-    .warning {
-      margin: 16px 0 24px;
-      padding: 14px 16px;
-      border-left: 4px solid var(--warn-border);
-      background: var(--warn-bg);
-    }
-
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 14px;
-      margin: 16px 0 28px;
-    }
-
-    .panel {
-      padding: 16px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: var(--surface);
-    }
-
-    .panel h3 {
-      margin-top: 0;
-    }
-
-    ul {
-      margin-top: 8px;
-      padding-left: 1.25rem;
-    }
-
-    li {
-      margin-bottom: 6px;
     }
 
     footer {
@@ -289,507 +212,209 @@
   <div class="layout">
     <nav aria-label="Documentation navigation">
       <p class="brand">go53</p>
-      <p class="subtitle">Admin configuration</p>
+      <p class="subtitle">Config reference</p>
       <ul>
-        <li><a href="#quick-start">Quick Start</a></li>
-        <li><a href="#deployment">Deployment Config</a></li>
-        <li><a href="#runtime">Runtime Config</a></li>
-        <li><a href="#records">Zones And Records</a></li>
+        <li><a href="#deployment">Deployment</a></li>
+        <li><a href="#runtime">Runtime</a></li>
+        <li><a href="#primary">Primary</a></li>
+        <li><a href="#secondary">Secondary</a></li>
         <li><a href="#dnssec">DNSSEC</a></li>
-        <li><a href="#transfers">Transfers</a></li>
-        <li><a href="#distributed">Distributed Mode</a></li>
-        <li><a href="#tsig">TSIG</a></li>
-        <li><a href="#routes">API Routes</a></li>
-        <li><a href="#operations">Operations</a></li>
+        <li><a href="#distributed">Distributed</a></li>
+        <li><a href="#dev">Development</a></li>
+        <li><a href="#storage-shape">Storage Shape</a></li>
       </ul>
+      <p class="subtitle"><a href="../admin_guide/">Admin guide</a></p>
       <p class="subtitle"><a href="../">Back to go53 docs</a></p>
     </nav>
 
     <main>
       <header>
-        <h1>go53 Administrator Guide</h1>
-        <p class="lead">This page documents how to configure go53, operate primary, secondary, and distributed nodes, manage zones and records through the API, and run DNSSEC with stored keys and query-time signing.</p>
+        <h1>go53 Config Reference</h1>
+        <p class="lead">Technical reference for process environment parameters and persisted live config fields. This page describes what each parameter does in the implementation.</p>
         <div class="meta">
           <span class="pill">Static docs path: /config/</span>
-          <span class="pill">API base: /api</span>
-          <span class="pill">Authoritative DNS only</span>
+          <span class="pill">Live config API: /api/config</span>
+          <span class="pill">Source: config.LiveConfig</span>
         </div>
       </header>
 
-      <section id="quick-start">
-        <h2>Quick Start</h2>
-        <p>go53 starts one DNS listener and one HTTP API listener. Static deployment settings come from environment variables. Live server behavior is stored in the configured storage backend and can be read or patched through <code>/api/config</code>.</p>
-        <pre><code>DNS_PORT=:2053 \
-BIND_HOST=0.0.0.0 \
-API_PORT=:8053 \
-STORAGE_BACKEND=badger \
-go53-server</code></pre>
-        <p>For a new primary node, create the SOA and NS records first, then add ordinary records. SOA serials are updated automatically for non-SOA record changes.</p>
-        <pre><code>curl -X POST http://127.0.0.1:8053/api/zones/example.com./records/SOA \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "ttl": 3600,
-    "ns": "ns1.example.com.",
-    "mbox": "hostmaster.example.com.",
-    "refresh": 3600,
-    "retry": 600,
-    "expire": 1209600,
-    "minimum": 3600
-  }'
-
-curl -X POST http://127.0.0.1:8053/api/zones/example.com./records/NS \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"example.com.","ttl":3600,"ns":"ns1.example.com."}'
-
-curl -X POST http://127.0.0.1:8053/api/zones/example.com./records/A \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"www.example.com.","ttl":300,"ip":"192.0.2.10"}'</code></pre>
-      </section>
-
       <section id="deployment">
-        <h2>Deployment Config</h2>
-        <p>These settings are read at process start. Restart the process after changing them.</p>
+        <h2>Deployment Parameters</h2>
+        <p>Deployment parameters are read from environment variables during process startup.</p>
         <table>
           <thead>
             <tr>
-              <th>Variable</th>
+              <th>Parameter</th>
+              <th>Type</th>
               <th>Default</th>
-              <th>Description</th>
+              <th>Effect</th>
             </tr>
           </thead>
           <tbody>
-            <tr>
-              <td><code>DNS_PORT</code></td>
-              <td><code>:2053</code></td>
-              <td>DNS listener port. Include the leading colon unless you provide a complete host-port elsewhere.</td>
-            </tr>
-            <tr>
-              <td><code>BIND_HOST</code></td>
-              <td><code>0.0.0.0</code></td>
-              <td>Address used by both DNS and API listeners.</td>
-            </tr>
-            <tr>
-              <td><code>API_PORT</code></td>
-              <td><code>:8053</code></td>
-              <td>HTTP API listener port.</td>
-            </tr>
-            <tr>
-              <td><code>STORAGE_BACKEND</code></td>
-              <td><code>badger</code></td>
-              <td>Storage backend. Current deployments normally use Badger for local persistence.</td>
-            </tr>
-            <tr>
-              <td><code>POSTGRES_DSN</code></td>
-              <td><code>host=localhost port=5432 user=postgres password=postgres dbname=go53 sslmode=disable</code></td>
-              <td>PostgreSQL connection string when a Postgres backend is used.</td>
-            </tr>
+            <tr><td><code>BIND_HOST</code></td><td>string</td><td><code>0.0.0.0</code></td><td>Bind address used when starting the DNS UDP/TCP listeners and the HTTP API listener.</td></tr>
+            <tr><td><code>DNS_PORT</code></td><td>string</td><td><code>:2053</code></td><td>Port or host-port suffix used for the authoritative DNS UDP/TCP listeners.</td></tr>
+            <tr><td><code>API_PORT</code></td><td>string</td><td><code>:8053</code></td><td>Port or host-port suffix used for the HTTP API listener.</td></tr>
+            <tr><td><code>STORAGE_BACKEND</code></td><td>string</td><td><code>badger</code></td><td>Selects the storage implementation passed to <code>storage.Init</code>; currently <code>badger</code> is the implemented backend.</td></tr>
+            <tr><td><code>POSTGRES_DSN</code></td><td>string</td><td><code>host=localhost port=5432 user=postgres password=postgres dbname=go53 sslmode=disable</code></td><td>Stored in base config for a Postgres backend; current storage initialization does not enable Postgres.</td></tr>
+            <tr><td><code>BADGER_DIR</code></td><td>string</td><td><code>/data/go53</code></td><td>Filesystem directory opened by the Badger storage backend.</td></tr>
           </tbody>
         </table>
       </section>
 
       <section id="runtime">
-        <h2>Runtime Config</h2>
-        <p>Runtime config is loaded from storage at startup. Use <code>GET /api/config</code> to inspect the active values and <code>PATCH /api/config</code> to update fields.</p>
-        <pre><code>curl http://127.0.0.1:8053/api/config
-
-curl -X PATCH http://127.0.0.1:8053/api/config \
-  -H 'Content-Type: application/json' \
-  -d '{"mode":"primary","allow_axfr":true,"allow_transfer":["127.0.0.1"],"dnssec_enabled":true}'</code></pre>
+        <h2>Runtime Parameters</h2>
+        <p>Runtime parameters are persisted in the <code>config</code> table and exposed through <code>GET/PATCH /api/config</code>.</p>
         <table>
           <thead>
             <tr>
-              <th>Field</th>
+              <th>JSON path</th>
+              <th>Type</th>
               <th>Default</th>
-              <th>Description</th>
+              <th>Effect</th>
             </tr>
           </thead>
           <tbody>
-            <tr><td><code>log_level</code></td><td><code>info</code></td><td>Logging level used by the server.</td></tr>
-            <tr><td><code>mode</code></td><td><code>primary</code></td><td><code>primary</code> allows record changes and sends NOTIFY. <code>secondary</code> blocks zone and key mutations and fetches from the primary. <code>distributed</code> enables multi-node event replication.</td></tr>
-            <tr><td><code>allow_transfer</code></td><td><code>["127.0.0.1"]</code></td><td>Client IP allowlist for AXFR and IXFR.</td></tr>
-            <tr><td><code>allow_recursion</code></td><td><code>false</code></td><td>Reserved for resolver behavior. go53 is intended as an authoritative DNS server.</td></tr>
-            <tr><td><code>dnssec_enabled</code></td><td><code>true</code></td><td>Enables DNSSEC material in answers when DNSSEC is requested.</td></tr>
-            <tr><td><code>default_ttl</code></td><td><code>3600</code></td><td>Fallback TTL for records that do not include one.</td></tr>
-            <tr><td><code>version</code></td><td><code>go53 1.0.1</code></td><td>Server version string.</td></tr>
-            <tr><td><code>max_udp_size</code></td><td><code>1232</code></td><td>EDNS UDP payload size advertised by the server.</td></tr>
-            <tr><td><code>enable_edns</code></td><td><code>true</code></td><td>Controls EDNS support.</td></tr>
-            <tr><td><code>rate_limit_qps</code></td><td><code>0</code></td><td>Per-source query limit. <code>0</code> disables rate limiting.</td></tr>
-            <tr><td><code>allow_axfr</code></td><td><code>false</code></td><td>Enables transfer responses when the client also passes the allowlist and TSIG policy.</td></tr>
-            <tr><td><code>default_ns</code></td><td><code>ns1.go53.local.</code></td><td>Default nameserver used by helper logic when a zone does not specify one.</td></tr>
-            <tr><td><code>enforce_tsig</code></td><td><code>false</code></td><td>Requires valid TSIG for transfers when enabled.</td></tr>
-            <tr><td><code>primary.notify_debounce_ms</code></td><td><code>2000</code></td><td>Delay used to coalesce NOTIFY after record changes.</td></tr>
-            <tr><td><code>primary.ip</code></td><td><code>127.0.0.1</code></td><td>Primary DNS address used by secondary nodes.</td></tr>
-            <tr><td><code>primary.port</code></td><td><code>53</code></td><td>Primary DNS port used by secondary nodes.</td></tr>
-            <tr><td><code>secondary.fetch_debounce_ms</code></td><td><code>3000</code></td><td>Delay used to coalesce secondary transfer fetches.</td></tr>
-            <tr><td><code>secondary.min_fetch_interval_sec</code></td><td><code>10</code></td><td>Minimum interval between secondary fetches for the same zone.</td></tr>
-            <tr><td><code>secondary.max_parallel_fetches</code></td><td><code>5</code></td><td>Maximum concurrent secondary transfer fetches.</td></tr>
-            <tr><td><code>dev.dual_mode</code></td><td><code>false</code></td><td>Development helper for running primary and secondary behavior in one process.</td></tr>
-            <tr><td><code>distributed.node_id</code></td><td><code>""</code></td><td>Stable unique node name used in event origins, vectors, TLS identity, and peer trust maps.</td></tr>
-            <tr><td><code>distributed.peers</code></td><td><code>""</code></td><td>Comma-separated peer endpoints. Use <code>tls://host:port</code> or <code>mtls://host:port</code> for encrypted socket replication.</td></tr>
-            <tr><td><code>distributed.transport</code></td><td><code>http</code></td><td>Replication transport: <code>http</code>, <code>tcp</code>, <code>tls</code>, or <code>mtls</code>. Production distributed clusters should use <code>tls</code> or <code>mtls</code>.</td></tr>
-            <tr><td><code>distributed.sync_bind_host</code></td><td><code>0.0.0.0</code></td><td>Address for the persistent distributed sync listener.</td></tr>
-            <tr><td><code>distributed.sync_port</code></td><td><code>:53530</code></td><td>Port or host-port for the distributed sync listener.</td></tr>
-            <tr><td><code>distributed.private_key</code></td><td><code>""</code></td><td>Base64 Ed25519 private key for event signatures, HELLO proof, and automatic TLS certificate generation.</td></tr>
-            <tr><td><code>distributed.peer_public_keys</code></td><td><code>{}</code></td><td>Map of trusted peer <code>node_id</code> to base64 Ed25519 public key.</td></tr>
-            <tr><td><code>distributed.push_timeout_ms</code></td><td><code>2000</code></td><td>Timeout for peer push, vector, event, Merkle, and repair requests.</td></tr>
-            <tr><td><code>distributed.resync_interval_s</code></td><td><code>30</code></td><td>Periodic background sync interval. Each pass compares vectors first, then Merkle roots per zone for integrity repair.</td></tr>
+            <tr><td><code>log_level</code></td><td>string</td><td><code>info</code></td><td>Runtime log level value stored in config and returned by the config API.</td></tr>
+            <tr><td><code>mode</code></td><td>string</td><td><code>primary</code></td><td>Selects primary, secondary, or distributed behavior for mutation blocking, NOTIFY/transfer behavior, DNSSEC signing paths, and distributed replication enablement.</td></tr>
+            <tr><td><code>allow_transfer</code></td><td>string</td><td><code>127.0.0.1</code></td><td>Comma-separated client address allowlist used for AXFR/IXFR authorization and NOTIFY target selection.</td></tr>
+            <tr><td><code>allow_recursion</code></td><td>bool</td><td><code>false</code></td><td>Reserved runtime flag for recursion behavior; go53 query handling is authoritative-focused.</td></tr>
+            <tr><td><code>dnssec_enabled</code></td><td>bool</td><td><code>true</code></td><td>Enables DNSSEC signing/material generation paths for authoritative answers and zone mutation maintenance when the node is not secondary.</td></tr>
+            <tr><td><code>default_ttl</code></td><td>int seconds</td><td><code>3600</code></td><td>Fallback TTL used when records or generated DNSSEC records do not carry an explicit TTL.</td></tr>
+            <tr><td><code>version</code></td><td>string</td><td><code>go53 1.0.1</code></td><td>Version string returned in CHAOS/version handling and distributed node discovery/status.</td></tr>
+            <tr><td><code>max_udp_size</code></td><td>int bytes</td><td><code>1232</code></td><td>Configured EDNS UDP payload size limit for DNS responses.</td></tr>
+            <tr><td><code>enable_edns</code></td><td>bool</td><td><code>true</code></td><td>Controls whether EDNS handling is enabled in DNS responses.</td></tr>
+            <tr><td><code>rate_limit_qps</code></td><td>int</td><td><code>0</code></td><td>Per-source query rate limit setting; <code>0</code> means disabled.</td></tr>
+            <tr><td><code>allow_axfr</code></td><td>bool</td><td><code>false</code></td><td>Allows AXFR/IXFR response handling when client allowlist and TSIG policy also pass.</td></tr>
+            <tr><td><code>default_ns</code></td><td>string</td><td><code>ns1.go53.local.</code></td><td>Default nameserver value used by helper logic that needs an NS name when zone data does not provide one.</td></tr>
+            <tr><td><code>enforce_tsig</code></td><td>bool</td><td><code>false</code></td><td>Requires valid TSIG on DNS requests in TSIG validation paths and on AXFR/IXFR when enabled.</td></tr>
           </tbody>
         </table>
       </section>
 
-      <section id="records">
-        <h2>Zones And Records</h2>
-        <p>Records are created through <code>POST /api/zones/{zone}/records/{rrtype}</code>. For all normal types, the JSON body must contain <code>name</code>. The <code>ttl</code> field is optional. SOA records use the zone apex as the owner name and do not require <code>name</code>.</p>
-        <div class="warning">
-          <p><strong>Current behavior:</strong> <code>GET /api/zones</code> expects an authenticated user context, but the router currently does not enable <code>AuthMiddleware</code>. Until auth routing is wired in, this endpoint returns <code>401</code>.</p>
-        </div>
+      <section id="primary">
+        <h2>Primary Parameters</h2>
         <table>
           <thead>
             <tr>
+              <th>JSON path</th>
               <th>Type</th>
-              <th>Example body</th>
+              <th>Default</th>
+              <th>Effect</th>
             </tr>
           </thead>
           <tbody>
-            <tr><td><code>A</code></td><td><code>{"name":"www.example.com.","ttl":300,"ip":"192.0.2.10"}</code></td></tr>
-            <tr><td><code>AAAA</code></td><td><code>{"name":"www.example.com.","ttl":300,"ip":"2001:db8::10"}</code></td></tr>
-            <tr><td><code>NS</code></td><td><code>{"name":"example.com.","ttl":3600,"ns":"ns1.example.com."}</code></td></tr>
-            <tr><td><code>MX</code></td><td><code>{"name":"example.com.","ttl":3600,"host":"mail.example.com.","priority":10}</code></td></tr>
-            <tr><td><code>TXT</code></td><td><code>{"name":"example.com.","ttl":300,"text":"v=spf1 -all"}</code></td></tr>
-            <tr><td><code>SPF</code></td><td><code>{"name":"example.com.","ttl":300,"text":"v=spf1 -all"}</code></td></tr>
-            <tr><td><code>CNAME</code></td><td><code>{"name":"alias.example.com.","ttl":300,"target":"www.example.com."}</code></td></tr>
-            <tr><td><code>DNAME</code></td><td><code>{"name":"old.example.com.","ttl":300,"target":"new.example.com."}</code></td></tr>
-            <tr><td><code>PTR</code></td><td><code>{"name":"10.2.0.192.in-addr.arpa.","ttl":300,"ptr":"host.example.com."}</code></td></tr>
-            <tr><td><code>SRV</code></td><td><code>{"name":"_sip._tcp.example.com.","ttl":300,"priority":10,"weight":5,"port":5060,"target":"sip.example.com."}</code></td></tr>
-            <tr><td><code>SOA</code></td><td><code>{"ttl":3600,"ns":"ns1.example.com.","mbox":"hostmaster.example.com.","refresh":3600,"retry":600,"expire":1209600,"minimum":3600}</code></td></tr>
+            <tr><td><code>primary.notify_debounce_ms</code></td><td>int milliseconds</td><td><code>2000</code></td><td>Delay used to coalesce NOTIFY sends after zone record changes.</td></tr>
+            <tr><td><code>primary.ip</code></td><td>string</td><td><code>127.0.0.1</code></td><td>Primary DNS address used by secondary transfer logic.</td></tr>
+            <tr><td><code>primary.port</code></td><td>int</td><td><code>53</code></td><td>Primary DNS port used by secondary transfer logic.</td></tr>
           </tbody>
         </table>
-        <p>For multi-value RRsets such as A, AAAA, NS, MX, TXT, PTR, and SRV, send one value per POST. go53 appends distinct values to the owner name internally. Use <code>GET /api/zones/{zone}/records/{rrtype}/{name}</code> to read one owner name and <code>DELETE /api/zones/{zone}/records/{rrtype}/{name}</code> to delete it. A delete request may include a JSON body when only one value in a multi-value RRset should be removed.</p>
+      </section>
+
+      <section id="secondary">
+        <h2>Secondary Parameters</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>JSON path</th>
+              <th>Type</th>
+              <th>Default</th>
+              <th>Effect</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><code>secondary.fetch_debounce_ms</code></td><td>int milliseconds</td><td><code>3000</code></td><td>Delay used to coalesce secondary AXFR/IXFR fetch scheduling.</td></tr>
+            <tr><td><code>secondary.min_fetch_interval_sec</code></td><td>int seconds</td><td><code>10</code></td><td>Minimum interval between transfer fetches for the same zone.</td></tr>
+            <tr><td><code>secondary.max_parallel_fetches</code></td><td>int</td><td><code>5</code></td><td>Maximum number of concurrent secondary zone fetches.</td></tr>
+          </tbody>
+        </table>
       </section>
 
       <section id="dnssec">
-        <h2>DNSSEC</h2>
-        <p>go53 keeps DNSSEC keys in storage and also uses an in-memory key cache on read-heavy paths. Positive RRsets can be signed at query time and stored RRSIG records are reused as cache until refresh policy says they should be resigned. NSEC and NSEC3 denial material is generated and maintained from zone contents.</p>
+        <h2>DNSSEC Policy Parameters</h2>
         <table>
           <thead>
             <tr>
-              <th>Policy field</th>
+              <th>JSON path</th>
+              <th>Type</th>
               <th>Default</th>
-              <th>Description</th>
+              <th>Effect</th>
             </tr>
           </thead>
           <tbody>
-            <tr><td><code>dnssec.validity_seconds</code></td><td><code>604800</code></td><td>RRSIG validity for ordinary RRsets.</td></tr>
-            <tr><td><code>dnssec.dnskey_validity_seconds</code></td><td><code>1209600</code></td><td>RRSIG validity for DNSKEY RRsets.</td></tr>
-            <tr><td><code>dnssec.refresh_before_seconds</code></td><td><code>86400</code></td><td>Signatures are refreshed before this much validity remains.</td></tr>
-            <tr><td><code>dnssec.jitter_seconds</code></td><td><code>3600</code></td><td>Randomizes refresh timing to avoid all signatures refreshing at once.</td></tr>
-            <tr><td><code>dnssec.inception_skew_seconds</code></td><td><code>3600</code></td><td>Backdates signature inception to tolerate clock skew.</td></tr>
+            <tr><td><code>dnssec.validity_seconds</code></td><td>int seconds</td><td><code>604800</code></td><td>RRSIG validity window for non-DNSKEY RRsets.</td></tr>
+            <tr><td><code>dnssec.dnskey_validity_seconds</code></td><td>int seconds</td><td><code>1209600</code></td><td>RRSIG validity window for DNSKEY RRsets.</td></tr>
+            <tr><td><code>dnssec.refresh_before_seconds</code></td><td>int seconds</td><td><code>86400</code></td><td>Remaining validity threshold that marks an existing RRSIG as needing refresh.</td></tr>
+            <tr><td><code>dnssec.jitter_seconds</code></td><td>int seconds</td><td><code>3600</code></td><td>Deterministic per-signature refresh offset used to spread RRSIG refresh timing.</td></tr>
+            <tr><td><code>dnssec.inception_skew_seconds</code></td><td>int seconds</td><td><code>3600</code></td><td>Amount by which signature inception is backdated to tolerate clock skew.</td></tr>
           </tbody>
         </table>
-        <pre><code>curl -X POST 'http://127.0.0.1:8053/api/dnskeys?zone=example.com.'
-
-curl -X POST http://127.0.0.1:8053/api/dnskeys/rollover \
-  -H 'Content-Type: application/json' \
-  -d '{"zone":"example.com.","role":"zsk","algorithm":"ED25519"}'
-
-curl http://127.0.0.1:8053/api/ds/example.com.
-curl http://127.0.0.1:8053/api/cds/example.com.
-curl http://127.0.0.1:8053/api/cdnskey/example.com.</code></pre>
-        <p>The DNSSEC key lifecycle API supports pre-publish, activation, retirement, revocation, and removal metadata. Use <code>PATCH /api/dnskeys/{keyid}/lifecycle</code> for explicit lifecycle changes, or the helper endpoints for common operations.</p>
-        <table>
-          <thead>
-            <tr>
-              <th>Endpoint</th>
-              <th>Purpose</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr><td><code>GET /api/dnskeys</code></td><td>List stored DNSSEC keys.</td></tr>
-            <tr><td><code>GET /api/dnskeys/{keyid}</code></td><td>Current implementation treats this path value as a zone name and returns keys for that zone.</td></tr>
-            <tr><td><code>POST /api/dnskeys?zone=example.com.</code></td><td>Generate and store the default DNSSEC key set for a zone.</td></tr>
-            <tr><td><code>POST /api/dnskeys/rollover</code></td><td>Create a rollover key. Body or query fields: <code>zone</code>, <code>role</code>, <code>algorithm</code>, <code>publish_at</code>, <code>activate_at</code>.</td></tr>
-            <tr><td><code>PATCH /api/dnskeys/{keyid}/lifecycle</code></td><td>Update timing and lifecycle metadata for a stored key.</td></tr>
-            <tr><td><code>POST /api/dnskeys/{keyid}/retire</code></td><td>Mark a key retired. Optional <code>remove_after_days</code>, default <code>30</code>.</td></tr>
-            <tr><td><code>POST /api/dnskeys/{keyid}/revoke</code></td><td>Mark a key revoked. Optional <code>remove_after_days</code>, default <code>30</code>.</td></tr>
-            <tr><td><code>DELETE /api/dnskeys/{keyid}</code></td><td>Delete a stored key.</td></tr>
-          </tbody>
-        </table>
-        <p>DS and CDS endpoints accept <code>digest</code> or <code>digest_type</code> as comma-separated digest selectors. CDS and CDNSKEY also accept <code>delete=true</code> to publish delete signaling records.</p>
-      </section>
-
-      <section id="transfers">
-        <h2>Transfers</h2>
-        <p>AXFR and IXFR are controlled by runtime config. A primary must enable <code>allow_axfr</code> and include the secondary source address in <code>allow_transfer</code>. If <code>enforce_tsig</code> is true, transfer requests must also carry a valid TSIG.</p>
-        <pre><code>curl -X PATCH http://127.0.0.1:8053/api/config \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "mode": "primary",
-    "allow_axfr": true,
-    "allow_transfer": ["127.0.0.1"],
-    "enforce_tsig": true
-  }'</code></pre>
-        <div class="grid">
-          <div class="panel">
-            <h3>Primary</h3>
-            <p>Record changes update the SOA serial and schedule NOTIFY. <code>primary.notify_debounce_ms</code> controls how aggressively changes are coalesced.</p>
-          </div>
-          <div class="panel">
-            <h3>Secondary</h3>
-            <p>Zone and key mutation endpoints are disabled in secondary mode. Fetch behavior is controlled by <code>secondary.fetch_debounce_ms</code>, <code>secondary.min_fetch_interval_sec</code>, and <code>secondary.max_parallel_fetches</code>.</p>
-          </div>
-        </div>
-        <p>Transfer responses should include complete DNSSEC material for signed zones. IXFR support exists on the transfer path; validate incremental behavior against your production resolver and secondary mix before relying on IXFR-only operation.</p>
       </section>
 
       <section id="distributed">
-        <h2>Distributed Mode</h2>
-        <p>Distributed mode is go53's multi-node replication mode. All nodes run with <code>mode=distributed</code>, accept local mutations, and exchange signed events with peers. Zone records, SOA updates, TSIG keys, DNSSEC keys, and selected live config changes are replicated. Node-local distributed settings are not replicated through config events.</p>
-        <div class="note">
-          <p><strong>Recommended transport:</strong> use <code>tls</code> or <code>mtls</code>. The sync socket is persistent TCP with length-prefixed frames. TLS certificates are generated automatically from each node's Ed25519 distributed key, and peers are trusted by <code>distributed.peer_public_keys</code>.</p>
-        </div>
-        <h3>What Replicates</h3>
+        <h2>Distributed Parameters</h2>
         <table>
           <thead>
             <tr>
-              <th>Data</th>
-              <th>Behavior</th>
+              <th>JSON path</th>
+              <th>Type</th>
+              <th>Default</th>
+              <th>Effect</th>
             </tr>
           </thead>
           <tbody>
-            <tr><td>Zone records</td><td>Record add/delete events replicate per RRset entity. SOA serial changes are published as SOA events.</td></tr>
-            <tr><td>TSIG keys</td><td>TSIG add/update/delete events persist to the peer and refresh the in-memory TSIG cache.</td></tr>
-            <tr><td>DNSSEC keys</td><td>DNSSEC key create/update/delete events persist to the peer, refresh the DNSSEC key cache, and refresh zone DNSSEC key material when applicable.</td></tr>
-            <tr><td>Live config</td><td>Non-distributed live config can replicate. The <code>distributed</code> block itself is stripped so a peer does not overwrite its own identity, private key, peers, or sync listener.</td></tr>
-            <tr><td>Integrity repair</td><td>Periodic sync compares vectors, then Merkle roots per zone. Mismatched branches are narrowed to leaves and repaired from latest signed events.</td></tr>
-          </tbody>
-        </table>
-        <h3>Frame Protocol</h3>
-        <p>The socket transport uses <code>HELLO</code>, <code>VECTOR_REQUEST</code>/<code>VECTOR</code>, <code>EVENT</code>/<code>ACK</code>, <code>EVENTS_REQUEST</code>/<code>EVENTS</code>, and Merkle frames for roots, branches, leaves, and repair events. <code>HELLO</code> is signed with the node Ed25519 private key. Event payloads are also Ed25519 signed.</p>
-        <h3>Required Ports</h3>
-        <p>Each node needs its DNS listener, API listener, and distributed sync listener. The API is used for administration and discovery. Peer-to-peer replication uses <code>distributed.sync_bind_host</code> and <code>distributed.sync_port</code>.</p>
-        <table>
-          <thead>
-            <tr>
-              <th>Port</th>
-              <th>Purpose</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr><td><code>DNS_PORT</code></td><td>Authoritative DNS UDP/TCP listener.</td></tr>
-            <tr><td><code>API_PORT</code></td><td>Admin API and <code>/.well-known/go53-node.json</code> discovery.</td></tr>
-            <tr><td><code>distributed.sync_port</code></td><td>Persistent distributed socket listener. Open this between all distributed peers.</td></tr>
-          </tbody>
-        </table>
-        <h3>Bootstrap Two Nodes</h3>
-        <p>The examples below use node A at <code>10.0.0.10</code> and node B at <code>10.0.0.11</code>. Replace addresses and ports with your deployment values.</p>
-        <pre><code># On node A
-curl -s -X POST http://10.0.0.10:8053/api/distributed/keypair
-
-# On node B
-curl -s -X POST http://10.0.0.11:8053/api/distributed/keypair</code></pre>
-        <p>Save both responses. Each response contains one <code>private_key</code> and one <code>public_key</code>. The private key stays on that node. The public key is configured on peer nodes under that node's <code>node_id</code>.</p>
-        <pre><code># Configure node A
-curl -X PATCH http://10.0.0.10:8053/api/config \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "mode": "distributed",
-    "distributed": {
-      "node_id": "node-a",
-      "transport": "tls",
-      "sync_bind_host": "0.0.0.0",
-      "sync_port": ":53530",
-      "peers": "tls://10.0.0.11:53530",
-      "private_key": "NODE_A_PRIVATE_KEY",
-      "peer_public_keys": {
-        "node-b": "NODE_B_PUBLIC_KEY"
-      },
-      "push_timeout_ms": 2000,
-      "resync_interval_s": 30
-    }
-  }'
-
-# Configure node B
-curl -X PATCH http://10.0.0.11:8053/api/config \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "mode": "distributed",
-    "distributed": {
-      "node_id": "node-b",
-      "transport": "tls",
-      "sync_bind_host": "0.0.0.0",
-      "sync_port": ":53530",
-      "peers": "tls://10.0.0.10:53530",
-      "private_key": "NODE_B_PRIVATE_KEY",
-      "peer_public_keys": {
-        "node-a": "NODE_A_PUBLIC_KEY"
-      },
-      "push_timeout_ms": 2000,
-      "resync_interval_s": 30
-    }
-  }'</code></pre>
-        <p>Verify both nodes expose their advertised identity and TLS material:</p>
-        <pre><code>curl http://10.0.0.10:8053/.well-known/go53-node.json
-curl http://10.0.0.11:8053/.well-known/go53-node.json
-
-curl http://10.0.0.10:8053/api/distributed/status
-curl http://10.0.0.11:8053/api/distributed/status</code></pre>
-        <h3>Add A New Node</h3>
-        <p>When adding node C, generate its keypair, configure node C with all existing peers, then patch every existing node to include node C in both <code>distributed.peers</code> and <code>distributed.peer_public_keys</code>.</p>
-        <pre><code># 1. Generate node C keypair
-curl -s -X POST http://10.0.0.12:8053/api/distributed/keypair
-
-# 2. Configure node C with node A and B as trusted peers
-curl -X PATCH http://10.0.0.12:8053/api/config \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "mode": "distributed",
-    "distributed": {
-      "node_id": "node-c",
-      "transport": "tls",
-      "sync_bind_host": "0.0.0.0",
-      "sync_port": ":53530",
-      "peers": "tls://10.0.0.10:53530,tls://10.0.0.11:53530",
-      "private_key": "NODE_C_PRIVATE_KEY",
-      "peer_public_keys": {
-        "node-a": "NODE_A_PUBLIC_KEY",
-        "node-b": "NODE_B_PUBLIC_KEY"
-      },
-      "push_timeout_ms": 2000,
-      "resync_interval_s": 30
-    }
-  }'
-
-# 3. Patch node A to trust and dial node C
-curl -X PATCH http://10.0.0.10:8053/api/config \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "distributed": {
-      "peers": "tls://10.0.0.11:53530,tls://10.0.0.12:53530",
-      "peer_public_keys": {
-        "node-b": "NODE_B_PUBLIC_KEY",
-        "node-c": "NODE_C_PUBLIC_KEY"
-      }
-    }
-  }'
-
-# 4. Patch node B to trust and dial node C
-curl -X PATCH http://10.0.0.11:8053/api/config \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "distributed": {
-      "peers": "tls://10.0.0.10:53530,tls://10.0.0.12:53530",
-      "peer_public_keys": {
-        "node-a": "NODE_A_PUBLIC_KEY",
-        "node-c": "NODE_C_PUBLIC_KEY"
-      }
-    }
-  }'</code></pre>
-        <div class="warning">
-          <p><strong>Do not reuse distributed private keys.</strong> Each node must have a unique <code>node_id</code> and private key. Reusing either breaks event identity and conflict resolution.</p>
-        </div>
-        <h3>Validation</h3>
-        <p>Create or change a record on any node, then check DNS or the distributed vector on the others. The vector should advance for the origin node. Merkle repair will also converge zone state if a peer missed or drifted from an event.</p>
-        <pre><code>curl -X POST http://10.0.0.10:8053/api/zones/example.com./records/A \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"www.example.com.","ttl":300,"ip":"192.0.2.10"}'
-
-dig @10.0.0.11 www.example.com. A +short
-
-curl http://10.0.0.11:8053/api/distributed/vector
-curl http://10.0.0.11:8053/api/distributed/merkle/roots</code></pre>
-      </section>
-
-      <section id="tsig">
-        <h2>TSIG</h2>
-        <p>TSIG keys are stored separately from DNSSEC keys. Add shared TSIG secrets before enforcing TSIG for transfers.</p>
-        <pre><code>curl -X POST http://127.0.0.1:8053/api/tsig/transfer-key. \
-  -H 'Content-Type: application/json' \
-  -d '{"algorithm":"hmac-sha256.","secret":"BASE64_SECRET"}'
-
-curl http://127.0.0.1:8053/api/tsig
-
-curl -X DELETE http://127.0.0.1:8053/api/tsig/transfer-key.</code></pre>
-        <table>
-          <thead>
-            <tr>
-              <th>Endpoint</th>
-              <th>Purpose</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr><td><code>GET /api/tsig</code></td><td>List configured TSIG keys.</td></tr>
-            <tr><td><code>POST /api/tsig/{name}</code></td><td>Add or replace a TSIG key. Body fields: <code>algorithm</code>, <code>secret</code>.</td></tr>
-            <tr><td><code>DELETE /api/tsig/{name}</code></td><td>Delete a TSIG key.</td></tr>
+            <tr><td><code>distributed.node_id</code></td><td>string</td><td><code>""</code></td><td>Stable local node identity used for event origin, vector-clock keys, HELLO proof, node discovery, and generated TLS certificate identity.</td></tr>
+            <tr><td><code>distributed.peers</code></td><td>string</td><td><code>""</code></td><td>Comma-separated peer endpoints used by distributed outbound workers and resync logic.</td></tr>
+            <tr><td><code>distributed.transport</code></td><td>string</td><td><code>http</code></td><td>Selects distributed transport behavior; supported values are <code>http</code>, <code>tcp</code>, <code>tls</code>, and <code>mtls</code>.</td></tr>
+            <tr><td><code>distributed.sync_bind_host</code></td><td>string</td><td><code>0.0.0.0</code></td><td>Bind address used by the persistent distributed sync listener.</td></tr>
+            <tr><td><code>distributed.sync_port</code></td><td>string</td><td><code>:53530</code></td><td>Port or host-port suffix used by the persistent distributed sync listener and local discovery endpoint.</td></tr>
+            <tr><td><code>distributed.private_key</code></td><td>string</td><td><code>""</code></td><td>Base64 Ed25519 private key used for event signatures, HELLO challenge proof, public key derivation, and automatic TLS certificate generation.</td></tr>
+            <tr><td><code>distributed.peer_public_keys</code></td><td>object</td><td><code>{}</code></td><td>Map of trusted peer <code>node_id</code> to base64 Ed25519 public key used for event signature verification, HELLO verification, and TLS certificate public key pinning.</td></tr>
+            <tr><td><code>distributed.push_timeout_ms</code></td><td>int milliseconds</td><td><code>2000</code></td><td>Timeout used by distributed HTTP client paths, socket peer workers, vector fetches, event delivery, and Merkle repair requests.</td></tr>
+            <tr><td><code>distributed.resync_interval_s</code></td><td>int seconds</td><td><code>30</code></td><td>Interval for background distributed resync, vector comparison, and Merkle integrity repair.</td></tr>
           </tbody>
         </table>
       </section>
 
-      <section id="routes">
-        <h2>API Routes</h2>
+      <section id="dev">
+        <h2>Development Parameters</h2>
         <table>
           <thead>
             <tr>
-              <th>Method</th>
-              <th>Route</th>
-              <th>Notes</th>
+              <th>JSON path</th>
+              <th>Type</th>
+              <th>Default</th>
+              <th>Effect</th>
             </tr>
           </thead>
           <tbody>
-            <tr><td><code>GET</code></td><td><code>/api/config</code></td><td>Read live runtime config.</td></tr>
-            <tr><td><code>PATCH</code></td><td><code>/api/config</code></td><td>Patch live runtime config.</td></tr>
-            <tr><td><code>GET</code></td><td><code>/api/zones</code></td><td>Currently requires auth context, but auth middleware is not enabled in the router.</td></tr>
-            <tr><td><code>POST</code></td><td><code>/api/zones/{zone}/records/{rrtype}</code></td><td>Add a record. Disabled in secondary mode.</td></tr>
-            <tr><td><code>GET</code></td><td><code>/api/zones/{zone}/records/{rrtype}/{name}</code></td><td>Read one RRset owner name.</td></tr>
-            <tr><td><code>DELETE</code></td><td><code>/api/zones/{zone}/records/{rrtype}/{name}</code></td><td>Delete an RRset or selected value.</td></tr>
-            <tr><td><code>GET</code></td><td><code>/api/tsig</code></td><td>List TSIG keys.</td></tr>
-            <tr><td><code>POST</code></td><td><code>/api/tsig/{name}</code></td><td>Add TSIG key.</td></tr>
-            <tr><td><code>DELETE</code></td><td><code>/api/tsig/{name}</code></td><td>Delete TSIG key.</td></tr>
-            <tr><td><code>GET</code></td><td><code>/api/dnskeys</code></td><td>List DNSSEC keys.</td></tr>
-            <tr><td><code>GET</code></td><td><code>/api/dnskeys/{keyid}</code></td><td>Current handler uses the value as a zone name.</td></tr>
-            <tr><td><code>POST</code></td><td><code>/api/dnskeys</code></td><td>Create default DNSSEC keys. Requires <code>zone</code> query parameter.</td></tr>
-            <tr><td><code>POST</code></td><td><code>/api/dnskeys/rollover</code></td><td>Create rollover key.</td></tr>
-            <tr><td><code>PATCH</code></td><td><code>/api/dnskeys/{keyid}/lifecycle</code></td><td>Update key lifecycle metadata.</td></tr>
-            <tr><td><code>POST</code></td><td><code>/api/dnskeys/{keyid}/retire</code></td><td>Retire key.</td></tr>
-            <tr><td><code>POST</code></td><td><code>/api/dnskeys/{keyid}/revoke</code></td><td>Revoke key.</td></tr>
-            <tr><td><code>DELETE</code></td><td><code>/api/dnskeys/{keyid}</code></td><td>Delete key.</td></tr>
-            <tr><td><code>GET</code></td><td><code>/api/ds/{zone}</code></td><td>Return DS records for parent publication.</td></tr>
-            <tr><td><code>GET</code></td><td><code>/api/cds/{zone}</code></td><td>Return CDS records or CDS delete signaling.</td></tr>
-            <tr><td><code>GET</code></td><td><code>/api/cdnskey/{zone}</code></td><td>Return CDNSKEY records or CDNSKEY delete signaling.</td></tr>
-            <tr><td><code>GET</code></td><td><code>/.well-known/go53-node.json</code></td><td>Distributed node discovery document with node ID, public key, fingerprint, advertised sync endpoint, and TLS certificate material.</td></tr>
-            <tr><td><code>GET</code></td><td><code>/api/distributed/status</code></td><td>Show distributed enablement, transport flags, local public key, vector, and node discovery info.</td></tr>
-            <tr><td><code>POST</code></td><td><code>/api/distributed/keypair</code></td><td>Generate an Ed25519 distributed keypair. Store the private key only on the local node.</td></tr>
-            <tr><td><code>GET</code></td><td><code>/api/distributed/vector</code></td><td>Return the local event vector.</td></tr>
-            <tr><td><code>GET</code></td><td><code>/api/distributed/events</code></td><td>Return eventlog entries. Optional query: <code>origin</code>, <code>after</code>.</td></tr>
-            <tr><td><code>POST</code></td><td><code>/api/distributed/events</code></td><td>Manual event ingest. In socket transport mode this is disabled unless <code>?resync=true</code> is supplied.</td></tr>
-            <tr><td><code>GET</code></td><td><code>/api/distributed/merkle/roots</code></td><td>Debug/fallback endpoint for Merkle zone roots.</td></tr>
-            <tr><td><code>GET</code></td><td><code>/api/distributed/merkle/branches?zone=example.com.</code></td><td>Debug/fallback endpoint for one zone's Merkle branches.</td></tr>
-            <tr><td><code>POST</code></td><td><code>/api/distributed/merkle/leaves</code></td><td>Debug/fallback endpoint for Merkle leaves. Body fields: <code>zone</code>, <code>prefixes</code>.</td></tr>
-            <tr><td><code>POST</code></td><td><code>/api/distributed/merkle/repair-events</code></td><td>Debug/fallback endpoint returning latest signed events for requested entities.</td></tr>
+            <tr><td><code>dev.dual_mode</code></td><td>bool</td><td><code>false</code></td><td>Development override that lets NOTIFY/secondary fetch behavior run together in one process.</td></tr>
           </tbody>
         </table>
       </section>
 
-      <section id="operations">
-        <h2>Operations</h2>
-        <h3>Storage And Memory</h3>
-        <p>go53 is designed for read-heavy authoritative service. Zone data and DNSSEC key data should be loaded into memory at startup and persisted to storage on mutations. Badger remains the local persistence layer, while normal query handling should avoid storage reads.</p>
-        <h3>Serving This Documentation</h3>
-        <p>The existing <code>docs/</code> directory can remain the GitHub Pages source. This guide is intentionally placed under <code>docs/config/</code>, so it can be reached as <code>/config/</code> on the current docs host. If the Pages domain is <code>docs.go53.eu</code>, the URL becomes <code>https://docs.go53.eu/config/</code>. If the root site is used instead, serve this directory under the matching path, for example <code>https://go53.eu/docs/config/</code>.</p>
-        <h3>Troubleshooting</h3>
-        <ul>
-          <li>If record mutations fail with <code>503</code>, check whether <code>mode</code> is set to <code>secondary</code>.</li>
-          <li>If AXFR or IXFR fails, check <code>allow_axfr</code>, <code>allow_transfer</code>, source address matching, and TSIG policy.</li>
-          <li>If DNSSEC answers are unsigned, check <code>dnssec_enabled</code>, key lifecycle state, and whether the zone has active signing keys.</li>
-          <li>If DS, CDS, or CDNSKEY output is empty, verify that the zone has an active KSK and that key metadata is loaded.</li>
-          <li>If distributed peers do not connect, check that both sides have each other's <code>node_id</code> in <code>peer_public_keys</code>, use matching <code>tls://</code> peer endpoints, and can reach the sync port.</li>
-          <li>If TLS handshakes fail, compare <code>public_key</code> and <code>tls_public_key_pin</code> from <code>/.well-known/go53-node.json</code> with the configured peer public key.</li>
-          <li>If vectors match but zone data differs, check <code>/api/distributed/merkle/roots</code>; the background sync loop should repair differing branches from signed events.</li>
-          <li>If <code>GET /api/zones</code> returns <code>401</code>, that matches current router behavior until auth middleware is enabled or the handler is adjusted.</li>
-        </ul>
+      <section id="storage-shape">
+        <h2>Storage Shape</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Storage key/table</th>
+              <th>Type</th>
+              <th>Effect</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><code>config/{top-level-json-field}</code></td><td>JSON value</td><td>Each top-level live config field is persisted separately under the <code>config</code> table and merged with defaults at startup.</td></tr>
+            <tr><td><code>zones/{zone}</code></td><td>JSON zone data</td><td>Persistent zone storage loaded into the in-memory zone store during server startup.</td></tr>
+            <tr><td><code>distributed-events/{event-id}</code></td><td>JSON event</td><td>Distributed event log used for vector comparison, replay, and repair.</td></tr>
+            <tr><td><code>distributed-vector/{node-id}</code></td><td>JSON integer</td><td>Persisted local vector-clock state for distributed replication.</td></tr>
+            <tr><td><code>distributed-entities/{entity}</code></td><td>JSON entity clock</td><td>Per-entity conflict metadata used by distributed event dominance checks.</td></tr>
+            <tr><td><code>distributed_invites/{jti}</code></td><td>JSON invite record</td><td>Stored cluster invite usage state used by <code>go53ctl cluster join</code> one-time or limited-use consume checks.</td></tr>
+          </tbody>
+        </table>
       </section>
 
       <footer>
-        <p>Generated for go53 administrators. Keep this page updated when API routes, config fields, or DNSSEC policy behavior changes.</p>
+        <p>This page is a parameter reference. Operational setup examples live in the <a href="../admin_guide/">administrator guide</a>.</p>
       </footer>
     </main>
   </div>

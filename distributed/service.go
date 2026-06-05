@@ -37,9 +37,10 @@ const (
 	EntityTSIGKey    = "tsig_key"
 	EntityDNSSECKey  = "dnssec_key"
 
-	eventsTable = "distributed-events"
-	vectorTable = "distributed-vector"
-	entityTable = "distributed-entities"
+	eventsTable  = "distributed-events"
+	vectorTable  = "distributed-vector"
+	entityTable  = "distributed-entities"
+	invitesTable = "distributed_invites"
 )
 
 type Event struct {
@@ -76,6 +77,20 @@ type NodeInfo struct {
 	TLSFingerprint  string `json:"tls_fingerprint,omitempty"`
 	TLSPublicKeyPin string `json:"tls_public_key_pin,omitempty"`
 	Version         string `json:"version"`
+}
+
+type InviteRecord struct {
+	TokenID    string `json:"jti"`
+	ClusterID  string `json:"cluster_id"`
+	JoinNodeID string `json:"join_node_id"`
+	Issuer     string `json:"issuer"`
+	Token      string `json:"token"`
+	UsageCount int    `json:"usage_count"`
+	UsedCount  int    `json:"used_count"`
+	IssuedAt   int64  `json:"iat"`
+	ExpiresAt  int64  `json:"exp"`
+	CreatedAt  int64  `json:"created_at"`
+	LastUsedAt int64  `json:"last_used_at,omitempty"`
 }
 
 type Service struct {
@@ -975,6 +990,58 @@ func (s *Service) latestEventsForEntities(entities []string) ([]Event, error) {
 
 func (s *Service) LatestEventsForEntities(entities []string) ([]Event, error) {
 	return s.latestEventsForEntities(entities)
+}
+
+func (s *Service) SaveInvite(record InviteRecord) error {
+	if s == nil || s.storage == nil {
+		return errors.New("distributed service is not initialized")
+	}
+	if strings.TrimSpace(record.TokenID) == "" {
+		return errors.New("missing invite jti")
+	}
+	if record.UsageCount <= 0 {
+		return errors.New("invite usage_count must be greater than zero")
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	return s.storage.SaveTable(invitesTable, record.TokenID, data)
+}
+
+func (s *Service) ConsumeInvite(tokenID string) (InviteRecord, error) {
+	if s == nil || s.storage == nil {
+		return InviteRecord{}, errors.New("distributed service is not initialized")
+	}
+	tokenID = strings.TrimSpace(tokenID)
+	if tokenID == "" {
+		return InviteRecord{}, errors.New("missing invite jti")
+	}
+	table, err := s.storage.LoadTable(invitesTable)
+	if err != nil {
+		return InviteRecord{}, err
+	}
+	raw, ok := table[tokenID]
+	if !ok {
+		return InviteRecord{}, errors.New("invite not found")
+	}
+	var record InviteRecord
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return InviteRecord{}, err
+	}
+	now := time.Now().Unix()
+	if record.ExpiresAt > 0 && now > record.ExpiresAt {
+		return InviteRecord{}, errors.New("invite expired")
+	}
+	if record.UsedCount >= record.UsageCount {
+		return InviteRecord{}, errors.New("invite usage limit reached")
+	}
+	record.UsedCount++
+	record.LastUsedAt = now
+	if err := s.SaveInvite(record); err != nil {
+		return InviteRecord{}, err
+	}
+	return record, nil
 }
 
 func (s *Service) eventWinsLocked(event Event) bool {
