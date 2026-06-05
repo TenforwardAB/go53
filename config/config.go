@@ -36,6 +36,15 @@ type SecondaryConfig struct {
 	MinFetchIntervalSec int `json:"min_fetch_interval_sec"` // rate limit per zone
 	MaxParallelFetches  int `json:"max_parallel_fetches"`   // limit concurrent zone fetches
 }
+
+type DNSSECSignaturePolicy struct {
+	ValiditySeconds       int `json:"validity_seconds"`
+	DNSKEYValiditySeconds int `json:"dnskey_validity_seconds"`
+	RefreshBeforeSeconds  int `json:"refresh_before_seconds"`
+	JitterSeconds         int `json:"jitter_seconds"`
+	InceptionSkewSeconds  int `json:"inception_skew_seconds"`
+}
+
 type LiveConfig struct {
 	LogLevel       string `json:"log_level"`       // debug/info/warn
 	Mode           string `json:"mode"`            // primary/secondary/replication
@@ -51,9 +60,10 @@ type LiveConfig struct {
 	DefaultNS      string `json:"default_ns"`      // e.g. ns1.example.com
 	EnforceTSIG    bool   `json:"enforce_tsig"`
 
-	Primary   PrimaryConfig   `json:"primary"`
-	Secondary SecondaryConfig `json:"secondary"`
-	Dev       DevConfig       `json:"dev"`
+	Primary   PrimaryConfig         `json:"primary"`
+	Secondary SecondaryConfig       `json:"secondary"`
+	Dev       DevConfig             `json:"dev"`
+	DNSSEC    DNSSECSignaturePolicy `json:"dnssec"`
 }
 
 type ConfigManager struct {

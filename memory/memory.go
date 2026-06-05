@@ -279,21 +279,14 @@ func (z *InMemoryZoneStore) EnsureSignedRRSet(rrs []dns.RR) ([]dns.RR, error) {
 		return cached, nil
 	}
 
-	keyNames, err := security.GetDNSSECKeyNames(zoneName)
+	isDNSKEY := hdr.Rrtype == dns.TypeDNSKEY
+	keyNames, err := security.GetDNSSECKeyNamesForRRSet(zoneName, isDNSKEY)
 	if err != nil {
 		return nil, err
 	}
 
-	isDNSKEY := hdr.Rrtype == dns.TypeDNSKEY
 	var signed []dns.RR
 	for _, keyName := range keyNames {
-		if isDNSKEY && !strings.HasPrefix(keyName, "ksk_") {
-			continue
-		}
-		if !isDNSKEY && !strings.HasPrefix(keyName, "zsk_") {
-			continue
-		}
-
 		privKey, storedKey, err := security.LoadPrivateKeyFromStorage(keyName)
 		if err != nil {
 			slog.Alert("Failed to load private key %q: %v", keyName, err)
@@ -406,6 +399,82 @@ func (z *InMemoryZoneStore) FindNSEC3Proof(name string) ([]dns.RR, bool) {
 	return nil, false
 }
 
+func (z *InMemoryZoneStore) DenialProofs(name string, qtype uint16, nxdomain bool) []dns.RR {
+	zoneName, _, ok := internal.SplitName(name)
+	if !ok {
+		return nil
+	}
+	zoneName, err := internal.SanitizeFQDN(zoneName)
+	if err != nil {
+		return nil
+	}
+
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+
+	if proofs := z.nsec3DenialProofsLocked(zoneName, name, qtype, nxdomain); len(proofs) > 0 {
+		return proofs
+	}
+	return z.nsecDenialProofsLocked(zoneName, name, qtype, nxdomain)
+}
+
+func (z *InMemoryZoneStore) NameExists(name string) bool {
+	zoneName, _, ok := internal.SplitName(name)
+	if !ok {
+		return false
+	}
+	zoneName, err := internal.SanitizeFQDN(zoneName)
+	if err != nil {
+		return false
+	}
+
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+	return z.ownerExistsLocked(zoneName, dns.Fqdn(name))
+}
+
+func (z *InMemoryZoneStore) WildcardExists(name string) bool {
+	wildcard, ok := z.WildcardName(name)
+	return ok && z.NameExists(wildcard)
+}
+
+func (z *InMemoryZoneStore) WildcardName(name string) (string, bool) {
+	zoneName, _, ok := internal.SplitName(name)
+	if !ok {
+		return "", false
+	}
+	zoneName, err := internal.SanitizeFQDN(zoneName)
+	if err != nil {
+		return "", false
+	}
+
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+	_, _, wildcard, ok := z.closestEncloserLocked(zoneName, name)
+	return wildcard, ok
+}
+
+func (z *InMemoryZoneStore) DelegationFor(name string) (string, []dns.RR, bool) {
+	zoneName, _, ok := internal.SplitName(name)
+	if !ok {
+		return "", nil, false
+	}
+	zoneName, err := internal.SanitizeFQDN(zoneName)
+	if err != nil {
+		return "", nil, false
+	}
+
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+
+	delegation, ok := z.closestDelegationLocked(zoneName, name)
+	if !ok {
+		return "", nil, false
+	}
+	ns, ok := z.nsRecordsLocked(zoneName, delegation)
+	return delegation, ns, ok
+}
+
 func (z *InMemoryZoneStore) maybeSignRRSet(zone, rtype, name string) {
 	slog.Crazy("[maybeSignRRSet]", zone, rtype, name)
 
@@ -442,24 +511,14 @@ func (z *InMemoryZoneStore) maybeSignRRSet(zone, rtype, name string) {
 		return
 	}
 
-	keyNames, err := security.GetDNSSECKeyNames(zone)
+	isDNSKEY := rtype == string(types.TypeDNSKEY)
+	keyNames, err := security.GetDNSSECKeyNamesForRRSet(zone, isDNSKEY)
 	slog.Crazy("[maybeSignRRSet] keyNames", keyNames)
 	if err != nil {
 		return
 	}
 
-	isDNSKEY := rtype == string(types.TypeDNSKEY)
-
 	for _, keyName := range keyNames {
-		if isDNSKEY && !strings.HasPrefix(keyName, "ksk_") {
-			slog.Debug("Skipping key %q: not a KSK and DNSKEY is being signed", keyName)
-			continue
-		}
-		if !isDNSKEY && !strings.HasPrefix(keyName, "zsk_") {
-			slog.Debug("Skipping key %q: not a ZSK and non-DNSKEY record is being signed", keyName)
-			continue
-		}
-
 		privKey, storedKey, err := security.LoadPrivateKeyFromStorage(keyName)
 		if err != nil {
 			slog.Alert("Failed to load private key %q: %v", keyName, err)
@@ -509,12 +568,12 @@ func (z *InMemoryZoneStore) cachedRRSIGs(zone, typeName, name string, covered ui
 	}
 
 	var out []dns.RR
-	now := uint32(time.Now().Unix())
+	now := time.Now()
 	for _, sig := range rrsigRecordsFromRaw(rawList) {
 		if sig.TypeCovered != dns.TypeToString[covered] {
 			continue
 		}
-		if sig.Inception > now || sig.Expiration <= now {
+		if !security.RRSIGFresh(owner, sig, covered, now) {
 			continue
 		}
 		rrsig, err := rrsigRecordToDNS(owner, sig)
@@ -569,6 +628,34 @@ func shouldMaintainNSEC(rtype string) bool {
 	default:
 		return true
 	}
+}
+
+const nsec3OptOutFlag uint8 = 0x01
+
+func nsec3OptOutEnabled(params types.NSEC3ParamRecord) bool {
+	return params.Flags&nsec3OptOutFlag != 0
+}
+
+func isUnsignedDelegationOwner(name string, typesForOwner map[string]bool) bool {
+	if name == "@" {
+		return false
+	}
+	if !typesForOwner[string(types.TypeNS)] {
+		return false
+	}
+	if typesForOwner[string(types.TypeDS)] || typesForOwner[string(types.TypeSOA)] {
+		return false
+	}
+	return true
+}
+
+func nsec3IntervalHasOmittedOptOut(ownerHash, nextHash string, omittedHashes []string) bool {
+	for _, omittedHash := range omittedHashes {
+		if nsec3Covers(strings.ToUpper(ownerHash), strings.ToUpper(nextHash), strings.ToUpper(omittedHash)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (z *InMemoryZoneStore) rebuildNSECChainLocked(zone string) {
@@ -652,6 +739,7 @@ func (z *InMemoryZoneStore) rebuildNSEC3ChainLocked(zone string) {
 	}
 
 	owners := make(map[string]map[string]bool)
+	omittedOptOut := make(map[string]bool)
 	for rtype, namesMap := range zoneMap {
 		if rtype == string(types.TypeRRSIG) || rtype == string(types.TypeNSEC) || rtype == string(types.TypeNSEC3) {
 			continue
@@ -664,6 +752,15 @@ func (z *InMemoryZoneStore) rebuildNSEC3ChainLocked(zone string) {
 				owners[name] = make(map[string]bool)
 			}
 			owners[name][rtype] = true
+		}
+	}
+
+	if nsec3OptOutEnabled(params) {
+		for name, typesForOwner := range owners {
+			if isUnsignedDelegationOwner(name, typesForOwner) {
+				omittedOptOut[name] = true
+				delete(owners, name)
+			}
 		}
 	}
 
@@ -684,6 +781,14 @@ func (z *InMemoryZoneStore) rebuildNSEC3ChainLocked(zone string) {
 			continue
 		}
 		hashed = append(hashed, hashedOwner{name: name, hash: strings.ToUpper(hash)})
+	}
+	omittedHashes := make([]string, 0, len(omittedOptOut))
+	for name := range omittedOptOut {
+		hash := dns.HashName(ownerFQDN(zone, name), params.HashAlgorithm, params.Iterations, params.Salt)
+		if hash == "" {
+			continue
+		}
+		omittedHashes = append(omittedHashes, strings.ToUpper(hash))
 	}
 	sort.Slice(hashed, func(i, j int) bool {
 		return hashed[i].hash < hashed[j].hash
@@ -718,9 +823,14 @@ func (z *InMemoryZoneStore) rebuildNSEC3ChainLocked(zone string) {
 			return dns.StringToType[typeList[i]] < dns.StringToType[typeList[j]]
 		})
 
+		flags := uint8(0)
+		if nsec3IntervalHasOmittedOptOut(owner.hash, next.hash, omittedHashes) {
+			flags = nsec3OptOutFlag
+		}
+
 		nsec3Map[owner.hash] = types.NSEC3Record{
 			HashAlg:    params.HashAlgorithm,
-			Flags:      params.Flags,
+			Flags:      flags,
 			Iterations: params.Iterations,
 			Salt:       params.Salt,
 			NextHashed: next.hash,
@@ -808,6 +918,347 @@ func ownerFQDN(zone, name string) string {
 	default:
 		return dns.Fqdn(name + "." + zone)
 	}
+}
+
+func (z *InMemoryZoneStore) nsecDenialProofsLocked(zone, name string, qtype uint16, nxdomain bool) []dns.RR {
+	qname := dns.Fqdn(name)
+	exact := z.ownerExistsLocked(zone, qname)
+	closest, nextCloser, wildcard, hasClosest := z.closestEncloserLocked(zone, qname)
+
+	var proofs []dns.RR
+	add := func(rrs []dns.RR) {
+		for _, rr := range rrs {
+			if rr != nil {
+				proofs = append(proofs, rr)
+			}
+		}
+	}
+
+	switch {
+	case nxdomain:
+		if hasClosest {
+			if rr, ok := z.nsecProofLocked(zone, nextCloser); ok {
+				add(rr)
+			}
+			if rr, ok := z.nsecProofLocked(zone, wildcard); ok {
+				add(rr)
+			}
+		} else if rr, ok := z.nsecProofLocked(zone, qname); ok {
+			add(rr)
+		}
+	case !exact && hasClosest && z.ownerExistsLocked(zone, wildcard):
+		if rr, ok := z.nsecExactLocked(zone, closest); ok {
+			add(rr)
+		}
+		if rr, ok := z.nsecExactLocked(zone, wildcard); ok {
+			add(rr)
+		}
+	default:
+		if rr, ok := z.nsecExactLocked(zone, qname); ok {
+			add(rr)
+		} else if rr, ok := z.nsecProofLocked(zone, qname); ok {
+			add(rr)
+		}
+	}
+
+	_ = qtype
+	return uniqueRRs(proofs)
+}
+
+func (z *InMemoryZoneStore) nsec3DenialProofsLocked(zone, name string, qtype uint16, nxdomain bool) []dns.RR {
+	params, ok := z.nsec3ParamsLocked(zone)
+	if !ok {
+		return nil
+	}
+	if _, ok := z.cache["zones"][zone][string(types.TypeNSEC3)]; !ok {
+		return nil
+	}
+
+	qname := dns.Fqdn(name)
+	exact := z.ownerExistsLocked(zone, qname)
+	closest, nextCloser, wildcard, hasClosest := z.closestEncloserLocked(zone, qname)
+
+	var proofs []dns.RR
+	add := func(rr dns.RR, ok bool) {
+		if ok && rr != nil {
+			proofs = append(proofs, rr)
+		}
+	}
+
+	switch {
+	case nxdomain:
+		if hasClosest {
+			add(z.nsec3MatchingLocked(zone, closest, params))
+			add(z.nsec3CoveringLocked(zone, nextCloser, params, true))
+			add(z.nsec3CoveringLocked(zone, wildcard, params, false))
+		} else {
+			add(z.nsec3CoveringLocked(zone, qname, params, true))
+		}
+	case !exact && hasClosest && z.ownerExistsLocked(zone, wildcard):
+		add(z.nsec3MatchingLocked(zone, closest, params))
+		add(z.nsec3MatchingLocked(zone, wildcard, params))
+	default:
+		add(z.nsec3MatchingLocked(zone, qname, params))
+	}
+
+	_ = qtype
+	return uniqueRRs(proofs)
+}
+
+func (z *InMemoryZoneStore) nsecProofLocked(zone, name string) ([]dns.RR, bool) {
+	if rr, ok := z.nsecExactLocked(zone, name); ok {
+		return rr, true
+	}
+	return z.nsecCoveringLocked(zone, name)
+}
+
+func (z *InMemoryZoneStore) nsecExactLocked(zone, name string) ([]dns.RR, bool) {
+	nsecMap, ok := z.cache["zones"][zone][string(types.TypeNSEC)]
+	if !ok {
+		return nil, false
+	}
+	qname := strings.ToLower(dns.Fqdn(name))
+	for ownerName, raw := range nsecMap {
+		owner := strings.ToLower(ownerFQDN(zone, ownerName))
+		if owner != qname {
+			continue
+		}
+		rec, ok := nsecRecordFromRaw(raw)
+		if !ok {
+			return nil, false
+		}
+		return []dns.RR{nsecRecordToDNS(ownerFQDN(zone, ownerName), rec)}, true
+	}
+	return nil, false
+}
+
+func (z *InMemoryZoneStore) nsecCoveringLocked(zone, name string) ([]dns.RR, bool) {
+	nsecMap, ok := z.cache["zones"][zone][string(types.TypeNSEC)]
+	if !ok {
+		return nil, false
+	}
+	qname := strings.ToLower(dns.Fqdn(name))
+	for ownerName, raw := range nsecMap {
+		owner := strings.ToLower(ownerFQDN(zone, ownerName))
+		rec, ok := nsecRecordFromRaw(raw)
+		if !ok {
+			continue
+		}
+		next := strings.ToLower(dns.Fqdn(rec.NextDomain))
+		if nsecCovers(owner, next, qname) {
+			return []dns.RR{nsecRecordToDNS(ownerFQDN(zone, ownerName), rec)}, true
+		}
+	}
+	return nil, false
+}
+
+func (z *InMemoryZoneStore) nsec3MatchingLocked(zone, name string, params types.NSEC3ParamRecord) (dns.RR, bool) {
+	nsec3Map, ok := z.cache["zones"][zone][string(types.TypeNSEC3)]
+	if !ok {
+		return nil, false
+	}
+	hash := strings.ToUpper(dns.HashName(dns.Fqdn(name), params.HashAlgorithm, params.Iterations, params.Salt))
+	if hash == "" {
+		return nil, false
+	}
+	raw, ok := nsec3Map[hash]
+	if !ok {
+		return nil, false
+	}
+	rec, ok := nsec3RecordFromRaw(raw)
+	if !ok {
+		return nil, false
+	}
+	return nsec3RecordToDNS(hash, zone, rec), true
+}
+
+func (z *InMemoryZoneStore) nsec3CoveringLocked(zone, name string, params types.NSEC3ParamRecord, allowOptOut bool) (dns.RR, bool) {
+	nsec3Map, ok := z.cache["zones"][zone][string(types.TypeNSEC3)]
+	if !ok {
+		return nil, false
+	}
+	hash := strings.ToUpper(dns.HashName(dns.Fqdn(name), params.HashAlgorithm, params.Iterations, params.Salt))
+	if hash == "" {
+		return nil, false
+	}
+	for ownerHash, raw := range nsec3Map {
+		rec, ok := nsec3RecordFromRaw(raw)
+		if !ok {
+			continue
+		}
+		if rec.Flags&nsec3OptOutFlag != 0 && !allowOptOut {
+			continue
+		}
+		if nsec3Covers(strings.ToUpper(ownerHash), strings.ToUpper(rec.NextHashed), hash) {
+			return nsec3RecordToDNS(ownerHash, zone, rec), true
+		}
+	}
+	return nil, false
+}
+
+func (z *InMemoryZoneStore) closestEncloserLocked(zone, name string) (string, string, string, bool) {
+	qname := dns.Fqdn(name)
+	zoneFQDN := dns.Fqdn(zone)
+	if !strings.HasSuffix(strings.ToLower(qname), strings.ToLower(zoneFQDN)) {
+		return "", "", "", false
+	}
+
+	labels := dns.SplitDomainName(qname)
+	for i := 0; i < len(labels); i++ {
+		candidate := dns.Fqdn(strings.Join(labels[i:], "."))
+		if !z.ownerExistsLocked(zone, candidate) {
+			continue
+		}
+		nextCloser := qname
+		if i > 0 {
+			nextCloser = dns.Fqdn(strings.Join(labels[i-1:], "."))
+		}
+		wildcard := dns.Fqdn("*." + candidate)
+		return candidate, nextCloser, wildcard, true
+	}
+
+	return "", "", "", false
+}
+
+func (z *InMemoryZoneStore) closestDelegationLocked(zone, name string) (string, bool) {
+	qname := dns.Fqdn(name)
+	zoneFQDN := dns.Fqdn(zone)
+	if !strings.HasSuffix(strings.ToLower(qname), strings.ToLower(zoneFQDN)) {
+		return "", false
+	}
+
+	labels := dns.SplitDomainName(qname)
+	for i := 0; i < len(labels); i++ {
+		candidate := dns.Fqdn(strings.Join(labels[i:], "."))
+		if strings.EqualFold(candidate, zoneFQDN) {
+			return "", false
+		}
+		if z.ownerHasTypeLocked(zone, candidate, string(types.TypeNS)) && !z.ownerHasTypeLocked(zone, candidate, string(types.TypeSOA)) {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+func (z *InMemoryZoneStore) nsRecordsLocked(zone, name string) ([]dns.RR, bool) {
+	rel, ok := relativeOwner(zone, name)
+	if !ok {
+		return nil, false
+	}
+	zoneMap, ok := z.cache["zones"][zone]
+	if !ok {
+		return nil, false
+	}
+	raw, ok := zoneMap[string(types.TypeNS)][rel]
+	if !ok {
+		return nil, false
+	}
+
+	var records []types.NSRecord
+	switch v := raw.(type) {
+	case []types.NSRecord:
+		records = append(records, v...)
+	case []interface{}:
+		for _, item := range v {
+			obj, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			ns, _ := obj["ns"].(string)
+			if ns == "" {
+				continue
+			}
+			ttl := uint32(3600)
+			if t, ok := obj["ttl"].(float64); ok {
+				ttl = uint32(t)
+			}
+			records = append(records, types.NSRecord{NS: dns.Fqdn(ns), TTL: ttl})
+		}
+	}
+	if len(records) == 0 {
+		return nil, false
+	}
+
+	out := make([]dns.RR, 0, len(records))
+	for _, rec := range records {
+		out = append(out, &dns.NS{
+			Hdr: dns.RR_Header{
+				Name:   dns.Fqdn(name),
+				Rrtype: dns.TypeNS,
+				Class:  dns.ClassINET,
+				Ttl:    rec.TTL,
+			},
+			Ns: dns.Fqdn(rec.NS),
+		})
+	}
+	return out, true
+}
+
+func (z *InMemoryZoneStore) ownerExistsLocked(zone, name string) bool {
+	rel, ok := relativeOwner(zone, name)
+	if !ok {
+		return false
+	}
+	zoneMap, ok := z.cache["zones"][zone]
+	if !ok {
+		return false
+	}
+	for rtype, namesMap := range zoneMap {
+		if !shouldMaintainNSEC(rtype) {
+			continue
+		}
+		if _, ok := namesMap[rel]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (z *InMemoryZoneStore) ownerHasTypeLocked(zone, name, rtype string) bool {
+	rel, ok := relativeOwner(zone, name)
+	if !ok {
+		return false
+	}
+	zoneMap, ok := z.cache["zones"][zone]
+	if !ok {
+		return false
+	}
+	namesMap, ok := zoneMap[rtype]
+	if !ok {
+		return false
+	}
+	_, ok = namesMap[rel]
+	return ok
+}
+
+func relativeOwner(zone, name string) (string, bool) {
+	fqdn := strings.ToLower(dns.Fqdn(name))
+	zoneFQDN := strings.ToLower(dns.Fqdn(zone))
+	switch {
+	case fqdn == zoneFQDN:
+		return "@", true
+	case strings.HasSuffix(fqdn, "."+zoneFQDN):
+		return strings.TrimSuffix(fqdn[:len(fqdn)-len(zoneFQDN)-1], "."), true
+	default:
+		return "", false
+	}
+}
+
+func uniqueRRs(rrs []dns.RR) []dns.RR {
+	seen := make(map[string]bool, len(rrs))
+	unique := make([]dns.RR, 0, len(rrs))
+	for _, rr := range rrs {
+		if rr == nil {
+			continue
+		}
+		key := rr.String()
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		unique = append(unique, rr)
+	}
+	return unique
 }
 
 func nsecRecordFromRaw(raw any) (types.NSECRecord, bool) {
@@ -1021,40 +1472,7 @@ func nsecCovers(owner, next, qname string) bool {
 }
 
 func nsecCompare(a, b string) int {
-	aLabels := reverseLabels(a)
-	bLabels := reverseLabels(b)
-	limit := len(aLabels)
-	if len(bLabels) < limit {
-		limit = len(bLabels)
-	}
-	for i := 0; i < limit; i++ {
-		switch {
-		case aLabels[i] < bLabels[i]:
-			return -1
-		case aLabels[i] > bLabels[i]:
-			return 1
-		}
-	}
-	switch {
-	case len(aLabels) < len(bLabels):
-		return -1
-	case len(aLabels) > len(bLabels):
-		return 1
-	default:
-		return 0
-	}
-}
-
-func reverseLabels(name string) []string {
-	trimmed := strings.TrimSuffix(strings.ToLower(dns.Fqdn(name)), ".")
-	if trimmed == "" {
-		return nil
-	}
-	labels := strings.Split(trimmed, ".")
-	for i, j := 0, len(labels)-1; i < j; i, j = i+1, j-1 {
-		labels[i], labels[j] = labels[j], labels[i]
-	}
-	return labels
+	return internal.CanonicalDNSSECNameCompare(a, b)
 }
 
 func rrsigRecordsFromRaw(raw any) []*types.RRSIGRecord {

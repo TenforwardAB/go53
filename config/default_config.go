@@ -30,6 +30,14 @@ var DefaultLiveConfig = LiveConfig{
 	Dev: DevConfig{
 		DualMode: false,
 	},
+
+	DNSSEC: DNSSECSignaturePolicy{
+		ValiditySeconds:       7 * 24 * 3600,
+		DNSKEYValiditySeconds: 14 * 24 * 3600,
+		RefreshBeforeSeconds:  24 * 3600,
+		JitterSeconds:         3600,
+		InceptionSkewSeconds:  3600,
+	},
 }
 
 var DefaultBaseConfig = BaseConfig{

@@ -97,6 +97,22 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			}
 		}
 
+		if delegation, ns, ok := zone.DelegationFor(q.Name); ok && shouldReturnReferral(q, delegation) {
+			m.Authoritative = false
+			m.Ns = append(m.Ns, ns...)
+			m.Extra = append(m.Extra, glueRecords(ns)...)
+			answered = true
+		}
+
+		if answered {
+			if wantsDNSSEC {
+				slog.Crazy("Using DNSSEC")
+				m.Answer = appendRRSIGs(m.Answer)
+				m.Ns = appendRRSIGs(m.Ns)
+			}
+			continue
+		}
+
 		switch q.Qtype {
 		case dns.TypeA:
 			if rec, ok := zone.LookupRecord(q.Qtype, q.Name); ok {
@@ -207,14 +223,23 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		}
 
 		if !answered {
-			if !nameExists(q.Name) {
+			if rec, ok := lookupWildcard(q.Qtype, q.Name, wantsDNSSEC); ok {
+				m.Answer = append(m.Answer, rec...)
+				answered = true
+			}
+		}
+
+		if !answered {
+			nameFound := nameExists(q.Name)
+			nxdomain := !nameFound && !zone.WildcardExists(q.Name)
+			if nxdomain {
 				m.Rcode = dns.RcodeNameError
 			}
 			if soaRec, ok := lookupApexSOA(q.Name); ok {
 				m.Ns = append(m.Ns, soaRec...)
 			}
 			if wantsDNSSEC {
-				m.Ns = append(m.Ns, denialRecords(q.Name)...)
+				m.Ns = append(m.Ns, denialRecords(q.Name, q.Qtype, nxdomain)...)
 			}
 		}
 
@@ -236,6 +261,16 @@ func appendRRSIGs(section []dns.RR) []dns.RR {
 		}
 	}
 
+	covered := make(map[string]bool)
+	for _, rr := range section {
+		rrsig, ok := rr.(*dns.RRSIG)
+		if !ok {
+			continue
+		}
+		key := strings.ToLower(rrsig.Hdr.Name) + "|" + dns.TypeToString[rrsig.TypeCovered]
+		covered[key] = true
+	}
+
 	rrsets := make(map[string][]dns.RR)
 	for _, rr := range section {
 		if rr.Header().Rrtype == dns.TypeRRSIG {
@@ -243,6 +278,9 @@ func appendRRSIGs(section []dns.RR) []dns.RR {
 		}
 		hdr := rr.Header()
 		key := strings.ToLower(hdr.Name) + "|" + dns.TypeToString[hdr.Rrtype]
+		if covered[key] {
+			continue
+		}
 		rrsets[key] = append(rrsets[key], rr)
 	}
 
@@ -269,6 +307,95 @@ func appendRRSIGs(section []dns.RR) []dns.RR {
 	return section
 }
 
+func shouldReturnReferral(q dns.Question, delegation string) bool {
+	if strings.EqualFold(q.Name, delegation) && q.Qtype == dns.TypeDS {
+		return false
+	}
+	return true
+}
+
+func glueRecords(nsRecords []dns.RR) []dns.RR {
+	var out []dns.RR
+	seen := make(map[string]bool)
+	for _, rr := range nsRecords {
+		ns, ok := rr.(*dns.NS)
+		if !ok {
+			continue
+		}
+		if !inBailiwickGlue(ns.Ns, ns.Hdr.Name) {
+			continue
+		}
+		for _, rrtype := range []uint16{dns.TypeA, dns.TypeAAAA} {
+			records, ok := zone.LookupRecord(rrtype, ns.Ns)
+			if !ok {
+				continue
+			}
+			for _, glue := range records {
+				key := glue.String()
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				out = append(out, glue)
+			}
+		}
+	}
+	return out
+}
+
+func inBailiwickGlue(target, delegation string) bool {
+	target = strings.ToLower(dns.Fqdn(target))
+	delegation = strings.ToLower(dns.Fqdn(delegation))
+	return target == delegation || strings.HasSuffix(target, "."+delegation)
+}
+
+func lookupWildcard(rrtype uint16, qname string, wantsDNSSEC bool) ([]dns.RR, bool) {
+	if nameExists(qname) {
+		return nil, false
+	}
+	wildcard, ok := zone.WildcardName(qname)
+	if !ok {
+		return nil, false
+	}
+
+	if rec, ok := zone.LookupRecord(rrtype, wildcard); ok {
+		return synthesizeWildcard(qname, rec, wantsDNSSEC), true
+	}
+	if rrtype != dns.TypeCNAME {
+		if rec, ok := zone.LookupRecord(dns.TypeCNAME, wildcard); ok {
+			return synthesizeWildcard(qname, rec, wantsDNSSEC), true
+		}
+	}
+	return nil, false
+}
+
+func synthesizeWildcard(qname string, wildcardRRSet []dns.RR, wantsDNSSEC bool) []dns.RR {
+	var out []dns.RR
+	for _, rr := range wildcardRRSet {
+		copied := dns.Copy(rr)
+		copied.Header().Name = dns.Fqdn(qname)
+		out = append(out, copied)
+	}
+
+	if !wantsDNSSEC {
+		return out
+	}
+	rrsigRecords, err := zone.EnsureSignedRRSet(wildcardRRSet)
+	if err != nil {
+		slog.Warn("DNSSEC wildcard signing failed: %v", err)
+		return out
+	}
+	for _, sig := range rrsigRecords {
+		rrsig, ok := dns.Copy(sig).(*dns.RRSIG)
+		if !ok {
+			continue
+		}
+		rrsig.Hdr.Name = dns.Fqdn(qname)
+		out = append(out, rrsig)
+	}
+	return out
+}
+
 func lookupApexSOA(name string) ([]dns.RR, bool) {
 	zoneName, _, ok := internal.SplitName(name)
 	if !ok {
@@ -281,56 +408,12 @@ func lookupApexSOA(name string) ([]dns.RR, bool) {
 	return zone.LookupRecord(dns.TypeSOA, apex)
 }
 
-func denialRecords(name string) []dns.RR {
-	if nsec3 := matchingNSEC3(name); len(nsec3) > 0 {
-		return nsec3
-	}
-	if nsec, ok := zone.LookupRecord(dns.TypeNSEC, name); ok {
-		return nsec
-	}
-	if nsec, ok := zone.FindNSECProof(name); ok {
-		return nsec
-	}
-	return nil
-}
-
-func matchingNSEC3(name string) []dns.RR {
-	if nsec3, ok := zone.FindNSEC3Proof(name); ok {
-		return nsec3
-	}
-	return nil
+func denialRecords(name string, qtype uint16, nxdomain bool) []dns.RR {
+	return zone.DenialProofs(name, qtype, nxdomain)
 }
 
 func nameExists(name string) bool {
-	for _, rrtype := range []uint16{
-		dns.TypeA,
-		dns.TypeAAAA,
-		dns.TypeCNAME,
-		dns.TypeMX,
-		dns.TypeNS,
-		dns.TypeSOA,
-		dns.TypeTXT,
-		dns.TypeSRV,
-		dns.TypePTR,
-		dns.TypeCAA,
-		dns.TypeDNAME,
-		dns.TypeDNSKEY,
-		dns.TypeDS,
-		dns.TypeNAPTR,
-		dns.TypeSPF,
-		dns.TypeHTTPS,
-		dns.TypeSVCB,
-		dns.TypeLOC,
-		dns.TypeCERT,
-		dns.TypeSSHFP,
-		dns.TypeURI,
-		dns.TypeAPL,
-	} {
-		if _, ok := zone.LookupRecord(rrtype, name); ok {
-			return true
-		}
-	}
-	return false
+	return zone.NameExists(name)
 }
 
 func transferClientAllowed(remoteAddr string, allowTransfer string) bool {

@@ -49,6 +49,9 @@ func (NSEC3) Add(zone, name string, value interface{}, ttl *uint32) error {
 	if err != nil {
 		return err
 	}
+	if flags&^1 != 0 {
+		return fmt.Errorf("NSEC3 flags contains unsupported bits: %d", flags)
+	}
 	iterations, err := getUint16("iterations")
 	if err != nil {
 		return err

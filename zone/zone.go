@@ -129,6 +129,46 @@ func FindNSEC3Proof(name string) ([]dns.RR, bool) {
 	return mem.FindNSEC3Proof(name)
 }
 
+func DenialProofs(name string, qtype uint16, nxdomain bool) []dns.RR {
+	mem := rtypes.GetMemStore()
+	if mem == nil {
+		return nil
+	}
+	return mem.DenialProofs(name, qtype, nxdomain)
+}
+
+func NameExists(name string) bool {
+	mem := rtypes.GetMemStore()
+	if mem == nil {
+		return false
+	}
+	return mem.NameExists(name)
+}
+
+func WildcardExists(name string) bool {
+	mem := rtypes.GetMemStore()
+	if mem == nil {
+		return false
+	}
+	return mem.WildcardExists(name)
+}
+
+func WildcardName(name string) (string, bool) {
+	mem := rtypes.GetMemStore()
+	if mem == nil {
+		return "", false
+	}
+	return mem.WildcardName(name)
+}
+
+func DelegationFor(name string) (string, []dns.RR, bool) {
+	mem := rtypes.GetMemStore()
+	if mem == nil {
+		return "", nil, false
+	}
+	return mem.DelegationFor(name)
+}
+
 func init() {
 	zonereader.LookupRecordFunc = LookupRecord
 }

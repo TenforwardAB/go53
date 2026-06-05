@@ -22,10 +22,23 @@ import (
 	"go53/zonereader"
 	"log"
 	"math/big"
+	"sort"
 	"strings"
+	"time"
 )
 
 const dnssecKeyTable = "dnssec_keys"
+
+const (
+	KeyStateGenerated = "generated"
+	KeyStatePublished = "published"
+	KeyStateActive    = "active"
+	KeyStateRetired   = "retired"
+	KeyStateRevoked   = "revoked"
+	KeyStateRemoved   = "removed"
+
+	dnskeyRevokeFlag uint16 = 0x0080
+)
 
 var supportedAlgos = []struct {
 	Algorithm uint8
@@ -40,6 +53,7 @@ var supportedAlgos = []struct {
 }
 
 func GenerateAndStoreAllKeys(zone string) error {
+	now := time.Now().Unix()
 	for _, algo := range supportedAlgos {
 		for _, flag := range algo.Flags {
 			priv, pub, err := generateKeyPair(algo.Algorithm)
@@ -70,6 +84,10 @@ func GenerateAndStoreAllKeys(zone string) error {
 				Flags:      flag,
 				PrivatePEM: pemPriv,
 				PublicKey:  base64.StdEncoding.EncodeToString(pubBytes),
+				State:      KeyStateActive,
+				CreatedAt:  now,
+				PublishAt:  now,
+				ActivateAt: now,
 			}
 
 			serialized, err := json.Marshal(stored)
@@ -257,10 +275,21 @@ func PublicKeyToDNS(pub crypto.PublicKey, algorithm uint8) ([]byte, error) {
 }
 
 func flagName(f uint16) string {
-	if f == 257 {
+	if f&1 == 1 {
 		return "ksk"
 	}
 	return "zsk"
+}
+
+func roleFlags(role string) (uint16, error) {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "ksk":
+		return 257, nil
+	case "zsk":
+		return 256, nil
+	default:
+		return 0, fmt.Errorf("unknown DNSSEC key role %q", role)
+	}
 }
 
 func SavePrivateKeyToStorage(zone, keyID, algorithmName string, priv crypto.PrivateKey, pub crypto.PublicKey, flags uint16) error {
@@ -283,6 +312,10 @@ func SavePrivateKeyToStorage(zone, keyID, algorithmName string, priv crypto.Priv
 		Flags:      flags,
 		PrivatePEM: pemPriv,
 		PublicKey:  base64.StdEncoding.EncodeToString(pubBytes),
+		State:      KeyStateActive,
+		CreatedAt:  time.Now().Unix(),
+		PublishAt:  time.Now().Unix(),
+		ActivateAt: time.Now().Unix(),
 	}
 
 	data, err := json.Marshal(stored)
@@ -295,6 +328,154 @@ func SavePrivateKeyToStorage(zone, keyID, algorithmName string, priv crypto.Priv
 	}
 
 	return nil
+}
+
+func GenerateRolloverKey(zone, role, algorithmName string, publishAt, activateAt int64) (string, *types.StoredKey, error) {
+	flags, err := roleFlags(role)
+	if err != nil {
+		return "", nil, err
+	}
+	algorithm := AlgorithmNumberFromName(algorithmName)
+	if algorithm == 0 {
+		return "", nil, fmt.Errorf("unsupported algorithm %q", algorithmName)
+	}
+	now := time.Now().Unix()
+	if publishAt == 0 {
+		publishAt = now
+	}
+	if activateAt == 0 {
+		activateAt = publishAt
+	}
+
+	priv, pub, err := generateKeyPair(algorithm)
+	if err != nil {
+		return "", nil, err
+	}
+	pubBytes, err := PublicKeyToDNS(pub, algorithm)
+	if err != nil {
+		return "", nil, err
+	}
+	pemPriv, err := EncodePrivateKeyPEM(priv)
+	if err != nil {
+		return "", nil, err
+	}
+	keyTag := ComputeKeyTag(flags, 3, algorithm, pubBytes)
+	state := KeyStatePublished
+	if activateAt <= now {
+		state = KeyStateActive
+	}
+	stored := &types.StoredKey{
+		KeyTag:     keyTag,
+		Zone:       strings.TrimSuffix(dns.Fqdn(zone), "."),
+		Algorithm:  algorithmName,
+		Flags:      flags,
+		PrivatePEM: pemPriv,
+		PublicKey:  base64.StdEncoding.EncodeToString(pubBytes),
+		State:      state,
+		CreatedAt:  now,
+		PublishAt:  publishAt,
+		ActivateAt: activateAt,
+	}
+	keyID := keyIDForStored(stored)
+	data, err := json.Marshal(stored)
+	if err != nil {
+		return "", nil, err
+	}
+	if err := storage.Backend.SaveTable(dnssecKeyTable, keyID, data); err != nil {
+		return "", nil, err
+	}
+	return keyID, stored, nil
+}
+
+func UpdateKeyLifecycle(keyID string, update types.StoredKey) (*types.StoredKey, error) {
+	stored, err := LoadStoredKey(keyID)
+	if err != nil {
+		return nil, err
+	}
+	if update.State != "" {
+		stored.State = update.State
+	}
+	if update.PublishAt != 0 {
+		stored.PublishAt = update.PublishAt
+	}
+	if update.ActivateAt != 0 {
+		stored.ActivateAt = update.ActivateAt
+	}
+	if update.RetireAt != 0 {
+		stored.RetireAt = update.RetireAt
+	}
+	if update.RemoveAt != 0 {
+		stored.RemoveAt = update.RemoveAt
+	}
+	if update.RevokedAt != 0 {
+		stored.RevokedAt = update.RevokedAt
+	}
+	if update.Revoke {
+		stored.Revoke = true
+		if stored.RevokedAt == 0 {
+			stored.RevokedAt = time.Now().Unix()
+		}
+		stored.State = KeyStateRevoked
+	}
+	if update.State == "" {
+		stored.State = keyStateAt(stored, time.Now().Unix())
+	}
+	if err := saveStoredKey(keyID, stored); err != nil {
+		return nil, err
+	}
+	return stored, nil
+}
+
+func RetireKey(keyID string, removeAfter time.Duration) (*types.StoredKey, error) {
+	now := time.Now().Unix()
+	if removeAfter == 0 {
+		removeAfter = 30 * 24 * time.Hour
+	}
+	return UpdateKeyLifecycle(keyID, types.StoredKey{
+		State:    KeyStateRetired,
+		RetireAt: now,
+		RemoveAt: now + int64(removeAfter.Seconds()),
+	})
+}
+
+func RevokeKey(keyID string, removeAfter time.Duration) (*types.StoredKey, error) {
+	now := time.Now().Unix()
+	if removeAfter == 0 {
+		removeAfter = 30 * 24 * time.Hour
+	}
+	return UpdateKeyLifecycle(keyID, types.StoredKey{
+		State:     KeyStateRevoked,
+		Revoke:    true,
+		RevokedAt: now,
+		RetireAt:  now,
+		RemoveAt:  now + int64(removeAfter.Seconds()),
+	})
+}
+
+func LoadStoredKey(keyID string) (*types.StoredKey, error) {
+	table, err := storage.Backend.LoadTable(dnssecKeyTable)
+	if err != nil {
+		return nil, fmt.Errorf("load table: %w", err)
+	}
+	data, ok := table[keyID]
+	if !ok {
+		return nil, fmt.Errorf("key %q not found", keyID)
+	}
+	var stored types.StoredKey
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return nil, fmt.Errorf("unmarshal StoredKey: %w", err)
+	}
+	normalizeStoredKey(&stored)
+	return &stored, nil
+}
+
+func saveStoredKey(keyID string, stored *types.StoredKey) error {
+	normalizeStoredKey(stored)
+	data, err := json.Marshal(stored)
+	if err != nil {
+		return err
+	}
+	return storage.Backend.SaveTable(dnssecKeyTable, keyID, data)
 }
 
 func LoadPrivateKeyFromStorage(keyID string) (crypto.PrivateKey, *types.StoredKey, error) {
@@ -312,6 +493,7 @@ func LoadPrivateKeyFromStorage(keyID string) (crypto.PrivateKey, *types.StoredKe
 	if err := json.Unmarshal(data, &stored); err != nil {
 		return nil, nil, fmt.Errorf("unmarshal StoredKey: %w", err)
 	}
+	normalizeStoredKey(&stored)
 
 	block, _ := pem.Decode([]byte(stored.PrivatePEM))
 	if block == nil {
@@ -350,11 +532,171 @@ func LoadAllKeysForZone(zone string) ([]*types.StoredKey, error) {
 			if err := json.Unmarshal(raw, &stored); err != nil {
 				return nil, fmt.Errorf("unmarshal StoredKey for %q: %w", keyID, err)
 			}
+			normalizeStoredKey(&stored)
 			keys = append(keys, &stored)
 		}
 	}
 
 	return keys, nil
+}
+
+func LoadPublishedKeysForZone(zone string, now int64) (map[string]*types.StoredKey, error) {
+	table, err := storage.Backend.LoadTable(dnssecKeyTable)
+	if err != nil {
+		return nil, fmt.Errorf("load table: %w", err)
+	}
+	zone = strings.TrimSuffix(dns.Fqdn(zone), ".")
+	out := make(map[string]*types.StoredKey)
+	for keyID, raw := range table {
+		var stored types.StoredKey
+		if err := json.Unmarshal(raw, &stored); err != nil {
+			return nil, fmt.Errorf("unmarshal StoredKey for %q: %w", keyID, err)
+		}
+		normalizeStoredKey(&stored)
+		if !strings.EqualFold(strings.TrimSuffix(dns.Fqdn(stored.Zone), "."), zone) {
+			continue
+		}
+		if keyPublishedAt(&stored, now) {
+			copy := stored
+			out[keyID] = &copy
+		}
+	}
+	return out, nil
+}
+
+func ActiveSigningKeyIDs(zone string, isDNSKEY bool, now int64) ([]string, error) {
+	table, err := storage.Backend.LoadTable(dnssecKeyTable)
+	if err != nil {
+		return nil, fmt.Errorf("load table: %w", err)
+	}
+	zone = strings.TrimSuffix(dns.Fqdn(zone), ".")
+	var ids []string
+	for keyID, raw := range table {
+		var stored types.StoredKey
+		if err := json.Unmarshal(raw, &stored); err != nil {
+			return nil, fmt.Errorf("unmarshal StoredKey for %q: %w", keyID, err)
+		}
+		normalizeStoredKey(&stored)
+		if !strings.EqualFold(strings.TrimSuffix(dns.Fqdn(stored.Zone), "."), zone) {
+			continue
+		}
+		if isDNSKEY && !isKSK(&stored) {
+			continue
+		}
+		if !isDNSKEY && !isZSK(&stored) {
+			continue
+		}
+		if keySignsAt(&stored, now) {
+			ids = append(ids, keyID)
+		}
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
+func DNSKEYFlags(stored *types.StoredKey) uint16 {
+	if stored == nil {
+		return 0
+	}
+	flags := stored.Flags
+	if stored.Revoke {
+		flags |= dnskeyRevokeFlag
+	}
+	return flags
+}
+
+func DNSKEYKeyTag(stored *types.StoredKey) uint16 {
+	if stored == nil {
+		return 0
+	}
+	pubBytes, err := base64.StdEncoding.DecodeString(stored.PublicKey)
+	if err != nil {
+		return stored.KeyTag
+	}
+	return ComputeKeyTag(DNSKEYFlags(stored), 3, AlgorithmNumberFromName(stored.Algorithm), pubBytes)
+}
+
+func normalizeStoredKey(stored *types.StoredKey) {
+	if stored == nil {
+		return
+	}
+	stored.Zone = strings.TrimSuffix(dns.Fqdn(stored.Zone), ".")
+	if stored.State == "" {
+		stored.State = KeyStateActive
+	}
+	if stored.CreatedAt == 0 {
+		stored.CreatedAt = time.Now().Unix()
+	}
+	if stored.PublishAt == 0 {
+		stored.PublishAt = stored.CreatedAt
+	}
+	if stored.State == KeyStateActive && stored.ActivateAt == 0 {
+		stored.ActivateAt = stored.PublishAt
+	}
+}
+
+func keyPublishedAt(stored *types.StoredKey, now int64) bool {
+	normalizeStoredKey(stored)
+	if now == 0 {
+		now = time.Now().Unix()
+	}
+	if stored.State == KeyStateRemoved {
+		return false
+	}
+	if stored.PublishAt > now {
+		return false
+	}
+	if stored.RemoveAt != 0 && stored.RemoveAt <= now {
+		return false
+	}
+	return true
+}
+
+func keySignsAt(stored *types.StoredKey, now int64) bool {
+	normalizeStoredKey(stored)
+	if now == 0 {
+		now = time.Now().Unix()
+	}
+	if stored.Revoke || stored.State == KeyStateRevoked || stored.State == KeyStateRemoved {
+		return false
+	}
+	if stored.ActivateAt == 0 || stored.ActivateAt > now {
+		return false
+	}
+	if stored.RetireAt != 0 && stored.RetireAt <= now {
+		return false
+	}
+	return true
+}
+
+func keyStateAt(stored *types.StoredKey, now int64) string {
+	normalizeStoredKey(stored)
+	switch {
+	case stored.RemoveAt != 0 && stored.RemoveAt <= now:
+		return KeyStateRemoved
+	case stored.Revoke:
+		return KeyStateRevoked
+	case stored.RetireAt != 0 && stored.RetireAt <= now:
+		return KeyStateRetired
+	case stored.ActivateAt != 0 && stored.ActivateAt <= now:
+		return KeyStateActive
+	case stored.PublishAt != 0 && stored.PublishAt <= now:
+		return KeyStatePublished
+	default:
+		return KeyStateGenerated
+	}
+}
+
+func isKSK(stored *types.StoredKey) bool {
+	return stored.Flags&1 == 1
+}
+
+func isZSK(stored *types.StoredKey) bool {
+	return stored.Flags&1 == 0
+}
+
+func keyIDForStored(stored *types.StoredKey) string {
+	return fmt.Sprintf("%s_%s_%s_%d", flagName(stored.Flags), strings.TrimSuffix(dns.Fqdn(stored.Zone), "."), stored.Algorithm, stored.KeyTag)
 }
 
 func GetDNSSECKeys(zoneName string) ([]*dns.DNSKEY, []*dns.DNSKEY, error) {
@@ -387,41 +729,11 @@ func GetDNSSECKeys(zoneName string) ([]*dns.DNSKEY, []*dns.DNSKEY, error) {
 }
 
 func GetDNSSECKeyNames(zoneName string) ([]string, error) {
-	zoneApex, _ := internal.SanitizeFQDN(zoneName)
+	return ActiveSigningKeyIDs(zoneName, false, time.Now().Unix())
+}
 
-	recs, ok := zonereader.LookupRecord(dns.TypeDNSKEY, zoneApex)
-	if !ok {
-		return nil, fmt.Errorf("no DNSKEY records found for %s", zoneApex)
-	}
-
-	var keyNames []string
-
-	for _, rr := range recs {
-		dnskey, ok := rr.(*dns.DNSKEY)
-		if !ok {
-			continue
-		}
-
-		var prefix string
-		switch dnskey.Flags {
-		case 257:
-			prefix = "ksk"
-		case 256:
-			prefix = "zsk"
-		default:
-			continue
-		}
-
-		algoName := dns.AlgorithmToString[dnskey.Algorithm]
-		if algoName == "" {
-			algoName = fmt.Sprintf("ALG%d", dnskey.Algorithm)
-		}
-
-		keyName := fmt.Sprintf("%s_%s_%s", prefix, strings.TrimSuffix(zoneApex, "."), algoName)
-		keyNames = append(keyNames, keyName)
-	}
-
-	return keyNames, nil
+func GetDNSSECKeyNamesForRRSet(zoneName string, isDNSKEY bool) ([]string, error) {
+	return ActiveSigningKeyIDs(zoneName, isDNSKEY, time.Now().Unix())
 }
 
 func ComputeKeyTag(flags uint16, protocol uint8, algorithm uint8, pubkey []byte) uint16 {

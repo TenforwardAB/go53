@@ -2,9 +2,12 @@ package security
 
 import (
 	"crypto"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/TenforwardAB/slog"
+	"go53/config"
 	"go53/internal"
 	"go53/types"
 	"reflect"
@@ -41,6 +44,36 @@ func ToRRSet(name string, rtype string, raw any) ([]dns.RR, error) {
 	return rrs, nil
 }
 
+type SignaturePolicy struct {
+	Validity      time.Duration
+	RefreshBefore time.Duration
+	Jitter        time.Duration
+	InceptionSkew time.Duration
+}
+
+func PolicyForRRType(rrtype uint16) SignaturePolicy {
+	cfg := config.AppConfig.GetLive().DNSSEC
+	validity := secondsOrDefault(cfg.ValiditySeconds, 7*24*3600)
+	if rrtype == dns.TypeDNSKEY {
+		validity = secondsOrDefault(cfg.DNSKEYValiditySeconds, 14*24*3600)
+	}
+	refreshBefore := secondsOrDefault(cfg.RefreshBeforeSeconds, 24*3600)
+	jitter := secondsOrDefault(cfg.JitterSeconds, 3600)
+	inceptionSkew := secondsOrDefault(cfg.InceptionSkewSeconds, 3600)
+	if refreshBefore >= validity {
+		refreshBefore = validity / 3
+	}
+	if jitter >= refreshBefore {
+		jitter = refreshBefore / 2
+	}
+	return SignaturePolicy{
+		Validity:      time.Duration(validity) * time.Second,
+		RefreshBefore: time.Duration(refreshBefore) * time.Second,
+		Jitter:        time.Duration(jitter) * time.Second,
+		InceptionSkew: time.Duration(inceptionSkew) * time.Second,
+	}
+}
+
 func SignRRSet(rrs []dns.RR, key crypto.Signer, keyTag uint16, signerName string, algorithm uint8) (*dns.RRSIG, error) {
 	slog.Crazy("[SignRRSet] len(rrs): %d", len(rrs))
 	slog.Crazy("[SignRRSet] keyTag: %d", keyTag)
@@ -52,6 +85,9 @@ func SignRRSet(rrs []dns.RR, key crypto.Signer, keyTag uint16, signerName string
 	fqdn, _ := internal.SanitizeFQDN(signerName)
 
 	hdr := rrs[0].Header()
+	policy := PolicyForRRType(hdr.Rrtype)
+	now := time.Now()
+	jitter := signatureJitterSeconds(hdr.Name, hdr.Rrtype, keyTag, policy.Jitter)
 	rrsig := &dns.RRSIG{
 		Hdr: dns.RR_Header{
 			Name:   hdr.Name,
@@ -64,8 +100,8 @@ func SignRRSet(rrs []dns.RR, key crypto.Signer, keyTag uint16, signerName string
 
 		Labels:     uint8(dns.CountLabel(hdr.Name)),
 		OrigTtl:    hdr.Ttl,
-		Expiration: uint32(time.Now().Add(7 * 24 * time.Hour).Unix()),
-		Inception:  uint32(time.Now().Add(-1 * time.Hour).Unix()),
+		Expiration: uint32(now.Add(policy.Validity - jitter).Unix()),
+		Inception:  uint32(now.Add(-policy.InceptionSkew).Unix()),
 		KeyTag:     keyTag,
 		SignerName: fqdn,
 	}
@@ -77,6 +113,36 @@ func SignRRSet(rrs []dns.RR, key crypto.Signer, keyTag uint16, signerName string
 	slog.Crazy("[SignRRSet] signed RRSet %+v for the RR %s", rrsig, rrs)
 
 	return rrsig, nil
+}
+
+func RRSIGFresh(owner string, sig *types.RRSIGRecord, covered uint16, now time.Time) bool {
+	if sig == nil {
+		return false
+	}
+	nowUnix := uint32(now.Unix())
+	if sig.Inception > nowUnix || sig.Expiration <= nowUnix {
+		return false
+	}
+	policy := PolicyForRRType(covered)
+	refreshAt := time.Unix(int64(sig.Expiration), 0).Add(-policy.RefreshBefore - signatureJitterSeconds(owner, covered, sig.KeyTag, policy.Jitter))
+	return now.Before(refreshAt)
+}
+
+func signatureJitterSeconds(owner string, rrtype uint16, keyTag uint16, max time.Duration) time.Duration {
+	if max <= 0 {
+		return 0
+	}
+	seed := fmt.Sprintf("%s|%d|%d", dns.CanonicalName(owner), rrtype, keyTag)
+	sum := sha256.Sum256([]byte(seed))
+	offset := binary.BigEndian.Uint64(sum[:8]) % uint64(max/time.Second+1)
+	return time.Duration(offset) * time.Second
+}
+
+func secondsOrDefault(value int, fallback int) int {
+	if value > 0 {
+		return value
+	}
+	return fallback
 }
 
 func RRSIGFromDNS(rrsig *dns.RRSIG) *types.RRSIGRecord {

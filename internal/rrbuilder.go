@@ -141,6 +141,39 @@ var RRBuilders = map[string]RRBuilder{
 		return rrs
 	},
 
+	"DS": func(name string, data any) []dns.RR {
+		var rrs []dns.RR
+
+		switch v := data.(type) {
+		case []types.DSRecord:
+			for _, rec := range v {
+				rrs = append(rrs, &dns.DS{
+					Hdr:        dns.RR_Header{Name: name, Rrtype: dns.TypeDS, Class: dns.ClassINET, Ttl: rec.TTL},
+					KeyTag:     rec.KeyTag,
+					Algorithm:  rec.Algorithm,
+					DigestType: rec.DigestType,
+					Digest:     strings.ToUpper(rec.Digest),
+				})
+			}
+		case []interface{}:
+			for _, raw := range v {
+				rec, ok := raw.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				rrs = append(rrs, &dns.DS{
+					Hdr:        dns.RR_Header{Name: name, Rrtype: dns.TypeDS, Class: dns.ClassINET, Ttl: toTTL(rec)},
+					KeyTag:     uint16(getFloat64(rec["key_tag"])),
+					Algorithm:  uint8(getFloat64(rec["algorithm"])),
+					DigestType: uint8(getFloat64(rec["digest_type"])),
+					Digest:     strings.ToUpper(fmt.Sprint(rec["digest"])),
+				})
+			}
+		}
+
+		return rrs
+	},
+
 	"MX": func(name string, data any) []dns.RR {
 		var rrs []dns.RR
 

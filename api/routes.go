@@ -48,6 +48,10 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 	r.HandleFunc("/api/dnskeys", disableSecondary(handlers.ListDNSKeysHandler)).Methods("GET")
 	r.HandleFunc("/api/dnskeys/{keyid}", disableSecondary(handlers.GetDNSKeyHandler)).Methods("GET")
 	r.HandleFunc("/api/dnskeys", disableSecondary(handlers.CreateDNSKeyHandler)).Methods("POST")
+	r.HandleFunc("/api/dnskeys/rollover", disableSecondary(handlers.CreateRolloverDNSKeyHandler)).Methods("POST")
+	r.HandleFunc("/api/dnskeys/{keyid}/lifecycle", disableSecondary(handlers.UpdateDNSKeyLifecycleHandler)).Methods("PATCH")
+	r.HandleFunc("/api/dnskeys/{keyid}/retire", disableSecondary(handlers.RetireDNSKeyHandler)).Methods("POST")
+	r.HandleFunc("/api/dnskeys/{keyid}/revoke", disableSecondary(handlers.RevokeDNSKeyHandler)).Methods("POST")
 	r.HandleFunc("/api/dnskeys/{keyid}", disableSecondary(handlers.DeleteDNSKeyHandler)).Methods("DELETE")
 
 	r.HandleFunc("/api/ds/{zone}", disableSecondary(handlers.GetDSHandler)).Methods("GET")

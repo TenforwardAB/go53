@@ -65,7 +65,7 @@ func AddRecordHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Fill DNSKEYRecord fields
 		dnskey := map[string]interface{}{
-			"flags":      storedKey.Flags,
+			"flags":      security.DNSKEYFlags(storedKey),
 			"protocol":   3,                                                     // always 3 for DNSSEC
 			"algorithm":  security.AlgorithmNumberFromName(storedKey.Algorithm), // convert "ED25519" -> 15
 			"public_key": storedKey.PublicKey,

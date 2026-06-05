@@ -6,7 +6,9 @@ import (
 	"github.com/TenforwardAB/slog"
 	"github.com/miekg/dns"
 	"go53/internal"
+	"go53/security"
 	"go53/types"
+	"time"
 )
 
 type DNSKEYRecord struct{}
@@ -137,34 +139,51 @@ func (DNSKEYRecord) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
-	_, _, val, ok := memStore.GetRecord(sz, string(types.TypeDNSKEY), name)
-	if !ok {
-		return nil, false
-	}
-
 	var records []types.DNSKEYRecord
-	switch v := val.(type) {
-	case []types.DNSKEYRecord:
-		records = v
-	case []interface{}:
-		for _, item := range v {
-			if obj, ok := item.(map[string]interface{}); ok {
-				if rec, ok := internal.ParseToDNSKEYRecord(obj); ok {
-					records = append(records, rec)
+	if _, _, val, ok := memStore.GetRecord(sz, string(types.TypeDNSKEY), name); ok {
+		switch v := val.(type) {
+		case []types.DNSKEYRecord:
+			records = v
+		case []interface{}:
+			for _, item := range v {
+				if obj, ok := item.(map[string]interface{}); ok {
+					if rec, ok := internal.ParseToDNSKEYRecord(obj); ok {
+						records = append(records, rec)
+					}
 				}
 			}
+		case map[string]interface{}:
+			if rec, ok := internal.ParseToDNSKEYRecord(v); ok {
+				records = append(records, rec)
+			}
+		case types.DNSKEYRecord:
+			records = append(records, v)
 		}
-	case map[string]interface{}:
-		if rec, ok := internal.ParseToDNSKEYRecord(v); ok {
-			records = append(records, rec)
+	}
+
+	if name == "@" {
+		if keys, err := security.LoadPublishedKeysForZone(sz, time.Now().Unix()); err == nil {
+			for _, key := range keys {
+				records = append(records, types.DNSKEYRecord{
+					Flags:     security.DNSKEYFlags(key),
+					Protocol:  3,
+					Algorithm: security.AlgorithmNumberFromName(key.Algorithm),
+					PublicKey: key.PublicKey,
+					TTL:       3600,
+				})
+			}
 		}
-	case types.DNSKEYRecord:
-		records = append(records, v)
 	}
 
 	var out []dns.RR
+	seen := make(map[string]bool)
 	for _, rec := range records {
-		out = append(out, &dns.DNSKEY{
+		key := fmt.Sprintf("%d/%d/%s", rec.Flags, rec.Algorithm, rec.PublicKey)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		rr := &dns.DNSKEY{
 			Hdr: dns.RR_Header{
 				Name:   host,
 				Rrtype: dns.TypeDNSKEY,
@@ -175,7 +194,8 @@ func (DNSKEYRecord) Lookup(host string) ([]dns.RR, bool) {
 			Protocol:  rec.Protocol,
 			Algorithm: rec.Algorithm,
 			PublicKey: rec.PublicKey,
-		})
+		}
+		out = append(out, rr)
 	}
 
 	return out, len(out) > 0

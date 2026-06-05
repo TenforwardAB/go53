@@ -253,4 +253,13 @@ type StoredKey struct {
 	Flags      uint16 `json:"flags"`       // 256 = ZSK, 257 = KSK
 	PrivatePEM string `json:"private_pem"` // PEM-encoded EC/RSA key
 	PublicKey  string `json:"public_key"`  // Optional: base64 DNSKEY string
+
+	State      string `json:"state,omitempty"`       // generated, published, active, retired, revoked, removed
+	CreatedAt  int64  `json:"created_at,omitempty"`  // Unix timestamp
+	PublishAt  int64  `json:"publish_at,omitempty"`  // DNSKEY may be published from this time
+	ActivateAt int64  `json:"activate_at,omitempty"` // key may sign from this time
+	RetireAt   int64  `json:"retire_at,omitempty"`   // key must stop signing from this time
+	RemoveAt   int64  `json:"remove_at,omitempty"`   // DNSKEY may be removed from this time
+	RevokedAt  int64  `json:"revoked_at,omitempty"`  // RFC 5011 revoke publication time
+	Revoke     bool   `json:"revoke,omitempty"`      // publish DNSKEY with revoke bit set
 }
