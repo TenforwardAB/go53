@@ -166,9 +166,9 @@ func (z *InMemoryZoneStore) GetZone(zone string) ([]dns.RR, error) {
 					continue
 				}
 				for innerName, rawData := range innerMap {
-					//fqdn, _ := internal.SanitizeFQDN(innerName)
-					slog.Emerg("[GetZone] RRSIG innerData fqdn: %s and data : %+v", innerName, rawData)
-					rrs := builder(innerName, rawData)
+					fqdn := zoneOwnerFQDN(sanitizedZone, innerName)
+					slog.Emerg("[GetZone] RRSIG innerData fqdn: %s and data : %+v", fqdn, rawData)
+					rrs := builder(fqdn, rawData)
 					slog.Error("[GetZone] RRSIG rrs: %+v", rrs)
 					allRRs = append(allRRs, rrs...)
 				}
@@ -178,28 +178,63 @@ func (z *InMemoryZoneStore) GetZone(zone string) ([]dns.RR, error) {
 
 		// Handle other record types normally
 		for name, rawData := range namesMap {
-			var fqdn string
-			switch {
-			case name == "@":
-				fqdn = sanitizedZone
-			case dns.IsFqdn(name) && strings.HasSuffix(name, sanitizedZone):
-				fqdn = name
-			default:
-				fqdn = name + "." + sanitizedZone
-			}
-			if sanitizedName, err := internal.SanitizeFQDN(fqdn); err == nil {
-				fqdn = sanitizedName
-			} else {
-				fqdn = dns.Fqdn(fqdn)
-			}
+			fqdn := zoneOwnerFQDN(sanitizedZone, name)
 			rrs := builder(fqdn, rawData)
 			if len(rrs) > 0 {
 				allRRs = append(allRRs, rrs...)
 			}
 		}
 	}
+	allRRs = append(allRRs, automaticDNSSECKeyFlowRRs(sanitizedZone)...)
 
 	return allRRs, nil
+}
+
+func zoneOwnerFQDN(zone, name string) string {
+	var fqdn string
+	switch {
+	case name == "@":
+		fqdn = zone
+	case dns.IsFqdn(name) && strings.HasSuffix(strings.ToLower(name), strings.ToLower(zone)):
+		fqdn = name
+	default:
+		fqdn = name + "." + zone
+	}
+	if sanitizedName, err := internal.SanitizeFQDN(fqdn); err == nil {
+		return sanitizedName
+	}
+	return dns.Fqdn(fqdn)
+}
+
+func automaticDNSSECKeyFlowRRs(zone string) []dns.RR {
+	var out []dns.RR
+	if dnskeys, err := security.LoadPublishedKeysForZone(zone, time.Now().Unix()); err == nil {
+		for _, key := range dnskeys {
+			out = append(out, &dns.DNSKEY{
+				Hdr: dns.RR_Header{
+					Name:   dns.Fqdn(zone),
+					Rrtype: dns.TypeDNSKEY,
+					Class:  dns.ClassINET,
+					Ttl:    3600,
+				},
+				Flags:     security.DNSKEYFlags(key),
+				Protocol:  3,
+				Algorithm: security.AlgorithmNumberFromName(key.Algorithm),
+				PublicKey: key.PublicKey,
+			})
+		}
+	}
+	if cdsList, err := security.GetCDS(zone); err == nil {
+		for _, cds := range cdsList {
+			out = append(out, cds)
+		}
+	}
+	if cdnskeyList, err := security.GetCDNSKEY(zone); err == nil {
+		for _, cdnskey := range cdnskeyList {
+			out = append(out, cdnskey)
+		}
+	}
+	return uniqueRRs(out)
 }
 
 func (z *InMemoryZoneStore) DeleteRecord(zone, rtype, name string) error {
@@ -317,6 +352,34 @@ func (z *InMemoryZoneStore) EnsureSignedRRSet(rrs []dns.RR) ([]dns.RR, error) {
 		slog.Warn("Failed to persist query-time RRSIG cache for zone %q: %v", zoneName, err)
 	}
 	return signed, nil
+}
+
+func (z *InMemoryZoneStore) SignZoneTransferRRsets(rrs []dns.RR) []dns.RR {
+	if len(rrs) == 0 || !config.AppConfig.GetLive().DNSSECEnabled || config.AppConfig.GetLive().Mode == "secondary" {
+		return uniqueRRs(rrs)
+	}
+
+	out := append([]dns.RR(nil), rrs...)
+	rrsets := make(map[string][]dns.RR)
+	for _, rr := range rrs {
+		if rr == nil || rr.Header().Rrtype == dns.TypeRRSIG {
+			continue
+		}
+		h := rr.Header()
+		key := strings.ToLower(h.Name) + "|" + dns.TypeToString[h.Rrtype] + "|" + dns.ClassToString[h.Class]
+		rrsets[key] = append(rrsets[key], rr)
+	}
+
+	for _, rrset := range rrsets {
+		sigs, err := z.EnsureSignedRRSet(rrset)
+		if err != nil {
+			slog.Warn("DNSSEC AXFR signing failed: %v", err)
+			continue
+		}
+		out = append(out, sigs...)
+	}
+
+	return uniqueRRs(out)
 }
 
 func (z *InMemoryZoneStore) RefreshDNSSECKeyMaterial(zone string) error {
