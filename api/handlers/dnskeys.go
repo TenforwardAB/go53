@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/gorilla/mux"
+	"go53/distributed"
 	"go53/security"
 	"go53/types"
 	zonepkg "go53/zone"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -67,6 +69,10 @@ func CreateDNSKeyHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Key generation succeeded but DNSSEC refresh failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if err := publishDNSSECKeysForZone(zone); err != nil {
+		http.Error(w, "Key generation succeeded but distributed event failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]string{
@@ -107,6 +113,12 @@ func CreateRolloverDNSKeyHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Rollover key generated but DNSSEC refresh failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if distributed.Default != nil && key != nil {
+		if err := distributed.Default.PublishDNSSECKey(keyID, *key); err != nil {
+			http.Error(w, "Rollover key generated but distributed event failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -131,6 +143,12 @@ func UpdateDNSKeyLifecycleHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Key lifecycle updated but DNSSEC refresh failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if distributed.Default != nil && key != nil {
+		if err := distributed.Default.PublishDNSSECKey(keyID, *key); err != nil {
+			http.Error(w, "Key lifecycle updated but distributed event failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	_ = json.NewEncoder(w).Encode(key)
 }
 
@@ -145,6 +163,12 @@ func RetireDNSKeyHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Key retired but DNSSEC refresh failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if distributed.Default != nil && key != nil {
+		if err := distributed.Default.PublishDNSSECKey(keyID, *key); err != nil {
+			http.Error(w, "Key retired but distributed event failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	_ = json.NewEncoder(w).Encode(key)
 }
 
@@ -158,6 +182,12 @@ func RevokeDNSKeyHandler(w http.ResponseWriter, r *http.Request) {
 	if err := zonepkg.RefreshDNSSECKeyMaterial(key.Zone); err != nil {
 		http.Error(w, "Key revoked but DNSSEC refresh failed: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if distributed.Default != nil && key != nil {
+		if err := distributed.Default.PublishDNSSECKey(keyID, *key); err != nil {
+			http.Error(w, "Key revoked but distributed event failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	_ = json.NewEncoder(w).Encode(key)
 }
@@ -176,6 +206,12 @@ func DeleteDNSKeyHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if distributed.Default != nil {
+		if err := distributed.Default.PublishDNSSECKeyDelete(keyID); err != nil {
+			http.Error(w, "Key deleted but distributed event failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -186,4 +222,23 @@ func removeAfter(r *http.Request) time.Duration {
 		return 30 * 24 * time.Hour
 	}
 	return time.Duration(days) * 24 * time.Hour
+}
+
+func publishDNSSECKeysForZone(zone string) error {
+	if distributed.Default == nil {
+		return nil
+	}
+	keys, err := security.ListStoredKeys()
+	if err != nil {
+		return err
+	}
+	for keyID, key := range keys {
+		if key.Zone != zone && key.Zone != strings.TrimSuffix(zone, ".") {
+			continue
+		}
+		if err := distributed.Default.PublishDNSSECKey(keyID, key); err != nil {
+			return err
+		}
+	}
+	return nil
 }

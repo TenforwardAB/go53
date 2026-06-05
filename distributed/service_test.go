@@ -7,7 +7,9 @@ import (
 
 	"go53/config"
 	"go53/memory"
+	"go53/security"
 	"go53/storage"
+	"go53/types"
 )
 
 func TestReceiveSignedEventAppliesRawRecord(t *testing.T) {
@@ -126,6 +128,92 @@ func TestNodeInfoIncludesDiscoveryFields(t *testing.T) {
 	}
 	if got := PublicKeyFingerprint(info.PublicKey); got != info.Fingerprint {
 		t.Fatalf("fingerprint = %q, want %q", got, info.Fingerprint)
+	}
+}
+
+func TestApplyConfigEventPreservesLocalDistributedIdentity(t *testing.T) {
+	priv, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	svc := newTestService(t, "node-a", priv, nil)
+	config.AppConfig.Live.DefaultTTL = 3600
+	config.AppConfig.Live.Distributed.NodeID = "node-a"
+
+	value, _ := json.Marshal(config.LiveConfig{
+		DefaultTTL: 600,
+		Distributed: config.DistributedConfig{
+			NodeID: "must-not-apply",
+		},
+	})
+	if err := svc.applyConfigEvent(Event{Operation: OperationUpsert, Value: value}); err != nil {
+		t.Fatalf("applyConfigEvent: %v", err)
+	}
+	live := config.AppConfig.GetLive()
+	if live.DefaultTTL != 600 {
+		t.Fatalf("DefaultTTL = %d, want 600", live.DefaultTTL)
+	}
+	if live.Distributed.NodeID != "node-a" {
+		t.Fatalf("Distributed.NodeID = %q, want node-a", live.Distributed.NodeID)
+	}
+}
+
+func TestApplyTSIGEventUpdatesStorageAndCache(t *testing.T) {
+	priv, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	svc := newTestService(t, "node-a", priv, nil)
+	value := json.RawMessage(`{"algorithm":"hmac-sha256.","secret":"abc123"}`)
+
+	if err := svc.applyTSIGEvent(Event{Name: "xfr-key.", Operation: OperationUpsert, Value: value}); err != nil {
+		t.Fatalf("applyTSIGEvent upsert: %v", err)
+	}
+	key, ok := security.GetTSIGKey("xfr-key.")
+	if !ok {
+		t.Fatalf("TSIG key not loaded")
+	}
+	if key.Secret != "abc123" {
+		t.Fatalf("TSIG secret = %q, want abc123", key.Secret)
+	}
+	if err := svc.applyTSIGEvent(Event{Name: "xfr-key.", Operation: OperationDelete}); err != nil {
+		t.Fatalf("applyTSIGEvent delete: %v", err)
+	}
+	if _, ok := security.GetTSIGKey("xfr-key."); ok {
+		t.Fatalf("TSIG key still present after delete")
+	}
+}
+
+func TestApplyDNSSECKeyEventUpdatesStorageCache(t *testing.T) {
+	priv, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	svc := newTestService(t, "node-a", priv, nil)
+	key := types.StoredKey{
+		KeyTag:    12345,
+		Algorithm: "ED25519",
+		Flags:     256,
+		State:     security.KeyStateActive,
+		PublicKey: "pub",
+	}
+	value, _ := json.Marshal(key)
+
+	if err := svc.applyDNSSECKeyEvent(Event{Name: "key-1", Operation: OperationUpsert, Value: value}); err != nil {
+		t.Fatalf("applyDNSSECKeyEvent upsert: %v", err)
+	}
+	stored, err := security.LoadStoredKey("key-1")
+	if err != nil {
+		t.Fatalf("LoadStoredKey: %v", err)
+	}
+	if stored.KeyTag != 12345 {
+		t.Fatalf("stored key tag = %d, want 12345", stored.KeyTag)
+	}
+	if err := svc.applyDNSSECKeyEvent(Event{Name: "key-1", Operation: OperationDelete}); err != nil {
+		t.Fatalf("applyDNSSECKeyEvent delete: %v", err)
+	}
+	if _, err := security.LoadStoredKey("key-1"); err == nil {
+		t.Fatalf("DNSSEC key still present after delete")
 	}
 }
 

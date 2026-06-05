@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"go53/config"
+	"go53/distributed"
 	"net/http"
 )
 
@@ -15,6 +16,12 @@ func UpdateLiveConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	config.AppConfig.MergeUpdateLive(partial)
+	if distributed.Default != nil {
+		if err := distributed.Default.PublishConfig(partial); err != nil {
+			http.Error(w, "config updated but distributed event failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }

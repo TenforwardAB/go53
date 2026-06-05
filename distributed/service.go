@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,12 +22,20 @@ import (
 
 	"go53/config"
 	"go53/memory"
+	"go53/security"
 	"go53/storage"
+	"go53/types"
+	zonepkg "go53/zone"
 )
 
 const (
 	OperationUpsert = "UPSERT"
 	OperationDelete = "DELETE"
+
+	EntityZoneRecord = "zone_record"
+	EntityConfig     = "config"
+	EntityTSIGKey    = "tsig_key"
+	EntityDNSSECKey  = "dnssec_key"
 
 	eventsTable = "distributed-events"
 	vectorTable = "distributed-vector"
@@ -34,18 +43,19 @@ const (
 )
 
 type Event struct {
-	EventID   string            `json:"event_id"`
-	Origin    string            `json:"origin"`
-	Seq       uint64            `json:"seq"`
-	Entity    string            `json:"entity"`
-	Zone      string            `json:"zone"`
-	RRType    string            `json:"rrtype"`
-	Name      string            `json:"name"`
-	Operation string            `json:"operation"`
-	Value     json.RawMessage   `json:"value,omitempty"`
-	Vector    map[string]uint64 `json:"vector,omitempty"`
-	CreatedAt int64             `json:"created_at"`
-	Signature string            `json:"signature"`
+	EventID    string            `json:"event_id"`
+	Origin     string            `json:"origin"`
+	Seq        uint64            `json:"seq"`
+	Entity     string            `json:"entity"`
+	EntityType string            `json:"entity_type,omitempty"`
+	Zone       string            `json:"zone"`
+	RRType     string            `json:"rrtype"`
+	Name       string            `json:"name"`
+	Operation  string            `json:"operation"`
+	Value      json.RawMessage   `json:"value,omitempty"`
+	Vector     map[string]uint64 `json:"vector,omitempty"`
+	CreatedAt  int64             `json:"created_at"`
+	Signature  string            `json:"signature"`
 }
 
 type EntityClock struct {
@@ -130,11 +140,12 @@ func (s *Service) PublishUpsert(zone, rrtype, name string, value any) error {
 		return err
 	}
 	return s.publish(Event{
-		Zone:      zone,
-		RRType:    rrtype,
-		Name:      name,
-		Operation: OperationUpsert,
-		Value:     raw,
+		EntityType: EntityZoneRecord,
+		Zone:       zone,
+		RRType:     rrtype,
+		Name:       name,
+		Operation:  OperationUpsert,
+		Value:      raw,
 	})
 }
 
@@ -143,10 +154,85 @@ func (s *Service) PublishDelete(zone, rrtype, name string) error {
 		return nil
 	}
 	return s.publish(Event{
-		Zone:      zone,
-		RRType:    rrtype,
-		Name:      name,
-		Operation: OperationDelete,
+		EntityType: EntityZoneRecord,
+		Zone:       zone,
+		RRType:     rrtype,
+		Name:       name,
+		Operation:  OperationDelete,
+	})
+}
+
+func (s *Service) PublishConfig(partial config.LiveConfig) error {
+	if s == nil || !readyToPublish() {
+		return nil
+	}
+	partial.Distributed = config.DistributedConfig{}
+	if reflect.DeepEqual(partial, config.LiveConfig{}) {
+		return nil
+	}
+	raw, err := json.Marshal(partial)
+	if err != nil {
+		return err
+	}
+	return s.publish(Event{
+		EntityType: EntityConfig,
+		Name:       "live",
+		Operation:  OperationUpsert,
+		Value:      raw,
+	})
+}
+
+func (s *Service) PublishTSIGKey(name string, value any) error {
+	if s == nil || !readyToPublish() {
+		return nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return s.publish(Event{
+		EntityType: EntityTSIGKey,
+		Name:       name,
+		Operation:  OperationUpsert,
+		Value:      raw,
+	})
+}
+
+func (s *Service) PublishTSIGKeyDelete(name string) error {
+	if s == nil || !readyToPublish() {
+		return nil
+	}
+	return s.publish(Event{
+		EntityType: EntityTSIGKey,
+		Name:       name,
+		Operation:  OperationDelete,
+	})
+}
+
+func (s *Service) PublishDNSSECKey(keyID string, key types.StoredKey) error {
+	if s == nil || !readyToPublish() {
+		return nil
+	}
+	raw, err := json.Marshal(key)
+	if err != nil {
+		return err
+	}
+	return s.publish(Event{
+		EntityType: EntityDNSSECKey,
+		Name:       keyID,
+		Operation:  OperationUpsert,
+		Value:      raw,
+	})
+}
+
+func (s *Service) PublishDNSSECKeyDelete(keyID string) error {
+	if s == nil || !readyToPublish() {
+		return nil
+	}
+	return s.publish(Event{
+		EntityType: EntityDNSSECKey,
+		Name:       keyID,
+		Operation:  OperationDelete,
 	})
 }
 
@@ -173,7 +259,7 @@ func (s *Service) publish(event Event) error {
 	event.EventID = newEventID()
 	event.Origin = nodeID
 	event.Seq = seq
-	event.Entity = entityKey(event.Zone, event.RRType, event.Name)
+	event.Entity = eventEntityKey(event)
 	event.Vector = cloneVector(vector)
 	event.CreatedAt = time.Now().Unix()
 	event.Signature = ""
@@ -520,6 +606,14 @@ func (s *Service) applyEventLocked(ctx context.Context, event Event) error {
 		return ctx.Err()
 	default:
 	}
+	switch eventType(event) {
+	case EntityConfig:
+		return s.applyConfigEvent(event)
+	case EntityTSIGKey:
+		return s.applyTSIGEvent(event)
+	case EntityDNSSECKey:
+		return s.applyDNSSECKeyEvent(event)
+	}
 	switch event.Operation {
 	case OperationUpsert:
 		var value any
@@ -536,9 +630,73 @@ func (s *Service) applyEventLocked(ctx context.Context, event Event) error {
 	}
 }
 
+func (s *Service) applyConfigEvent(event Event) error {
+	if event.Operation != OperationUpsert {
+		return fmt.Errorf("unsupported config operation %q", event.Operation)
+	}
+	var partial config.LiveConfig
+	if err := json.Unmarshal(event.Value, &partial); err != nil {
+		return err
+	}
+	partial.Distributed = config.DistributedConfig{}
+	config.AppConfig.MergeUpdateLive(partial)
+	return nil
+}
+
+func (s *Service) applyTSIGEvent(event Event) error {
+	switch event.Operation {
+	case OperationUpsert:
+		if strings.TrimSpace(event.Name) == "" {
+			return errors.New("missing TSIG key name")
+		}
+		if err := s.storage.SaveTable("tsig-keys", event.Name, event.Value); err != nil {
+			return err
+		}
+		return security.LoadTSIGKeysFromStorage()
+	case OperationDelete:
+		if err := s.storage.DeleteFromTable("tsig-keys", event.Name); err != nil {
+			return err
+		}
+		security.DeleteTSIGKey(event.Name)
+		return nil
+	default:
+		return fmt.Errorf("unsupported TSIG operation %q", event.Operation)
+	}
+}
+
+func (s *Service) applyDNSSECKeyEvent(event Event) error {
+	switch event.Operation {
+	case OperationUpsert:
+		if strings.TrimSpace(event.Name) == "" {
+			return errors.New("missing DNSSEC key id")
+		}
+		if err := s.storage.SaveTable("dnssec_keys", event.Name, event.Value); err != nil {
+			return err
+		}
+		var key types.StoredKey
+		if err := json.Unmarshal(event.Value, &key); err != nil {
+			return err
+		}
+		if err := security.InitDNSSECKeyCache(); err != nil {
+			return err
+		}
+		if key.Zone != "" {
+			return zonepkg.RefreshDNSSECKeyMaterial(key.Zone)
+		}
+		return nil
+	case OperationDelete:
+		if err := s.storage.DeleteFromTable("dnssec_keys", event.Name); err != nil {
+			return err
+		}
+		return security.InitDNSSECKeyCache()
+	default:
+		return fmt.Errorf("unsupported DNSSEC key operation %q", event.Operation)
+	}
+}
+
 func (s *Service) eventWinsLocked(event Event) bool {
 	if event.Entity == "" {
-		event.Entity = entityKey(event.Zone, event.RRType, event.Name)
+		event.Entity = eventEntityKey(event)
 	}
 	current, ok := s.loadEntityClock(event.Entity)
 	if !ok {
@@ -690,6 +848,26 @@ func eventKey(origin string, seq uint64) string {
 	return origin + "/" + fmt.Sprintf("%020d", seq)
 }
 
+func eventType(event Event) string {
+	if event.EntityType == "" {
+		return EntityZoneRecord
+	}
+	return event.EntityType
+}
+
+func eventEntityKey(event Event) string {
+	switch eventType(event) {
+	case EntityConfig:
+		return EntityConfig + "/live"
+	case EntityTSIGKey:
+		return EntityTSIGKey + "/" + strings.ToLower(strings.TrimSpace(event.Name))
+	case EntityDNSSECKey:
+		return EntityDNSSECKey + "/" + strings.TrimSpace(event.Name)
+	default:
+		return entityKey(event.Zone, event.RRType, event.Name)
+	}
+}
+
 func entityKey(zone, rrtype, name string) string {
 	return strings.ToLower(strings.TrimSpace(zone)) + "/" + strings.ToUpper(strings.TrimSpace(rrtype)) + "/" + strings.ToLower(strings.TrimSpace(name))
 }
@@ -704,6 +882,13 @@ func cloneVector(in map[string]uint64) map[string]uint64 {
 
 func enabled() bool {
 	return liveConfig().Mode == "distributed"
+}
+
+func readyToPublish() bool {
+	live := liveConfig()
+	return live.Mode == "distributed" &&
+		strings.TrimSpace(live.Distributed.NodeID) != "" &&
+		strings.TrimSpace(live.Distributed.PrivateKey) != ""
 }
 
 func liveConfig() config.LiveConfig {
