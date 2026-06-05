@@ -80,8 +80,8 @@ func SendNotify(inzone string) {
 	enforceTSIG := config.AppConfig.GetLive().EnforceTSIG
 
 	const tsigKeyName = "xxfr-key" //TODO: We have this set in too many locations need a central place for all constants
-	fqdnKeyName := dns.Fqdn(tsigKeyName)
-	tsigKey, tsigExists := security.TSIGSecrets[fqdnKeyName]
+	fqdnKeyName, _ := internal.SanitizeFQDN(tsigKeyName)
+	tsigKey, tsigExists := security.GetTSIGKey(fqdnKeyName)
 
 	for _, target := range targets {
 		target = strings.TrimSpace(target)
@@ -222,7 +222,8 @@ func checkSOA(zone string) bool {
 
 	// 2) build the query
 	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn(zone), dns.TypeSOA)
+	fqdn, _ := internal.SanitizeFQDN(zone)
+	m.SetQuestion(fqdn, dns.TypeSOA)
 	m.RecursionDesired = false
 
 	c := &dns.Client{
@@ -295,9 +296,10 @@ func fetchZone(zoneName string) {
 	addr := net.JoinHostPort(primaryIP, strconv.Itoa(port))
 
 	req := new(dns.Msg)
-	req.SetAxfr(dns.Fqdn(zoneName))
+	fqdn, _ := internal.SanitizeFQDN(zoneName)
+	req.SetAxfr(fqdn)
 
-	tsigKeyName := dns.Fqdn("xxfr-key")
+	tsigKeyName, _ := internal.SanitizeFQDN("xxfr-key")
 
 	tran := &dns.Transfer{
 		DialTimeout:  5 * time.Second,
@@ -306,11 +308,15 @@ func fetchZone(zoneName string) {
 	}
 
 	if config.AppConfig.GetLive().EnforceTSIG {
-		tsigSecret := security.TSIGSecrets[tsigKeyName].Secret
+		tsigKey, ok := security.GetTSIGKey(tsigKeyName)
+		if !ok {
+			log.Printf("[fetchZone] TSIG is enforced but key %s is not loaded", tsigKeyName)
+			return
+		}
 
 		req.SetTsig(tsigKeyName, dns.HmacSHA256, 300, time.Now().Unix())
 		tran.TsigSecret = map[string]string{
-			tsigKeyName: tsigSecret,
+			tsigKeyName: tsigKey.Secret,
 		}
 	}
 

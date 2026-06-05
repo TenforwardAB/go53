@@ -26,6 +26,8 @@ import (
 	"path/filepath"
 )
 
+const zonePrefix = "zones/"
+
 // BadgerStorage provides a wrapper around BadgerDB for storing DNS zones
 // and arbitrary key/value tables, used for persistent backend storage.
 type BadgerStorage struct {
@@ -45,7 +47,10 @@ func NewBadgerStorage() *BadgerStorage {
 // Returns:
 //   - error: If directory creation or database opening fails.
 func (b *BadgerStorage) Init() error {
-	dir := filepath.Join("/data", "go53")
+	dir := os.Getenv("BADGER_DIR")
+	if dir == "" {
+		dir = filepath.Join("/data", "go53")
+	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
@@ -57,7 +62,7 @@ func (b *BadgerStorage) Init() error {
 	return nil
 }
 
-// SaveZone stores a zone's raw data under its name as the key.
+// SaveZone stores a zone's raw data under the zones/ namespace.
 //
 // Parameters:
 //   - name: The zone name (used as key).
@@ -67,7 +72,7 @@ func (b *BadgerStorage) Init() error {
 //   - error: If the operation fails.
 func (b *BadgerStorage) SaveZone(name string, data []byte) error {
 	return b.db.Update(func(txn *badger.Txn) error {
-		return txn.Set([]byte(name), data)
+		return txn.Set(zoneKey(name), data)
 	})
 }
 
@@ -82,7 +87,7 @@ func (b *BadgerStorage) SaveZone(name string, data []byte) error {
 func (b *BadgerStorage) LoadZone(name string) ([]byte, error) {
 	var valCopy []byte
 	err := b.db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get([]byte(name))
+		item, err := txn.Get(zoneKey(name))
 		if err != nil {
 			return err
 		}
@@ -104,11 +109,15 @@ func (b *BadgerStorage) LoadAllZones() (map[string][]byte, error) {
 		defer it.Close()
 		for it.Rewind(); it.Valid(); it.Next() {
 			item := it.Item()
+			name, ok := zoneNameFromKey(item.Key())
+			if !ok {
+				continue
+			}
 			val, err := item.ValueCopy(nil)
 			if err != nil {
 				return err
 			}
-			zones[string(item.Key())] = val
+			zones[name] = val
 		}
 		return nil
 	})
@@ -124,7 +133,10 @@ func (b *BadgerStorage) LoadAllZones() (map[string][]byte, error) {
 //   - error: If deletion fails or the zone does not exist.
 func (b *BadgerStorage) DeleteZone(name string) error {
 	return b.db.Update(func(txn *badger.Txn) error {
-		return txn.Delete([]byte(name))
+		if err := txn.Delete(zoneKey(name)); err != nil && err != badger.ErrKeyNotFound {
+			return err
+		}
+		return nil
 	})
 }
 
@@ -139,8 +151,9 @@ func (b *BadgerStorage) ListZones() ([]string, error) {
 		it := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer it.Close()
 		for it.Rewind(); it.Valid(); it.Next() {
-			item := it.Item()
-			keys = append(keys, string(item.Key()))
+			if name, ok := zoneNameFromKey(it.Item().Key()); ok {
+				keys = append(keys, name)
+			}
 		}
 		return nil
 	})
@@ -208,4 +221,36 @@ func (b *BadgerStorage) SaveTable(table string, key string, value []byte) error 
 	})
 
 	return err
+}
+
+// DeleteFromTable deletes a key/value pair from a given table prefix.
+//
+// The key will be stored as "table/key" internally.
+//
+// Parameters:
+//   - table: The logical table name (prefix).
+//   - key:   The specific key within the table.
+//
+// Returns:
+//   - error: If the delete operation fails.
+func (b *BadgerStorage) DeleteFromTable(table string, key string) error {
+	fullKey := fmt.Sprintf("%s/%s", table, key)
+
+	err := b.db.Update(func(txn *badger.Txn) error {
+		return txn.Delete([]byte(fullKey))
+	})
+
+	return err
+}
+
+func zoneKey(name string) []byte {
+	return []byte(zonePrefix + name)
+}
+
+func zoneNameFromKey(key []byte) (string, bool) {
+	prefix := []byte(zonePrefix)
+	if !bytes.HasPrefix(key, prefix) {
+		return "", false
+	}
+	return string(bytes.TrimPrefix(key, prefix)), true
 }

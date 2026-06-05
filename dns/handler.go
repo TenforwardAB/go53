@@ -1,9 +1,11 @@
 package dns
 
 import (
+	"github.com/TenforwardAB/slog"
 	"github.com/miekg/dns"
 	"go53/config"
 	"go53/dns/dnsutils"
+	"go53/internal"
 	"go53/security"
 	"go53/zone"
 	"log"
@@ -14,6 +16,9 @@ import (
 func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	log.Println("Incomming DNS request")
 	live := config.AppConfig.GetLive()
+	opt := r.IsEdns0()
+	wantsDNSSEC := config.AppConfig.GetLive().DNSSECEnabled && opt != nil && opt.Do()
+
 	if r.Opcode == dns.OpcodeNotify && (live.Mode == "secondary" || live.Dev.DualMode) {
 		remoteIP, _, err := net.SplitHostPort(w.RemoteAddr().String())
 		if err != nil {
@@ -32,7 +37,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		switch {
 		case tsig != nil:
 			// TSIG is present — must be validated regardless of config is (RFC 2845  §4.6)
-			if _, ok := security.TSIGSecrets[tsig.Hdr.Name]; !ok {
+			if _, ok := security.GetTSIGKey(tsig.Hdr.Name); !ok {
 				log.Printf("TSIG key not recognized: %s — rejecting", tsig.Hdr.Name)
 				m := new(dns.Msg)
 				m.SetRcode(r, dns.RcodeRefused)
@@ -67,6 +72,15 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 	m := new(dns.Msg)
 	m.SetReply(r)
+
+	if len(r.Question) != 1 {
+		log.Printf("Refusing DNS request with QDCOUNT=%d; only one question is supported", len(r.Question))
+		m.SetRcode(r, dns.RcodeFormatError)
+		m.Authoritative = false
+		_ = w.WriteMsg(m)
+		return
+	}
+
 	m.Authoritative = true
 
 	for _, q := range r.Question {
@@ -92,29 +106,54 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			}
 		}
 
+		if delegation, ns, ok := zone.DelegationFor(q.Name); ok && shouldReturnReferral(q, delegation) {
+			m.Authoritative = false
+			m.Ns = append(m.Ns, ns...)
+			m.Extra = append(m.Extra, glueRecords(ns)...)
+			answered = true
+		}
+
+		if answered {
+			if wantsDNSSEC {
+				slog.Crazy("Using DNSSEC")
+				m.Answer = appendRRSIGs(m.Answer)
+				m.Ns = appendRRSIGs(m.Ns)
+			}
+			continue
+		}
+
 		switch q.Qtype {
-		case dns.TypeA:
-			if rec, ok := zone.LookupRecord(q.Qtype, q.Name); ok {
+		case dns.TypeDNSKEY:
+			zoneApex, _ := internal.SanitizeFQDN(q.Name) //TODO: manage error
+			if rec, ok := zone.LookupRecord(dns.TypeDNSKEY, zoneApex); ok {
+				log.Println("DNSKEY record found:", rec)
 				m.Answer = append(m.Answer, rec...)
 				answered = true
-				break
-			}
-			if cnameRec, ok := zone.LookupRecord(dns.TypeCNAME, q.Name); ok {
-				m.Answer = append(m.Answer, cnameRec[0])
-				target := cnameRec[0].(*dns.CNAME).Target
-				if rec2, ok := zone.LookupRecord(q.Qtype, target); ok {
-					m.Answer = append(m.Answer, rec2...)
-				}
-				answered = true
+			} else {
+				log.Println("DNSKEY record NOT FOUND OR ERROR:")
 			}
 
-		case dns.TypeCNAME, dns.TypeNS:
+		case dns.TypeCNAME, dns.TypeDNAME, dns.TypeNS:
 			if rec, ok := zone.LookupRecord(q.Qtype, q.Name); ok {
 				m.Answer = append(m.Answer, rec...)
 				answered = true
 			}
 
 		case dns.TypeAXFR, dns.TypeIXFR:
+			if !live.AllowAXFR {
+				log.Println("AXFR/IXFR disabled by configuration")
+				m.SetRcode(r, dns.RcodeRefused)
+				_ = w.WriteMsg(m)
+				return
+			}
+
+			if !transferClientAllowed(w.RemoteAddr().String(), live.AllowTransfer) {
+				log.Printf("AXFR/IXFR refused for unauthorized client %s", w.RemoteAddr().String())
+				m.SetRcode(r, dns.RcodeRefused)
+				_ = w.WriteMsg(m)
+				return
+			}
+
 			// RFC 2845 §4.5: If TSIG is present, it MUST be validated. If not present, only require it if EnforceTSIG is true.
 			tsig := r.IsTsig()
 			enforceTSIG := config.AppConfig.GetLive().EnforceTSIG
@@ -122,7 +161,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			switch {
 			case tsig != nil:
 				// TSIG present: validate it
-				if _, ok := security.TSIGSecrets[tsig.Hdr.Name]; !ok {
+				if _, ok := security.GetTSIGKey(tsig.Hdr.Name); !ok {
 					log.Printf("TSIG key not recognized: %s — rejecting", tsig.Hdr.Name)
 					m.SetRcode(r, dns.RcodeRefused)
 					_ = w.WriteMsg(m)
@@ -152,35 +191,419 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			dnsutils.ServeDNS(w, r)
 			return
 
-		case dns.TypeSRV:
-			if rec, ok := zone.LookupRecord(dns.TypeSRV, q.Name); ok {
-				log.Println("Getting SRV record: ", q.Name)
-				m.Answer = append(m.Answer, rec...)
-				answered = true
-				break
-			}
-			if cnameRec, ok := zone.LookupRecord(dns.TypeCNAME, q.Name); ok {
-				m.Answer = append(m.Answer, cnameRec[0])
-				target := cnameRec[0].(*dns.CNAME).Target
-				if rec2, ok := zone.LookupRecord(dns.TypeSRV, target); ok {
-					m.Answer = append(m.Answer, rec2...)
+		default:
+			result := resolveAnswerChain(q.Name, q.Qtype, wantsDNSSEC)
+			if len(result.Answer) > 0 {
+				m.Answer = append(m.Answer, result.Answer...)
+				m.Ns = append(m.Ns, result.Authority...)
+				if result.Rcode != dns.RcodeSuccess {
+					m.Rcode = result.Rcode
 				}
 				answered = true
 			}
+		}
 
-		default:
-			if rec, ok := zone.LookupRecord(q.Qtype, q.Name); ok {
+		if !answered {
+			if rec, ok := lookupWildcard(q.Qtype, q.Name, wantsDNSSEC); ok {
 				m.Answer = append(m.Answer, rec...)
 				answered = true
 			}
 		}
 
 		if !answered {
-			if soaRec, ok := zone.LookupRecord(dns.TypeSOA, q.Name); ok {
+			nameFound := nameExists(q.Name)
+			nxdomain := !nameFound && !zone.WildcardExists(q.Name)
+			if nxdomain {
+				m.Rcode = dns.RcodeNameError
+			}
+			if soaRec, ok := lookupApexSOA(q.Name); ok {
 				m.Ns = append(m.Ns, soaRec...)
 			}
+			if wantsDNSSEC {
+				m.Ns = append(m.Ns, denialRecords(q.Name, q.Qtype, nxdomain)...)
+			}
+		}
+
+		if wantsDNSSEC {
+			slog.Crazy("Using DNSSEC")
+			m.Answer = appendRRSIGs(m.Answer)
+			m.Ns = appendRRSIGs(m.Ns)
 		}
 	}
 
 	_ = w.WriteMsg(m)
+}
+
+func appendRRSIGs(section []dns.RR) []dns.RR {
+	seen := make(map[string]bool)
+	synthesizedDNAMECNAME := synthesizedDNAMECNAMEs(section)
+	for _, rr := range section {
+		if rr.Header().Rrtype == dns.TypeRRSIG {
+			seen[rr.String()] = true
+		}
+	}
+
+	covered := make(map[string]bool)
+	for _, rr := range section {
+		rrsig, ok := rr.(*dns.RRSIG)
+		if !ok {
+			continue
+		}
+		key := strings.ToLower(rrsig.Hdr.Name) + "|" + dns.TypeToString[rrsig.TypeCovered]
+		covered[key] = true
+	}
+
+	rrsets := make(map[string][]dns.RR)
+	for _, rr := range section {
+		if rr.Header().Rrtype == dns.TypeRRSIG {
+			continue
+		}
+		hdr := rr.Header()
+		if hdr.Rrtype == dns.TypeCNAME && synthesizedDNAMECNAME[strings.ToLower(hdr.Name)] {
+			continue
+		}
+		key := strings.ToLower(hdr.Name) + "|" + dns.TypeToString[hdr.Rrtype]
+		if covered[key] {
+			continue
+		}
+		rrsets[key] = append(rrsets[key], rr)
+	}
+
+	for _, rrset := range rrsets {
+		rrsigRecords, err := zone.EnsureSignedRRSet(rrset)
+		if err != nil {
+			slog.Warn("DNSSEC query-time signing failed: %v", err)
+			continue
+		}
+		for _, sig := range rrsigRecords {
+			rrsig, ok := sig.(*dns.RRSIG)
+			if !ok {
+				continue
+			}
+			key := rrsig.String()
+			if seen[key] {
+				continue
+			}
+			section = append(section, rrsig)
+			seen[key] = true
+		}
+	}
+
+	return section
+}
+
+type answerChainResult struct {
+	Answer    []dns.RR
+	Authority []dns.RR
+	Rcode     int
+}
+
+func resolveAnswerChain(qname string, qtype uint16, wantsDNSSEC bool) answerChainResult {
+	const maxAliasDepth = 8
+	result := answerChainResult{Rcode: dns.RcodeSuccess}
+	current := dns.Fqdn(qname)
+	seen := make(map[string]bool)
+
+	for depth := 0; depth < maxAliasDepth; depth++ {
+		key := strings.ToLower(current)
+		if seen[key] {
+			slog.Warn("alias loop while resolving %s %s", qname, dns.TypeToString[qtype])
+			return result
+		}
+		seen[key] = true
+
+		if rec, ok := zone.LookupRecord(qtype, current); ok {
+			result.Answer = append(result.Answer, rec...)
+			return result
+		}
+
+		if rec, ok := lookupWildcard(qtype, current, wantsDNSSEC); ok {
+			result.Answer = append(result.Answer, rec...)
+			return result
+		}
+
+		if cnameRec, ok := zone.LookupRecord(dns.TypeCNAME, current); ok {
+			result.Answer = append(result.Answer, cnameRec...)
+			cname, ok := firstCNAME(cnameRec)
+			if !ok {
+				return result
+			}
+			current = dns.Fqdn(cname.Target)
+			continue
+		}
+
+		if dnameRec, synthesized, ok := lookupDNAMERewrite(current); ok {
+			result.Answer = append(result.Answer, dnameRec...)
+			result.Answer = append(result.Answer, synthesized)
+			current = dns.Fqdn(synthesized.Target)
+			continue
+		}
+
+		if len(result.Answer) > 0 && authoritativeForName(current) {
+			nxdomain := !nameExists(current) && !zone.WildcardExists(current)
+			if nxdomain {
+				result.Rcode = dns.RcodeNameError
+			}
+			if soaRec, ok := lookupApexSOA(current); ok {
+				result.Authority = append(result.Authority, soaRec...)
+			}
+			if wantsDNSSEC {
+				result.Authority = append(result.Authority, denialRecords(current, qtype, nxdomain)...)
+			}
+		}
+		return result
+	}
+
+	slog.Warn("alias chain too deep while resolving %s %s", qname, dns.TypeToString[qtype])
+	return result
+}
+
+func firstCNAME(rrs []dns.RR) (*dns.CNAME, bool) {
+	for _, rr := range rrs {
+		cname, ok := rr.(*dns.CNAME)
+		if ok {
+			return cname, true
+		}
+	}
+	return nil, false
+}
+
+func lookupDNAMERewrite(qname string) ([]dns.RR, *dns.CNAME, bool) {
+	owner, dnameRec, ok := closestDNAME(qname)
+	if !ok {
+		return nil, nil, false
+	}
+	dname, ok := firstDNAME(dnameRec)
+	if !ok {
+		return nil, nil, false
+	}
+	target, ok := dnameRewriteTarget(qname, owner, dname.Target)
+	if !ok {
+		return nil, nil, false
+	}
+	return dnameRec, &dns.CNAME{
+		Hdr: dns.RR_Header{
+			Name:   dns.Fqdn(qname),
+			Rrtype: dns.TypeCNAME,
+			Class:  dns.ClassINET,
+			Ttl:    dname.Hdr.Ttl,
+		},
+		Target: target,
+	}, true
+}
+
+func closestDNAME(qname string) (string, []dns.RR, bool) {
+	trimmed := strings.TrimSuffix(strings.ToLower(qname), ".")
+	labels := strings.Split(trimmed, ".")
+	for i := 1; i < len(labels)-1; i++ {
+		candidate := dns.Fqdn(strings.Join(labels[i:], "."))
+		if rec, ok := zone.LookupRecord(dns.TypeDNAME, candidate); ok {
+			return candidate, rec, true
+		}
+	}
+	return "", nil, false
+}
+
+func firstDNAME(rrs []dns.RR) (*dns.DNAME, bool) {
+	for _, rr := range rrs {
+		dname, ok := rr.(*dns.DNAME)
+		if ok {
+			return dname, true
+		}
+	}
+	return nil, false
+}
+
+func dnameRewriteTarget(qname, owner, target string) (string, bool) {
+	qname = strings.TrimSuffix(dns.Fqdn(qname), ".")
+	owner = strings.TrimSuffix(dns.Fqdn(owner), ".")
+	target = strings.TrimSuffix(dns.Fqdn(target), ".")
+	qLower := strings.ToLower(qname)
+	ownerLower := strings.ToLower(owner)
+	if qLower == ownerLower || !strings.HasSuffix(qLower, "."+ownerLower) {
+		return "", false
+	}
+	prefix := qname[:len(qname)-len(owner)-1]
+	if prefix == "" {
+		return dns.Fqdn(target), true
+	}
+	return dns.Fqdn(prefix + "." + target), true
+}
+
+func synthesizedDNAMECNAMEs(section []dns.RR) map[string]bool {
+	out := make(map[string]bool)
+	var dnames []*dns.DNAME
+	for _, rr := range section {
+		if dname, ok := rr.(*dns.DNAME); ok {
+			dnames = append(dnames, dname)
+		}
+	}
+	if len(dnames) == 0 {
+		return out
+	}
+	for _, rr := range section {
+		cname, ok := rr.(*dns.CNAME)
+		if !ok {
+			continue
+		}
+		for _, dname := range dnames {
+			if _, ok := dnameRewriteTarget(cname.Hdr.Name, dname.Hdr.Name, dname.Target); ok {
+				out[strings.ToLower(cname.Hdr.Name)] = true
+				break
+			}
+		}
+	}
+	return out
+}
+
+func authoritativeForName(name string) bool {
+	_, ok := lookupApexSOA(name)
+	return ok
+}
+
+func shouldReturnReferral(q dns.Question, delegation string) bool {
+	if strings.EqualFold(q.Name, delegation) && q.Qtype == dns.TypeDS {
+		return false
+	}
+	return true
+}
+
+func glueRecords(nsRecords []dns.RR) []dns.RR {
+	var out []dns.RR
+	seen := make(map[string]bool)
+	for _, rr := range nsRecords {
+		ns, ok := rr.(*dns.NS)
+		if !ok {
+			continue
+		}
+		if !inBailiwickGlue(ns.Ns, ns.Hdr.Name) {
+			continue
+		}
+		for _, rrtype := range []uint16{dns.TypeA, dns.TypeAAAA} {
+			records, ok := zone.LookupRecord(rrtype, ns.Ns)
+			if !ok {
+				continue
+			}
+			for _, glue := range records {
+				key := glue.String()
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				out = append(out, glue)
+			}
+		}
+	}
+	return out
+}
+
+func inBailiwickGlue(target, delegation string) bool {
+	target = strings.ToLower(dns.Fqdn(target))
+	delegation = strings.ToLower(dns.Fqdn(delegation))
+	return target == delegation || strings.HasSuffix(target, "."+delegation)
+}
+
+func lookupWildcard(rrtype uint16, qname string, wantsDNSSEC bool) ([]dns.RR, bool) {
+	if nameExists(qname) {
+		return nil, false
+	}
+	wildcard, ok := zone.WildcardName(qname)
+	if !ok {
+		return nil, false
+	}
+
+	if rec, ok := zone.LookupRecord(rrtype, wildcard); ok {
+		return synthesizeWildcard(qname, rec, wantsDNSSEC), true
+	}
+	if rrtype != dns.TypeCNAME {
+		if rec, ok := zone.LookupRecord(dns.TypeCNAME, wildcard); ok {
+			return synthesizeWildcard(qname, rec, wantsDNSSEC), true
+		}
+	}
+	return nil, false
+}
+
+func synthesizeWildcard(qname string, wildcardRRSet []dns.RR, wantsDNSSEC bool) []dns.RR {
+	var out []dns.RR
+	for _, rr := range wildcardRRSet {
+		copied := dns.Copy(rr)
+		copied.Header().Name = dns.Fqdn(qname)
+		out = append(out, copied)
+	}
+
+	if !wantsDNSSEC {
+		return out
+	}
+	rrsigRecords, err := zone.EnsureSignedRRSet(wildcardRRSet)
+	if err != nil {
+		slog.Warn("DNSSEC wildcard signing failed: %v", err)
+		return out
+	}
+	for _, sig := range rrsigRecords {
+		rrsig, ok := dns.Copy(sig).(*dns.RRSIG)
+		if !ok {
+			continue
+		}
+		rrsig.Hdr.Name = dns.Fqdn(qname)
+		out = append(out, rrsig)
+	}
+	return out
+}
+
+func lookupApexSOA(name string) ([]dns.RR, bool) {
+	zoneName, _, ok := internal.SplitName(name)
+	if !ok {
+		return nil, false
+	}
+	apex, err := internal.SanitizeFQDN(zoneName)
+	if err != nil {
+		return nil, false
+	}
+	return zone.LookupRecord(dns.TypeSOA, apex)
+}
+
+func denialRecords(name string, qtype uint16, nxdomain bool) []dns.RR {
+	return zone.DenialProofs(name, qtype, nxdomain)
+}
+
+func nameExists(name string) bool {
+	return zone.NameExists(name)
+}
+
+func transferClientAllowed(remoteAddr string, allowTransfer string) bool {
+	allowTransfer = strings.TrimSpace(allowTransfer)
+	if allowTransfer == "" {
+		return true
+	}
+
+	remoteIP, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		remoteIP = remoteAddr
+	}
+	remote := net.ParseIP(remoteIP)
+	if remote == nil {
+		return false
+	}
+
+	for _, entry := range strings.Split(allowTransfer, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+
+		if ip := net.ParseIP(entry); ip != nil {
+			if ip.Equal(remote) {
+				return true
+			}
+			continue
+		}
+
+		if ip, _, err := net.SplitHostPort(entry); err == nil {
+			if parsed := net.ParseIP(ip); parsed != nil && parsed.Equal(remote) {
+				return true
+			}
+		}
+	}
+
+	return false
 }

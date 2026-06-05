@@ -5,6 +5,8 @@ import (
 	"go53/internal"
 	"go53/internal/errors"
 	"log"
+	"sort"
+	"strings"
 )
 
 type AXFRRecord struct{}
@@ -30,6 +32,8 @@ func (AXFRRecord) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
+	recs = memStore.SignZoneTransferRRsets(recs)
+
 	var soa dns.RR
 	var result []dns.RR
 
@@ -40,6 +44,7 @@ func (AXFRRecord) Lookup(host string) ([]dns.RR, bool) {
 		}
 		result = append(result, rr)
 	}
+	sortTransferRRs(result)
 
 	if soa == nil {
 		return nil, false
@@ -55,6 +60,20 @@ func (AXFRRecord) Lookup(host string) ([]dns.RR, bool) {
 	log.Println(final)
 
 	return final, true
+}
+
+func sortTransferRRs(rrs []dns.RR) {
+	sort.SliceStable(rrs, func(i, j int) bool {
+		hi := rrs[i].Header()
+		hj := rrs[j].Header()
+		if !strings.EqualFold(hi.Name, hj.Name) {
+			return strings.ToLower(hi.Name) < strings.ToLower(hj.Name)
+		}
+		if hi.Rrtype != hj.Rrtype {
+			return hi.Rrtype < hj.Rrtype
+		}
+		return rrs[i].String() < rrs[j].String()
+	})
 }
 
 func (AXFRRecord) Type() uint16 {

@@ -55,6 +55,9 @@ type Storage interface {
 
 	// SaveTable saves a key/value pair into the given logical table.
 	SaveTable(table string, key string, value []byte) error
+
+	// DeleteFromTable deletes a specific key from the given logical table.
+	DeleteFromTable(table string, key string) error
 }
 
 // Backend is the globally available storage backend instance,

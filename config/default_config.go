@@ -13,6 +13,7 @@ var DefaultLiveConfig = LiveConfig{
 	AllowAXFR:      false,
 	DefaultNS:      "ns1.go53.local.",
 	EnforceTSIG:    false,
+	DNSSECEnabled:  true,
 
 	Primary: PrimaryConfig{
 		NotifyDebounceMs: 2000,
@@ -29,10 +30,18 @@ var DefaultLiveConfig = LiveConfig{
 	Dev: DevConfig{
 		DualMode: false,
 	},
+
+	DNSSEC: DNSSECSignaturePolicy{
+		ValiditySeconds:       7 * 24 * 3600,
+		DNSKEYValiditySeconds: 14 * 24 * 3600,
+		RefreshBeforeSeconds:  24 * 3600,
+		JitterSeconds:         3600,
+		InceptionSkewSeconds:  3600,
+	},
 }
 
 var DefaultBaseConfig = BaseConfig{
-	DNSPort:        ":53",
+	DNSPort:        ":2053",
 	BindHost:       "0.0.0.0",
 	APIPort:        ":8053",
 	StorageBackend: "badger",

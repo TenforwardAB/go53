@@ -3,31 +3,34 @@ package types
 type RecordType string
 
 const (
-	TypeA      RecordType = "A"
-	TypeAAAA   RecordType = "AAAA"
-	TypeMX     RecordType = "MX"
-	TypeNS     RecordType = "NS"
-	TypeSOA    RecordType = "SOA"
-	TypeCNAME  RecordType = "CNAME"
-	TypeTXT    RecordType = "TXT"
-	TypeSRV    RecordType = "SRV"
-	TypePTR    RecordType = "PTR"
-	TypeCAA    RecordType = "CAA"
-	TypeDNSKEY RecordType = "DNSKEY"
-	TypeRRSIG  RecordType = "RRSIG"
-	TypeNSEC   RecordType = "NSEC"
-	TypeNSEC3  RecordType = "NSEC3"
-	TypeDS     RecordType = "DS"
-	TypeNAPTR  RecordType = "NAPTR"
-	TypeSPF    RecordType = "SPF"
-	TypeHTTPS  RecordType = "HTTPS"
-	TypeSVCB   RecordType = "SVCB"
-	TypeLOC    RecordType = "LOC"
-	TypeCERT   RecordType = "CERT"
-	TypeSSHFP  RecordType = "SSHFP"
-	TypeURI    RecordType = "URI"
-	TypeAPL    RecordType = "APL"
-	TypeDNAME  RecordType = "DNAME"
+	TypeA         RecordType = "A"
+	TypeAAAA      RecordType = "AAAA"
+	TypeMX        RecordType = "MX"
+	TypeNS        RecordType = "NS"
+	TypeSOA       RecordType = "SOA"
+	TypeCNAME     RecordType = "CNAME"
+	TypeTXT       RecordType = "TXT"
+	TypeSRV       RecordType = "SRV"
+	TypePTR       RecordType = "PTR"
+	TypeCAA       RecordType = "CAA"
+	TypeDNSKEY    RecordType = "DNSKEY"
+	TypeCDNSKEY   RecordType = "CDNSKEY"
+	TypeRRSIG     RecordType = "RRSIG"
+	TypeNSEC      RecordType = "NSEC"
+	TypeNSEC3     RecordType = "NSEC3"
+	TypeNSECPARAM RecordType = "NSECPARAM"
+	TypeDS        RecordType = "DS"
+	TypeCDS       RecordType = "CDS"
+	TypeNAPTR     RecordType = "NAPTR"
+	TypeSPF       RecordType = "SPF"
+	TypeHTTPS     RecordType = "HTTPS"
+	TypeSVCB      RecordType = "SVCB"
+	TypeLOC       RecordType = "LOC"
+	TypeCERT      RecordType = "CERT"
+	TypeSSHFP     RecordType = "SSHFP"
+	TypeURI       RecordType = "URI"
+	TypeAPL       RecordType = "APL"
+	TypeDNAME     RecordType = "DNAME"
 )
 
 type ARecord struct {
@@ -104,16 +107,25 @@ type DNSKEYRecord struct {
 	TTL       uint32 `json:"ttl"`
 }
 
+type CDNSKEYRecord struct {
+	Flags     uint16 `json:"flags"`
+	Protocol  uint8  `json:"protocol"`
+	Algorithm uint8  `json:"algorithm"`
+	PublicKey string `json:"public_key"`
+	TTL       uint32 `json:"ttl"`
+}
+
 type RRSIGRecord struct {
-	TypeCovered string `json:"type_covered"`
+	Name        string `json:"name"`         // <-- not wire, just internal
+	TypeCovered string `json:"type_covered"` // e.g., "A", "NS", etc.
 	Algorithm   uint8  `json:"algorithm"`
 	Labels      uint8  `json:"labels"`
 	OrigTTL     uint32 `json:"original_ttl"`
-	Expiration  uint32 `json:"expiration"`
-	Inception   uint32 `json:"inception"`
+	Expiration  uint32 `json:"expiration"` // Unix timestamp
+	Inception   uint32 `json:"inception"`  // Unix timestamp
 	KeyTag      uint16 `json:"key_tag"`
-	SignerName  string `json:"signer_name"`
-	Signature   string `json:"signature"`
+	SignerName  string `json:"signer_name"` // FQDN of signer
+	Signature   string `json:"signature"`   // Base64-encoded
 	TTL         uint32 `json:"ttl"`
 }
 
@@ -124,16 +136,32 @@ type NSECRecord struct {
 }
 
 type NSEC3Record struct {
-	HashAlg    uint8    `json:"hash_algorithm"`
-	Flags      uint8    `json:"flags"`
-	Iterations uint16   `json:"iterations"`
-	Salt       string   `json:"salt"`
-	NextHashed string   `json:"next_hashed"`
-	Types      []string `json:"types"`
+	HashAlg    uint8    `json:"hash_algorithm"` // Usually 1 (SHA-1)
+	Flags      uint8    `json:"flags"`          // Opt-out bit
+	Iterations uint16   `json:"iterations"`     // Hash iterations
+	Salt       string   `json:"salt"`           // Hex-encoded
+	NextHashed string   `json:"next_hashed"`    // Base32-encoded
+	Types      []string `json:"types"`          // e.g., ["A", "NS"]
 	TTL        uint32   `json:"ttl"`
 }
 
+type NSEC3ParamRecord struct {
+	HashAlgorithm uint8  `json:"hash_algorithm"` // usually 1 (SHA-1)
+	Flags         uint8  `json:"flags"`          // opt-out flag (bitmask)
+	Iterations    uint16 `json:"iterations"`     // number of hash iterations
+	Salt          string `json:"salt"`           // hex-encoded salt ("" or "-" if none)
+	TTL           uint32 `json:"ttl"`            // standard TTL
+}
+
 type DSRecord struct {
+	KeyTag     uint16 `json:"key_tag"`
+	Algorithm  uint8  `json:"algorithm"`
+	DigestType uint8  `json:"digest_type"`
+	Digest     string `json:"digest"` //hex
+	TTL        uint32 `json:"ttl"`
+}
+
+type CDSRecord struct {
 	KeyTag     uint16 `json:"key_tag"`
 	Algorithm  uint8  `json:"algorithm"`
 	DigestType uint8  `json:"digest_type"`
@@ -208,29 +236,50 @@ type APLRecord struct {
 }
 
 type ZoneData struct {
-	A      map[string][]ARecord      `json:"a,omitempty"`
-	AAAA   map[string][]AAAARecord   `json:"aaaa,omitempty"`
-	MX     map[string][]MXRecord     `json:"mx,omitempty"`
-	SOA    *SOARecord                `json:"soa,omitempty"` // Only one per zone
-	CNAME  map[string]CNAMERecord    `json:"cname,omitempty"`
-	NS     map[string][]NSRecord     `json:"ns,omitempty"`
-	SRV    map[string][]SRVRecord    `json:"srv,omitempty"`
-	TXT    map[string][]TXTRecord    `json:"txt,omitempty"`
-	PTR    map[string][]PTRRecord    `json:"ptr,omitempty"`
-	CAA    map[string][]CAARecord    `json:"caa,omitempty"`
-	DNSKEY map[string][]DNSKEYRecord `json:"dnskey,omitempty"`
-	RRSIG  map[string][]RRSIGRecord  `json:"rrsig,omitempty"`
-	NSEC   map[string]NSECRecord     `json:"nsec,omitempty"`  // one per name
-	NSEC3  map[string]NSEC3Record    `json:"nsec3,omitempty"` // one per name
-	DS     map[string][]DSRecord     `json:"ds,omitempty"`
-	NAPTR  map[string][]NAPTRRecord  `json:"naptr,omitempty"`
-	SPF    map[string]SPFRecord      `json:"spf,omitempty"`
-	HTTPS  map[string][]HTTPSRecord  `json:"https,omitempty"`
-	SVCB   map[string][]SVCBRecord   `json:"svcb,omitempty"`
-	LOC    map[string][]LOCRecord    `json:"loc,omitempty"`
-	CERT   map[string][]CERTRecord   `json:"cert,omitempty"`
-	SSHFP  map[string][]SSHFPRecord  `json:"sshfp,omitempty"`
-	URI    map[string][]URIRecord    `json:"uri,omitempty"`
-	APL    map[string][]APLRecord    `json:"apl,omitempty"`
-	DNAME  map[string]DNAMERecord    `json:"dname,omitempty"`
+	A          map[string][]ARecord       `json:"a,omitempty"`
+	AAAA       map[string][]AAAARecord    `json:"aaaa,omitempty"`
+	MX         map[string][]MXRecord      `json:"mx,omitempty"`
+	SOA        *SOARecord                 `json:"soa,omitempty"` // Only one per zone
+	CNAME      map[string]CNAMERecord     `json:"cname,omitempty"`
+	NS         map[string][]NSRecord      `json:"ns,omitempty"`
+	SRV        map[string][]SRVRecord     `json:"srv,omitempty"`
+	TXT        map[string][]TXTRecord     `json:"txt,omitempty"`
+	PTR        map[string][]PTRRecord     `json:"ptr,omitempty"`
+	CAA        map[string][]CAARecord     `json:"caa,omitempty"`
+	DNSKEY     map[string][]DNSKEYRecord  `json:"dnskey,omitempty"`
+	CDNSKEY    map[string][]CDNSKEYRecord `json:"cdnskey,omitempty"`
+	RRSIG      map[string][]*RRSIGRecord  `json:"rrsig,omitempty"`
+	NSEC       map[string]NSECRecord      `json:"nsec,omitempty"`  // one per name
+	NSEC3      map[string]NSEC3Record     `json:"nsec3,omitempty"` // one per name
+	NSEC3PARAM *NSEC3ParamRecord          `json:"nsec3param,omitempty"`
+	DS         map[string][]DSRecord      `json:"ds,omitempty"`
+	CDS        map[string][]CDSRecord     `json:"cds,omitempty"`
+	NAPTR      map[string][]NAPTRRecord   `json:"naptr,omitempty"`
+	SPF        map[string]SPFRecord       `json:"spf,omitempty"`
+	HTTPS      map[string][]HTTPSRecord   `json:"https,omitempty"`
+	SVCB       map[string][]SVCBRecord    `json:"svcb,omitempty"`
+	LOC        map[string][]LOCRecord     `json:"loc,omitempty"`
+	CERT       map[string][]CERTRecord    `json:"cert,omitempty"`
+	SSHFP      map[string][]SSHFPRecord   `json:"sshfp,omitempty"`
+	URI        map[string][]URIRecord     `json:"uri,omitempty"`
+	APL        map[string][]APLRecord     `json:"apl,omitempty"`
+	DNAME      map[string]DNAMERecord     `json:"dname,omitempty"`
+}
+
+type StoredKey struct {
+	KeyTag     uint16 `json:"key_tag"`     // Needed for DS and RRSIG
+	Zone       string `json:"zone"`        // Used for signer name, key publishing
+	Algorithm  string `json:"algorithm"`   // "ECDSAP256", "RSASHA256", etc.
+	Flags      uint16 `json:"flags"`       // 256 = ZSK, 257 = KSK
+	PrivatePEM string `json:"private_pem"` // PEM-encoded EC/RSA key
+	PublicKey  string `json:"public_key"`  // Optional: base64 DNSKEY string
+
+	State      string `json:"state,omitempty"`       // generated, published, active, retired, revoked, removed
+	CreatedAt  int64  `json:"created_at,omitempty"`  // Unix timestamp
+	PublishAt  int64  `json:"publish_at,omitempty"`  // DNSKEY may be published from this time
+	ActivateAt int64  `json:"activate_at,omitempty"` // key may sign from this time
+	RetireAt   int64  `json:"retire_at,omitempty"`   // key must stop signing from this time
+	RemoveAt   int64  `json:"remove_at,omitempty"`   // DNSKEY may be removed from this time
+	RevokedAt  int64  `json:"revoked_at,omitempty"`  // RFC 5011 revoke publication time
+	Revoke     bool   `json:"revoke,omitempty"`      // publish DNSKEY with revoke bit set
 }

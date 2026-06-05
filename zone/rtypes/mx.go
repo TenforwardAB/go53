@@ -3,6 +3,7 @@ package rtypes
 import (
 	"errors"
 	"fmt"
+	"github.com/TenforwardAB/slog"
 	"github.com/miekg/dns"
 	"go53/internal"
 	"go53/types"
@@ -100,7 +101,9 @@ func (MXRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 }
 
 func (MXRecord) Lookup(host string) ([]dns.RR, bool) {
+	slog.Crazy("[mx.go:Lookup] host: %s", host)
 	zone, name, ok := internal.SplitName(host)
+	slog.Crazy("[mx.go:Lookup] Name: %s", name)
 	if !ok {
 		return nil, false
 	}

@@ -71,6 +71,14 @@ func (m *MockStorage) SaveTable(table, key string, value []byte) error {
 	return nil
 }
 
+func (m *MockStorage) DeleteFromTable(table, key string) error {
+	m.ensure()
+	if _, ok := m.data[table]; ok {
+		delete(m.data[table], key)
+	}
+	return nil
+}
+
 func TestMain(m *testing.M) {
 	config.AppConfig = &config.ConfigManager{}
 	config.AppConfig.Base = config.BaseConfig{

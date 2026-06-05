@@ -65,6 +65,12 @@ func ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		respondWithFailure(w, req)
 		return
 	}
+	currentSOA, ok := firstSOA(rrs)
+	if !ok {
+		log.Println("zone transfer data missing SOA")
+		respondWithFailure(w, req)
+		return
+	}
 
 	const maxSize = 61 * 1024
 
@@ -88,6 +94,21 @@ func ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 		log.Println("TSIG required but not present")
 		respondWithFailure(w, req)
 		return
+	}
+
+	if q.Qtype == dns.TypeIXFR {
+		clientSerial, ok := ixfrClientSerial(req)
+		if !ok {
+			log.Println("IXFR request missing client SOA in authority section")
+			respondWithRcode(w, req, dns.RcodeFormatError)
+			return
+		}
+		if !serialNewer(currentSOA.Serial, clientSerial) {
+			log.Printf("IXFR client is up-to-date for %s: client=%d current=%d", q.Name, clientSerial, currentSOA.Serial)
+			writeTransferMessage(w, req, []dns.RR{currentSOA}, tsigKey)
+			return
+		}
+		log.Printf("IXFR journal unavailable for %s: client=%d current=%d; falling back to full zone transfer", q.Name, clientSerial, currentSOA.Serial)
 	}
 
 	msg := new(dns.Msg)
@@ -133,6 +154,42 @@ func ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 	}
 }
 
+func firstSOA(rrs []dns.RR) (*dns.SOA, bool) {
+	for _, rr := range rrs {
+		soa, ok := rr.(*dns.SOA)
+		if ok {
+			return soa, true
+		}
+	}
+	return nil, false
+}
+
+func ixfrClientSerial(req *dns.Msg) (uint32, bool) {
+	for _, rr := range req.Ns {
+		soa, ok := rr.(*dns.SOA)
+		if ok {
+			return soa.Serial, true
+		}
+	}
+	return 0, false
+}
+
+func serialNewer(current, client uint32) bool {
+	return current != client && uint32(current-client) < 1<<31
+}
+
+func writeTransferMessage(w dns.ResponseWriter, req *dns.Msg, answer []dns.RR, tsigKey string) {
+	msg := new(dns.Msg)
+	msg.SetReply(req)
+	msg.Answer = answer
+	if config.AppConfig.GetLive().EnforceTSIG && tsigKey != "" {
+		msg.SetTsig(tsigKey, dns.HmacSHA256, 300, time.Now().Unix())
+	}
+	if err := w.WriteMsg(msg); err != nil {
+		log.Printf("Failed to send transfer response: %v", err)
+	}
+}
+
 // respondWithFailure sends a DNS response with RcodeServerFailure (SERVFAIL) to the client.
 // It sets the Rcode in the response message appropriately, based on the incoming request.
 //
@@ -140,11 +197,15 @@ func ServeDNS(w dns.ResponseWriter, req *dns.Msg) {
 //   - w: The dns.ResponseWriter used to send the response.
 //   - req: The original *dns.Msg request, may be nil.
 func respondWithFailure(w dns.ResponseWriter, req *dns.Msg) {
+	respondWithRcode(w, req, dns.RcodeServerFailure)
+}
+
+func respondWithRcode(w dns.ResponseWriter, req *dns.Msg, rcode int) {
 	m := new(dns.Msg)
 	if req != nil {
-		m.SetRcode(req, dns.RcodeServerFailure)
+		m.SetRcode(req, rcode)
 	} else {
-		m.MsgHdr.Rcode = dns.RcodeServerFailure
+		m.MsgHdr.Rcode = rcode
 	}
 	_ = w.WriteMsg(m)
 }

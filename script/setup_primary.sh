@@ -10,6 +10,7 @@ echo "Updating config..."
 curl -s -X PATCH "$BASE_URL/api/config" -H "$JSON_HEADER" -d '{
   "log_level": "debug",
   "dnssec_enabled": true,
+  "enforce_tsig": false,
   "mode": "primary",
   "allow_transfer": "172.99.53.11",
   "allow_recursion": false,
@@ -18,7 +19,7 @@ curl -s -X PATCH "$BASE_URL/api/config" -H "$JSON_HEADER" -d '{
   "max_udp_size": 1232,
   "enable_edns": true,
   "rate_limit_qps": 0,
-  "allow_axfr": false,
+  "allow_axfr": true,
   "default_ns": "ns1.go53.test.",
   "primary": {
     "notify_debounce_ms": 2000,
@@ -41,52 +42,52 @@ post_record() {
 }
 
 post_record "soa" '{
-  "Ns": "ns2.go53.eu.",
-  "Mbox": "hostmaster3.go53.eu."
+  "ns": "ns2.go53.eu.",
+  "mbox": "hostmaster3.go53.eu."
 }'
 
-post_record "a" '{
-  "name": "www",
-  "ip": "1.2.3.8",
-  "ttl": 3600
-}'
-
-post_record "a" '{
-  "name": "www",
-  "ip": "1.2.3.9",
-  "ttl": 3600
-}'
-
-post_record "a" '{
-  "name": "mail",
-  "ip": "1.2.3.8",
-  "ttl": 3600
-}'
-
-post_record "cname" '{
-  "name": "mail1",
-  "target": "mail.go53.test",
-  "ttl": 3600
-}'
-
-post_record "a" '{
-  "name": "api",
-  "ip": "1.2.3.8",
-  "ttl": 3600
-}'
-
-post_record "mx" '{
-  "name": "@",
-  "host": "mail1.go53.test.",
-  "priority": 10,
-  "ttl": 3600
-}'
-
-post_record "txt" '{
-  "name": "test3",
-  "text": "v=spf1 include:mailtrix.eu ~all",
-  "ttl": 3600
-}'
+#post_record "a" '{
+#  "name": "www",
+#  "ip": "1.2.3.8",
+#  "ttl": 3600
+#}'
+#
+#post_record "a" '{
+#  "name": "www",
+#  "ip": "1.2.3.9",
+#  "ttl": 3600
+#}'
+#
+#post_record "a" '{
+#  "name": "mail",
+#  "ip": "1.2.3.8",
+#  "ttl": 3600
+#}'
+#
+#post_record "cname" '{
+#  "name": "mail1",
+#  "target": "mail.go53.test",
+#  "ttl": 3600
+#}'
+#
+#post_record "a" '{
+#  "name": "api",
+#  "ip": "1.2.3.8",
+#  "ttl": 3600
+#}'
+#
+#post_record "mx" '{
+#  "name": "@",
+#  "host": "mail1.go53.test.",
+#  "priority": 10,
+#  "ttl": 3600
+#}'
+#
+#post_record "txt" '{
+#  "name": "test3",
+#  "text": "v=spf1 include:mailtrix.eu ~all",
+#  "ttl": 3600
+#}'
 
 post_record "ns" '{
   "name": "@",
@@ -94,10 +95,10 @@ post_record "ns" '{
   "ttl": 3600
 }'
 
-post_record "spf" '{
-   "name": "@",
-   "text": "v=spf1 include:mailtrix.eu ~all",
-   "ttl": 3600
-}'
+#post_record "spf" '{
+#   "name": "@",
+#   "text": "v=spf1 include:mailtrix.eu ~all",
+#   "ttl": 3600
+#}'
 
 echo "Setup complete."

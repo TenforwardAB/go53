@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/TenforwardAB/slog"
 	"go53/api"
 	"go53/config"
 	"go53/dns"
@@ -17,11 +18,18 @@ import (
 var generateTSIG = flag.Bool("generate-tsig", false, "Generate TSIG key and store it if not present")
 
 func main() {
+	slog.SetLevel("debug")
+
+	slog.Info("Application started")
 	flag.Parse()
 
 	config.AppConfig.Init()
 	config.AppConfig.InitLiveConfig()
+	if err := security.InitDNSSECKeyCache(); err != nil {
+		log.Fatalf("Failed to load DNSSEC key cache: %v", err)
+	}
 	base := config.AppConfig.GetBase()
+	slog.Crazy("Live Config DNSSEC ENABLE is: %b", config.AppConfig.GetLive().DNSSECEnabled)
 
 	const table = "tsig-keys"
 	const keyName = "xxfr-key"

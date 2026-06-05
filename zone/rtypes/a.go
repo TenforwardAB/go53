@@ -144,6 +144,32 @@ func (ARecord) Lookup(host string) ([]dns.RR, bool) {
 			})
 		}
 
+	case []interface{}:
+		for _, raw := range v {
+			item, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			ipStr, _ := item["ip"].(string)
+			ip := net.ParseIP(ipStr).To4()
+			if ip == nil {
+				continue
+			}
+			ttl := uint32(3600)
+			if t, ok := item["ttl"].(float64); ok {
+				ttl = uint32(t)
+			}
+			results = append(results, &dns.A{
+				Hdr: dns.RR_Header{
+					Name:   host,
+					Rrtype: dns.TypeA,
+					Class:  dns.ClassINET,
+					Ttl:    ttl,
+				},
+				A: ip,
+			})
+		}
+
 	default:
 		return nil, false
 	}
@@ -179,9 +205,18 @@ func (ARecord) Delete(host string, value interface{}) error {
 		return nil
 	}
 
-	records, ok := raw.([]map[string]interface{})
-	if !ok {
-		return fmt.Errorf("Delete: invalid data format for A record")
+	var records []map[string]interface{}
+	switch v := raw.(type) {
+	case []map[string]interface{}:
+		records = v
+	case []interface{}:
+		for _, item := range v {
+			if obj, ok := item.(map[string]interface{}); ok {
+				records = append(records, obj)
+			}
+		}
+	default:
+		return fmt.Errorf("Delete: invalid data format for A record: %T", raw)
 	}
 
 	var filtered []map[string]interface{}

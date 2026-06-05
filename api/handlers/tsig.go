@@ -3,13 +3,13 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"go53/internal"
 	"go53/security"
 	"go53/storage"
 	"log"
 	"net/http"
 
 	"github.com/gorilla/mux"
-	"github.com/miekg/dns"
 )
 
 type tsigKeyInput struct {
@@ -21,7 +21,7 @@ type tsigKeyInput struct {
 func ListTSIGKeysHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("ListTSIGKeys called")
 	keys := []map[string]string{}
-	for name, key := range security.TSIGSecrets {
+	for name, key := range security.ListTSIGKeys() {
 		keys = append(keys, map[string]string{
 			"name":      name,
 			"algorithm": key.Algorithm,
@@ -48,7 +48,7 @@ func AddTSIGKeyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := dns.Fqdn(nameParam)
+	name, _ := internal.SanitizeFQDN(nameParam)
 	value := []byte(fmt.Sprintf(`{"algorithm":"%s","secret":"%s"}`, input.Algorithm, input.Secret))
 
 	const table = "tsig-keys"
@@ -74,13 +74,18 @@ func AddTSIGKeyHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func DeleteTSIGKeyHandler(w http.ResponseWriter, r *http.Request) {
-	name := dns.Fqdn(mux.Vars(r)["name"])
+	name, _ := internal.SanitizeFQDN(mux.Vars(r)["name"])
 
-	if _, exists := security.TSIGSecrets[name]; !exists {
+	if _, exists := security.GetTSIGKey(name); !exists {
 		http.Error(w, "TSIG key not found", http.StatusNotFound)
 		return
 	}
 
-	delete(security.TSIGSecrets, name)
+	if err := storage.Backend.DeleteFromTable("tsig-keys", mux.Vars(r)["name"]); err != nil {
+		http.Error(w, "failed to delete TSIG key", http.StatusInternalServerError)
+		return
+	}
+
+	security.DeleteTSIGKey(name)
 	w.WriteHeader(http.StatusNoContent)
 }

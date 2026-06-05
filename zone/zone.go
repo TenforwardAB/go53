@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"github.com/miekg/dns"
 	"go53/zone/rtypes"
+	"go53/zonereader"
 )
 
 // AddRecord adds a DNS record of the specified type to the in-memory store for a given zone.
@@ -102,4 +103,80 @@ func DeleteZone(zone string) error {
 		return fmt.Errorf("memory store is not initialized")
 	}
 	return mem.DeleteZone(zone)
+}
+
+func EnsureSignedRRSet(rrs []dns.RR) ([]dns.RR, error) {
+	mem := rtypes.GetMemStore()
+	if mem == nil {
+		return nil, fmt.Errorf("memory store is not initialized")
+	}
+	return mem.EnsureSignedRRSet(rrs)
+}
+
+func RefreshDNSSECKeyMaterial(zone string) error {
+	mem := rtypes.GetMemStore()
+	if mem == nil {
+		return fmt.Errorf("memory store is not initialized")
+	}
+	return mem.RefreshDNSSECKeyMaterial(zone)
+}
+
+func FindNSECProof(name string) ([]dns.RR, bool) {
+	mem := rtypes.GetMemStore()
+	if mem == nil {
+		return nil, false
+	}
+	return mem.FindNSECProof(name)
+}
+
+func FindNSEC3Proof(name string) ([]dns.RR, bool) {
+	mem := rtypes.GetMemStore()
+	if mem == nil {
+		return nil, false
+	}
+	return mem.FindNSEC3Proof(name)
+}
+
+func DenialProofs(name string, qtype uint16, nxdomain bool) []dns.RR {
+	mem := rtypes.GetMemStore()
+	if mem == nil {
+		return nil
+	}
+	return mem.DenialProofs(name, qtype, nxdomain)
+}
+
+func NameExists(name string) bool {
+	mem := rtypes.GetMemStore()
+	if mem == nil {
+		return false
+	}
+	return mem.NameExists(name)
+}
+
+func WildcardExists(name string) bool {
+	mem := rtypes.GetMemStore()
+	if mem == nil {
+		return false
+	}
+	return mem.WildcardExists(name)
+}
+
+func WildcardName(name string) (string, bool) {
+	mem := rtypes.GetMemStore()
+	if mem == nil {
+		return "", false
+	}
+	return mem.WildcardName(name)
+}
+
+func DelegationFor(name string) (string, []dns.RR, bool) {
+	mem := rtypes.GetMemStore()
+	if mem == nil {
+		return "", nil, false
+	}
+	return mem.DelegationFor(name)
+}
+
+func init() {
+	zonereader.LookupRecordFunc = LookupRecord
 }

@@ -69,6 +69,13 @@ func (m *mockStorage) SaveTable(table, key string, value []byte) error {
 	return nil
 }
 
+func (m *mockStorage) DeleteFromTable(table, key string) error {
+	if _, ok := m.Tables[table]; ok {
+		delete(m.Tables[table], key)
+	}
+	return nil
+}
+
 // TESTS BELOW
 
 func setupMockStorage() {
@@ -190,7 +197,7 @@ func TestPersistLiveConfig(t *testing.T) {
 		t.Fatalf("PersistLiveConfig failed: %v", err)
 	}
 
-	if mock.Tables["config"]["log_level"] == nil || string(mock.Tables["config"]["log_level"]) != "warn" {
+	if mock.Tables["config"]["log_level"] == nil || string(mock.Tables["config"]["log_level"]) != `"warn"` {
 		t.Errorf("Expected log_level 'warn', got '%s'", mock.Tables["config"]["log_level"])
 	}
 }
