@@ -114,3 +114,83 @@ func PostDistributedEventHandler(w http.ResponseWriter, r *http.Request) {
 		"applied": applied,
 	})
 }
+
+func GetDistributedMerkleRootsHandler(w http.ResponseWriter, r *http.Request) {
+	if distributed.Default == nil {
+		http.Error(w, "distributed service is not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	roots, err := distributed.Default.MerkleZoneRoots()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(roots)
+}
+
+func GetDistributedMerkleBranchesHandler(w http.ResponseWriter, r *http.Request) {
+	if distributed.Default == nil {
+		http.Error(w, "distributed service is not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	zone := r.URL.Query().Get("zone")
+	if zone == "" {
+		http.Error(w, "missing zone", http.StatusBadRequest)
+		return
+	}
+	branches, err := distributed.Default.MerkleZoneBranches(zone)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(branches)
+}
+
+func PostDistributedMerkleLeavesHandler(w http.ResponseWriter, r *http.Request) {
+	if distributed.Default == nil {
+		http.Error(w, "distributed service is not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		Zone     string   `json:"zone"`
+		Prefixes []string `json:"prefixes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if req.Zone == "" {
+		http.Error(w, "missing zone", http.StatusBadRequest)
+		return
+	}
+	leaves, err := distributed.Default.MerkleZoneLeaves(req.Zone, req.Prefixes)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(leaves)
+}
+
+func PostDistributedMerkleRepairEventsHandler(w http.ResponseWriter, r *http.Request) {
+	if distributed.Default == nil {
+		http.Error(w, "distributed service is not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		Entities []string `json:"entities"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	events, err := distributed.Default.LatestEventsForEntities(req.Entities)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(events)
+}

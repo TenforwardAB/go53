@@ -454,7 +454,7 @@ func (s *Service) syncPeer(ctx context.Context, peer string) error {
 			}
 		}
 	}
-	return nil
+	return s.repairPeerZones(ctx, peer)
 }
 
 func (s *Service) pushToPeers(ctx context.Context, event Event) {
@@ -618,6 +618,183 @@ func (s *Service) fetchPeerEvents(ctx context.Context, peer, origin string, afte
 	return events, nil
 }
 
+func (s *Service) fetchPeerMerkleRoots(ctx context.Context, peer string) (map[string]MerkleZoneRoot, error) {
+	if useSocketTransport(peer) {
+		return s.fetchPeerMerkleRootsTCP(ctx, peer)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, peerURL(peer, "/api/distributed/merkle/roots"), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("peer merkle roots returned %s", resp.Status)
+	}
+	var roots map[string]MerkleZoneRoot
+	if err := json.NewDecoder(resp.Body).Decode(&roots); err != nil {
+		return nil, err
+	}
+	if roots == nil {
+		roots = map[string]MerkleZoneRoot{}
+	}
+	return roots, nil
+}
+
+func (s *Service) fetchPeerMerkleBranches(ctx context.Context, peer, zone string) (map[string]MerkleBranch, error) {
+	if useSocketTransport(peer) {
+		return s.fetchPeerMerkleBranchesTCP(ctx, peer, zone)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, peerURL(peer, "/api/distributed/merkle/branches")+"?zone="+zone, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("peer merkle branches returned %s", resp.Status)
+	}
+	var branches map[string]MerkleBranch
+	if err := json.NewDecoder(resp.Body).Decode(&branches); err != nil {
+		return nil, err
+	}
+	if branches == nil {
+		branches = map[string]MerkleBranch{}
+	}
+	return branches, nil
+}
+
+func (s *Service) fetchPeerMerkleLeaves(ctx context.Context, peer, zone string, prefixes []string) (map[string]MerkleLeaf, error) {
+	if useSocketTransport(peer) {
+		return s.fetchPeerMerkleLeavesTCP(ctx, peer, zone, prefixes)
+	}
+	body, err := json.Marshal(map[string]any{"zone": zone, "prefixes": prefixes})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, peerURL(peer, "/api/distributed/merkle/leaves"), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("peer merkle leaves returned %s", resp.Status)
+	}
+	var leaves map[string]MerkleLeaf
+	if err := json.NewDecoder(resp.Body).Decode(&leaves); err != nil {
+		return nil, err
+	}
+	if leaves == nil {
+		leaves = map[string]MerkleLeaf{}
+	}
+	return leaves, nil
+}
+
+func (s *Service) fetchPeerMerkleRepairEvents(ctx context.Context, peer string, entities []string) ([]Event, error) {
+	if useSocketTransport(peer) {
+		return s.fetchPeerMerkleRepairEventsTCP(ctx, peer, entities)
+	}
+	body, err := json.Marshal(map[string]any{"entities": entities})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, peerURL(peer, "/api/distributed/merkle/repair-events"), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("peer merkle repair events returned %s", resp.Status)
+	}
+	var events []Event
+	if err := json.NewDecoder(resp.Body).Decode(&events); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
+func (s *Service) repairPeerZones(ctx context.Context, peer string) error {
+	peerRoots, err := s.fetchPeerMerkleRoots(ctx, peer)
+	if err != nil {
+		return err
+	}
+	localRoots, err := s.merkleZoneRoots()
+	if err != nil {
+		return err
+	}
+	zones := map[string]bool{}
+	for zone := range localRoots {
+		zones[zone] = true
+	}
+	for zone := range peerRoots {
+		zones[zone] = true
+	}
+	for zone := range zones {
+		local := localRoots[zone]
+		remote := peerRoots[zone]
+		if local.Root == remote.Root && local.LeafCount == remote.LeafCount {
+			continue
+		}
+		if err := s.repairPeerZone(ctx, peer, zone); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) repairPeerZone(ctx context.Context, peer, zone string) error {
+	localBranches, err := s.merkleZoneBranches(zone)
+	if err != nil {
+		return err
+	}
+	peerBranches, err := s.fetchPeerMerkleBranches(ctx, peer, zone)
+	if err != nil {
+		return err
+	}
+	prefixes := merkleDifferingBranches(localBranches, peerBranches)
+	if len(prefixes) == 0 {
+		return nil
+	}
+	localLeaves, err := s.merkleZoneLeaves(zone, prefixes)
+	if err != nil {
+		return err
+	}
+	peerLeaves, err := s.fetchPeerMerkleLeaves(ctx, peer, zone, prefixes)
+	if err != nil {
+		return err
+	}
+	entities := merkleDifferingEntities(localLeaves, peerLeaves)
+	if len(entities) == 0 {
+		return nil
+	}
+	events, err := s.fetchPeerMerkleRepairEvents(ctx, peer, entities)
+	if err != nil {
+		return err
+	}
+	for _, event := range events {
+		if err := s.applyRepairEvent(ctx, event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Service) applyEventLocked(ctx context.Context, event Event) error {
 	select {
 	case <-ctx.Done():
@@ -710,6 +887,94 @@ func (s *Service) applyDNSSECKeyEvent(event Event) error {
 	default:
 		return fmt.Errorf("unsupported DNSSEC key operation %q", event.Operation)
 	}
+}
+
+func (s *Service) applyRepairEvent(ctx context.Context, event Event) error {
+	if eventType(event) != EntityZoneRecord {
+		return nil
+	}
+	if strings.TrimSpace(event.Origin) == "" || event.Seq == 0 || event.EventID == "" {
+		return errors.New("invalid distributed repair event identity")
+	}
+	if event.Origin == liveConfig().Distributed.NodeID {
+		return nil
+	}
+	if err := verifyEvent(event); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	current, ok := s.loadEntityClock(event.Entity)
+	apply := !ok || event.Seq > current.Seq || (event.Seq == current.Seq && event.Origin >= current.Origin)
+	if !apply {
+		return nil
+	}
+	if err := s.applyEventLocked(ctx, event); err != nil {
+		return err
+	}
+	if err := s.saveEntityClock(event.Entity, EntityClock{Origin: event.Origin, Seq: event.Seq}); err != nil {
+		return err
+	}
+	if err := s.saveEvent(event); err != nil {
+		return err
+	}
+	vector, err := s.loadVector()
+	if err != nil {
+		return err
+	}
+	if vector[event.Origin] < event.Seq {
+		vector[event.Origin] = event.Seq
+		return s.saveVector(vector)
+	}
+	return nil
+}
+
+func (s *Service) latestEventsForEntities(entities []string) ([]Event, error) {
+	wanted := map[string]bool{}
+	for _, entity := range entities {
+		entity = strings.TrimSpace(entity)
+		if entity != "" {
+			wanted[entity] = true
+		}
+	}
+	if len(wanted) == 0 {
+		return nil, nil
+	}
+	table, err := s.storage.LoadTable(eventsTable)
+	if err != nil {
+		return nil, err
+	}
+	latest := map[string]Event{}
+	for _, raw := range table {
+		var event Event
+		if err := json.Unmarshal(raw, &event); err != nil {
+			continue
+		}
+		if event.Entity == "" {
+			event.Entity = eventEntityKey(event)
+		}
+		if eventType(event) != EntityZoneRecord || !wanted[event.Entity] {
+			continue
+		}
+		current, ok := latest[event.Entity]
+		if !ok || event.Seq > current.Seq || (event.Seq == current.Seq && event.Origin > current.Origin) {
+			latest[event.Entity] = event
+		}
+	}
+	out := make([]Event, 0, len(latest))
+	for _, event := range latest {
+		out = append(out, event)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Entity < out[j].Entity
+	})
+	return out, nil
+}
+
+func (s *Service) LatestEventsForEntities(entities []string) ([]Event, error) {
+	return s.latestEventsForEntities(entities)
 }
 
 func (s *Service) eventWinsLocked(event Event) bool {

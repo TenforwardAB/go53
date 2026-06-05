@@ -188,6 +188,38 @@ func (z *InMemoryZoneStore) GetRecord(zone, rtype, name string) (string, string,
 	return zone, rtype, rec, exists
 }
 
+func (z *InMemoryZoneStore) ZoneRecordsSnapshot(zone string) map[string]map[string]any {
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+
+	out := map[string]map[string]any{}
+	zones := z.cache["zones"]
+	zoneMap, ok := zones[zone]
+	if !ok {
+		return out
+	}
+	for rtype, names := range zoneMap {
+		out[rtype] = make(map[string]any, len(names))
+		for name, value := range names {
+			out[rtype][name] = value
+		}
+	}
+	return out
+}
+
+func (z *InMemoryZoneStore) ZoneNamesSnapshot() []string {
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+
+	zones := z.cache["zones"]
+	out := make([]string, 0, len(zones))
+	for zone := range zones {
+		out = append(out, zone)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (z *InMemoryZoneStore) GetZone(zone string) ([]dns.RR, error) {
 	sanitizedZone, err := internal.SanitizeFQDN(zone)
 	if err != nil {

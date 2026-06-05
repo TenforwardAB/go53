@@ -25,14 +25,21 @@ import (
 )
 
 const (
-	frameTypeHello         = "HELLO"
-	frameTypeEvent         = "EVENT"
-	frameTypeAck           = "ACK"
-	frameTypeVectorRequest = "VECTOR_REQUEST"
-	frameTypeVector        = "VECTOR"
-	frameTypeEventsRequest = "EVENTS_REQUEST"
-	frameTypeEvents        = "EVENTS"
-	frameTypeError         = "ERROR"
+	frameTypeHello                 = "HELLO"
+	frameTypeEvent                 = "EVENT"
+	frameTypeAck                   = "ACK"
+	frameTypeVectorRequest         = "VECTOR_REQUEST"
+	frameTypeVector                = "VECTOR"
+	frameTypeEventsRequest         = "EVENTS_REQUEST"
+	frameTypeEvents                = "EVENTS"
+	frameTypeMerkleRootsRequest    = "MERKLE_ROOTS_REQUEST"
+	frameTypeMerkleRoots           = "MERKLE_ROOTS"
+	frameTypeMerkleBranchesRequest = "MERKLE_BRANCHES_REQUEST"
+	frameTypeMerkleBranches        = "MERKLE_BRANCHES"
+	frameTypeMerkleLeavesRequest   = "MERKLE_LEAVES_REQUEST"
+	frameTypeMerkleLeaves          = "MERKLE_LEAVES"
+	frameTypeMerkleRepairRequest   = "MERKLE_REPAIR_REQUEST"
+	frameTypeError                 = "ERROR"
 
 	maxFrameBytes = 16 << 20
 )
@@ -44,17 +51,23 @@ var (
 )
 
 type frame struct {
-	Type    string            `json:"type"`
-	NodeID  string            `json:"node_id,omitempty"`
-	Nonce   string            `json:"nonce,omitempty"`
-	Proof   string            `json:"proof,omitempty"`
-	Event   *Event            `json:"event,omitempty"`
-	Events  []Event           `json:"events,omitempty"`
-	Vector  map[string]uint64 `json:"vector,omitempty"`
-	Origin  string            `json:"origin,omitempty"`
-	After   uint64            `json:"after,omitempty"`
-	Applied bool              `json:"applied,omitempty"`
-	Error   string            `json:"error,omitempty"`
+	Type           string                    `json:"type"`
+	NodeID         string                    `json:"node_id,omitempty"`
+	Nonce          string                    `json:"nonce,omitempty"`
+	Proof          string                    `json:"proof,omitempty"`
+	Event          *Event                    `json:"event,omitempty"`
+	Events         []Event                   `json:"events,omitempty"`
+	Vector         map[string]uint64         `json:"vector,omitempty"`
+	Origin         string                    `json:"origin,omitempty"`
+	After          uint64                    `json:"after,omitempty"`
+	Zone           string                    `json:"zone,omitempty"`
+	Prefixes       []string                  `json:"prefixes,omitempty"`
+	Entities       []string                  `json:"entities,omitempty"`
+	MerkleRoots    map[string]MerkleZoneRoot `json:"merkle_roots,omitempty"`
+	MerkleBranches map[string]MerkleBranch   `json:"merkle_branches,omitempty"`
+	MerkleLeaves   map[string]MerkleLeaf     `json:"merkle_leaves,omitempty"`
+	Applied        bool                      `json:"applied,omitempty"`
+	Error          string                    `json:"error,omitempty"`
 }
 
 func (s *Service) StartTCPListener(ctx context.Context) {
@@ -178,6 +191,30 @@ func (s *Service) handleTCPFrame(ctx context.Context, req frame) frame {
 			return frame{Type: frameTypeError, Error: err.Error()}
 		}
 		return frame{Type: frameTypeEvents, Events: events}
+	case frameTypeMerkleRootsRequest:
+		roots, err := s.merkleZoneRoots()
+		if err != nil {
+			return frame{Type: frameTypeError, Error: err.Error()}
+		}
+		return frame{Type: frameTypeMerkleRoots, MerkleRoots: roots}
+	case frameTypeMerkleBranchesRequest:
+		branches, err := s.merkleZoneBranches(req.Zone)
+		if err != nil {
+			return frame{Type: frameTypeError, Error: err.Error()}
+		}
+		return frame{Type: frameTypeMerkleBranches, Zone: req.Zone, MerkleBranches: branches}
+	case frameTypeMerkleLeavesRequest:
+		leaves, err := s.merkleZoneLeaves(req.Zone, req.Prefixes)
+		if err != nil {
+			return frame{Type: frameTypeError, Error: err.Error()}
+		}
+		return frame{Type: frameTypeMerkleLeaves, Zone: req.Zone, MerkleLeaves: leaves}
+	case frameTypeMerkleRepairRequest:
+		events, err := s.latestEventsForEntities(req.Entities)
+		if err != nil {
+			return frame{Type: frameTypeError, Error: err.Error()}
+		}
+		return frame{Type: frameTypeEvents, Events: events}
 	default:
 		return frame{Type: frameTypeError, Error: "unknown frame type " + req.Type}
 	}
@@ -216,6 +253,71 @@ func (s *Service) fetchPeerVectorTCP(ctx context.Context, peer string) (map[stri
 
 func (s *Service) fetchPeerEventsTCP(ctx context.Context, peer, origin string, after uint64) ([]Event, error) {
 	resp, err := s.roundTripTCP(ctx, peer, frame{Type: frameTypeEventsRequest, Origin: origin, After: after})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Type == frameTypeError {
+		return nil, errors.New(resp.Error)
+	}
+	if resp.Type != frameTypeEvents {
+		return nil, fmt.Errorf("unexpected TCP response %q", resp.Type)
+	}
+	return resp.Events, nil
+}
+
+func (s *Service) fetchPeerMerkleRootsTCP(ctx context.Context, peer string) (map[string]MerkleZoneRoot, error) {
+	resp, err := s.roundTripTCP(ctx, peer, frame{Type: frameTypeMerkleRootsRequest})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Type == frameTypeError {
+		return nil, errors.New(resp.Error)
+	}
+	if resp.Type != frameTypeMerkleRoots {
+		return nil, fmt.Errorf("unexpected TCP response %q", resp.Type)
+	}
+	if resp.MerkleRoots == nil {
+		resp.MerkleRoots = map[string]MerkleZoneRoot{}
+	}
+	return resp.MerkleRoots, nil
+}
+
+func (s *Service) fetchPeerMerkleBranchesTCP(ctx context.Context, peer, zone string) (map[string]MerkleBranch, error) {
+	resp, err := s.roundTripTCP(ctx, peer, frame{Type: frameTypeMerkleBranchesRequest, Zone: zone})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Type == frameTypeError {
+		return nil, errors.New(resp.Error)
+	}
+	if resp.Type != frameTypeMerkleBranches {
+		return nil, fmt.Errorf("unexpected TCP response %q", resp.Type)
+	}
+	if resp.MerkleBranches == nil {
+		resp.MerkleBranches = map[string]MerkleBranch{}
+	}
+	return resp.MerkleBranches, nil
+}
+
+func (s *Service) fetchPeerMerkleLeavesTCP(ctx context.Context, peer, zone string, prefixes []string) (map[string]MerkleLeaf, error) {
+	resp, err := s.roundTripTCP(ctx, peer, frame{Type: frameTypeMerkleLeavesRequest, Zone: zone, Prefixes: prefixes})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Type == frameTypeError {
+		return nil, errors.New(resp.Error)
+	}
+	if resp.Type != frameTypeMerkleLeaves {
+		return nil, fmt.Errorf("unexpected TCP response %q", resp.Type)
+	}
+	if resp.MerkleLeaves == nil {
+		resp.MerkleLeaves = map[string]MerkleLeaf{}
+	}
+	return resp.MerkleLeaves, nil
+}
+
+func (s *Service) fetchPeerMerkleRepairEventsTCP(ctx context.Context, peer string, entities []string) ([]Event, error) {
+	resp, err := s.roundTripTCP(ctx, peer, frame{Type: frameTypeMerkleRepairRequest, Entities: entities})
 	if err != nil {
 		return nil, err
 	}

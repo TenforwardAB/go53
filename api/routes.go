@@ -64,6 +64,10 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 	r.HandleFunc("/api/distributed/vector", handlers.GetDistributedVectorHandler).Methods("GET")
 	r.HandleFunc("/api/distributed/events", handlers.GetDistributedEventsHandler).Methods("GET")
 	r.HandleFunc("/api/distributed/events", handlers.PostDistributedEventHandler).Methods("POST")
+	r.HandleFunc("/api/distributed/merkle/roots", handlers.GetDistributedMerkleRootsHandler).Methods("GET")
+	r.HandleFunc("/api/distributed/merkle/branches", handlers.GetDistributedMerkleBranchesHandler).Methods("GET")
+	r.HandleFunc("/api/distributed/merkle/leaves", handlers.PostDistributedMerkleLeavesHandler).Methods("POST")
+	r.HandleFunc("/api/distributed/merkle/repair-events", handlers.PostDistributedMerkleRepairEventsHandler).Methods("POST")
 
 	return r
 }

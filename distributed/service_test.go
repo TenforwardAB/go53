@@ -229,6 +229,111 @@ func TestApplyDNSSECKeyEventUpdatesStorageCache(t *testing.T) {
 	}
 }
 
+func TestMerkleRepairDetectsAndRepairsZoneDrift(t *testing.T) {
+	aPriv, aPub, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair A: %v", err)
+	}
+	bPriv, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair B: %v", err)
+	}
+
+	aService := newTestService(t, "node-a", aPriv, map[string]string{"node-b": ""})
+	if err := aService.store.PutRecordRaw("example.com.", "A", "www", []any{
+		map[string]any{"ip": "192.0.2.10", "ttl": float64(300)},
+	}); err != nil {
+		t.Fatalf("PutRecordRaw: %v", err)
+	}
+	if err := aService.PublishUpsert("example.com.", "A", "www", []any{
+		map[string]any{"ip": "192.0.2.10", "ttl": float64(300)},
+	}); err != nil {
+		t.Fatalf("PublishUpsert: %v", err)
+	}
+	events, err := aService.Events("node-a", 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events len = %d, want 1", len(events))
+	}
+
+	bService := newTestService(t, "node-b", bPriv, map[string]string{"node-a": aPub})
+	if _, err := bService.ReceiveEvent(context.Background(), events[0]); err != nil {
+		t.Fatalf("ReceiveEvent: %v", err)
+	}
+	aRoots, err := aService.merkleZoneRoots()
+	if err != nil {
+		t.Fatalf("a merkleZoneRoots: %v", err)
+	}
+	bRoots, err := bService.merkleZoneRoots()
+	if err != nil {
+		t.Fatalf("b merkleZoneRoots: %v", err)
+	}
+	if aRoots["example.com."].Root != bRoots["example.com."].Root {
+		t.Fatalf("roots differ before drift")
+	}
+
+	if err := bService.store.PutRecordRaw("example.com.", "A", "www", []any{
+		map[string]any{"ip": "192.0.2.99", "ttl": float64(300)},
+	}); err != nil {
+		t.Fatalf("corrupt PutRecordRaw: %v", err)
+	}
+	localBranches, err := bService.merkleZoneBranches("example.com.")
+	if err != nil {
+		t.Fatalf("local branches: %v", err)
+	}
+	peerBranches, err := aService.merkleZoneBranches("example.com.")
+	if err != nil {
+		t.Fatalf("peer branches: %v", err)
+	}
+	prefixes := merkleDifferingBranches(localBranches, peerBranches)
+	if len(prefixes) == 0 {
+		t.Fatalf("Merkle branches did not detect drift")
+	}
+	localLeaves, err := bService.merkleZoneLeaves("example.com.", prefixes)
+	if err != nil {
+		t.Fatalf("local leaves: %v", err)
+	}
+	peerLeaves, err := aService.merkleZoneLeaves("example.com.", prefixes)
+	if err != nil {
+		t.Fatalf("peer leaves: %v", err)
+	}
+	entities := merkleDifferingEntities(localLeaves, peerLeaves)
+	if len(entities) != 1 || entities[0] != entityKey("example.com.", "A", "www") {
+		t.Fatalf("entities = %#v, want www A entity", entities)
+	}
+	repairEvents, err := aService.latestEventsForEntities(entities)
+	if err != nil {
+		t.Fatalf("latestEventsForEntities: %v", err)
+	}
+	if len(repairEvents) != 1 {
+		t.Fatalf("repair events len = %d, want 1", len(repairEvents))
+	}
+	if err := bService.applyRepairEvent(context.Background(), repairEvents[0]); err != nil {
+		t.Fatalf("applyRepairEvent: %v", err)
+	}
+	aRoots, err = aService.merkleZoneRoots()
+	if err != nil {
+		t.Fatalf("a merkleZoneRoots after repair: %v", err)
+	}
+	bRoots, err = bService.merkleZoneRoots()
+	if err != nil {
+		t.Fatalf("b merkleZoneRoots after repair: %v", err)
+	}
+	if aRoots["example.com."].Root != bRoots["example.com."].Root {
+		t.Fatalf("roots differ after repair: a=%s b=%s", aRoots["example.com."].Root, bRoots["example.com."].Root)
+	}
+	_, _, raw, ok := bService.store.GetRecord("example.com.", "A", "www")
+	if !ok {
+		t.Fatalf("repaired record not found")
+	}
+	data, _ := json.Marshal(raw)
+	if string(data) != `[{"ip":"192.0.2.10","ttl":300}]` {
+		t.Fatalf("repaired record = %s", string(data))
+	}
+}
+
 func newTestService(t *testing.T, nodeID, privateKey string, peerKeys map[string]string) *Service {
 	t.Helper()
 	mock := &storage.MockStorage{}
