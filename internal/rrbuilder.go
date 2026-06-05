@@ -490,6 +490,25 @@ var RRBuilders = map[string]RRBuilder{
 		}
 	},
 
+	"DNAME": func(name string, data any) []dns.RR {
+		switch v := data.(type) {
+		case types.DNAMERecord:
+			return []dns.RR{&dns.DNAME{
+				Hdr:    dns.RR_Header{Name: name, Rrtype: dns.TypeDNAME, Class: dns.ClassINET, Ttl: v.TTL},
+				Target: dns.Fqdn(v.Target),
+			}}
+		case map[string]interface{}:
+			target := v["target"].(string)
+			ttl := toTTL(v)
+			return []dns.RR{&dns.DNAME{
+				Hdr:    dns.RR_Header{Name: name, Rrtype: dns.TypeDNAME, Class: dns.ClassINET, Ttl: ttl},
+				Target: dns.Fqdn(target),
+			}}
+		default:
+			return nil
+		}
+	},
+
 	"SPF": func(name string, data any) []dns.RR {
 		switch v := data.(type) {
 		case types.SPFRecord:
@@ -954,6 +973,8 @@ func RRToZoneData(rrs []dns.RR) types.ZoneData {
 			zd.PTR[name] = append(zd.PTR[name], types.PTRRecord{Ptr: strings.TrimSuffix(v.Ptr, "."), TTL: v.Hdr.Ttl})
 		case *dns.CNAME:
 			zd.CNAME[name] = types.CNAMERecord{Target: strings.TrimSuffix(v.Target, "."), TTL: v.Hdr.Ttl}
+		case *dns.DNAME:
+			zd.DNAME[name] = types.DNAMERecord{Target: strings.TrimSuffix(v.Target, "."), TTL: v.Hdr.Ttl}
 		case *dns.SPF:
 			zd.SPF[name] = types.SPFRecord{Text: strings.Join(v.Txt, " "), TTL: v.Hdr.Ttl}
 		case *dns.DNSKEY:

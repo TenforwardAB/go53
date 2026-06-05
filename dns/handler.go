@@ -114,22 +114,6 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		}
 
 		switch q.Qtype {
-		case dns.TypeA:
-			if rec, ok := zone.LookupRecord(q.Qtype, q.Name); ok {
-				log.Println("A record found:", rec)
-				m.Answer = append(m.Answer, rec...)
-				answered = true
-				break
-			}
-			if cnameRec, ok := zone.LookupRecord(dns.TypeCNAME, q.Name); ok {
-				m.Answer = append(m.Answer, cnameRec[0])
-				target := cnameRec[0].(*dns.CNAME).Target
-				if rec2, ok := zone.LookupRecord(q.Qtype, target); ok {
-					m.Answer = append(m.Answer, rec2...)
-				}
-				answered = true
-			}
-
 		case dns.TypeDNSKEY:
 			zoneApex, _ := internal.SanitizeFQDN(q.Name) //TODO: manage error
 			if rec, ok := zone.LookupRecord(dns.TypeDNSKEY, zoneApex); ok {
@@ -140,7 +124,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				log.Println("DNSKEY record NOT FOUND OR ERROR:")
 			}
 
-		case dns.TypeCNAME, dns.TypeNS:
+		case dns.TypeCNAME, dns.TypeDNAME, dns.TypeNS:
 			if rec, ok := zone.LookupRecord(q.Qtype, q.Name); ok {
 				m.Answer = append(m.Answer, rec...)
 				answered = true
@@ -198,26 +182,14 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			dnsutils.ServeDNS(w, r)
 			return
 
-		case dns.TypeSRV:
-			if rec, ok := zone.LookupRecord(dns.TypeSRV, q.Name); ok {
-				log.Println("Getting SRV record: ", q.Name)
-				m.Answer = append(m.Answer, rec...)
-				answered = true
-				break
-			}
-			if cnameRec, ok := zone.LookupRecord(dns.TypeCNAME, q.Name); ok {
-				m.Answer = append(m.Answer, cnameRec[0])
-				target := cnameRec[0].(*dns.CNAME).Target
-				if rec2, ok := zone.LookupRecord(dns.TypeSRV, target); ok {
-					m.Answer = append(m.Answer, rec2...)
-				}
-				answered = true
-			}
-
 		default:
-			if rec, ok := zone.LookupRecord(q.Qtype, q.Name); ok {
-				log.Println("Record found:", rec)
-				m.Answer = append(m.Answer, rec...)
+			result := resolveAnswerChain(q.Name, q.Qtype, wantsDNSSEC)
+			if len(result.Answer) > 0 {
+				m.Answer = append(m.Answer, result.Answer...)
+				m.Ns = append(m.Ns, result.Authority...)
+				if result.Rcode != dns.RcodeSuccess {
+					m.Rcode = result.Rcode
+				}
 				answered = true
 			}
 		}
@@ -255,6 +227,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 func appendRRSIGs(section []dns.RR) []dns.RR {
 	seen := make(map[string]bool)
+	synthesizedDNAMECNAME := synthesizedDNAMECNAMEs(section)
 	for _, rr := range section {
 		if rr.Header().Rrtype == dns.TypeRRSIG {
 			seen[rr.String()] = true
@@ -277,6 +250,9 @@ func appendRRSIGs(section []dns.RR) []dns.RR {
 			continue
 		}
 		hdr := rr.Header()
+		if hdr.Rrtype == dns.TypeCNAME && synthesizedDNAMECNAME[strings.ToLower(hdr.Name)] {
+			continue
+		}
 		key := strings.ToLower(hdr.Name) + "|" + dns.TypeToString[hdr.Rrtype]
 		if covered[key] {
 			continue
@@ -305,6 +281,175 @@ func appendRRSIGs(section []dns.RR) []dns.RR {
 	}
 
 	return section
+}
+
+type answerChainResult struct {
+	Answer    []dns.RR
+	Authority []dns.RR
+	Rcode     int
+}
+
+func resolveAnswerChain(qname string, qtype uint16, wantsDNSSEC bool) answerChainResult {
+	const maxAliasDepth = 8
+	result := answerChainResult{Rcode: dns.RcodeSuccess}
+	current := dns.Fqdn(qname)
+	seen := make(map[string]bool)
+
+	for depth := 0; depth < maxAliasDepth; depth++ {
+		key := strings.ToLower(current)
+		if seen[key] {
+			slog.Warn("alias loop while resolving %s %s", qname, dns.TypeToString[qtype])
+			return result
+		}
+		seen[key] = true
+
+		if rec, ok := zone.LookupRecord(qtype, current); ok {
+			result.Answer = append(result.Answer, rec...)
+			return result
+		}
+
+		if rec, ok := lookupWildcard(qtype, current, wantsDNSSEC); ok {
+			result.Answer = append(result.Answer, rec...)
+			return result
+		}
+
+		if cnameRec, ok := zone.LookupRecord(dns.TypeCNAME, current); ok {
+			result.Answer = append(result.Answer, cnameRec...)
+			cname, ok := firstCNAME(cnameRec)
+			if !ok {
+				return result
+			}
+			current = dns.Fqdn(cname.Target)
+			continue
+		}
+
+		if dnameRec, synthesized, ok := lookupDNAMERewrite(current); ok {
+			result.Answer = append(result.Answer, dnameRec...)
+			result.Answer = append(result.Answer, synthesized)
+			current = dns.Fqdn(synthesized.Target)
+			continue
+		}
+
+		if len(result.Answer) > 0 && authoritativeForName(current) {
+			nxdomain := !nameExists(current) && !zone.WildcardExists(current)
+			if nxdomain {
+				result.Rcode = dns.RcodeNameError
+			}
+			if soaRec, ok := lookupApexSOA(current); ok {
+				result.Authority = append(result.Authority, soaRec...)
+			}
+			if wantsDNSSEC {
+				result.Authority = append(result.Authority, denialRecords(current, qtype, nxdomain)...)
+			}
+		}
+		return result
+	}
+
+	slog.Warn("alias chain too deep while resolving %s %s", qname, dns.TypeToString[qtype])
+	return result
+}
+
+func firstCNAME(rrs []dns.RR) (*dns.CNAME, bool) {
+	for _, rr := range rrs {
+		cname, ok := rr.(*dns.CNAME)
+		if ok {
+			return cname, true
+		}
+	}
+	return nil, false
+}
+
+func lookupDNAMERewrite(qname string) ([]dns.RR, *dns.CNAME, bool) {
+	owner, dnameRec, ok := closestDNAME(qname)
+	if !ok {
+		return nil, nil, false
+	}
+	dname, ok := firstDNAME(dnameRec)
+	if !ok {
+		return nil, nil, false
+	}
+	target, ok := dnameRewriteTarget(qname, owner, dname.Target)
+	if !ok {
+		return nil, nil, false
+	}
+	return dnameRec, &dns.CNAME{
+		Hdr: dns.RR_Header{
+			Name:   dns.Fqdn(qname),
+			Rrtype: dns.TypeCNAME,
+			Class:  dns.ClassINET,
+			Ttl:    dname.Hdr.Ttl,
+		},
+		Target: target,
+	}, true
+}
+
+func closestDNAME(qname string) (string, []dns.RR, bool) {
+	trimmed := strings.TrimSuffix(strings.ToLower(qname), ".")
+	labels := strings.Split(trimmed, ".")
+	for i := 1; i < len(labels)-1; i++ {
+		candidate := dns.Fqdn(strings.Join(labels[i:], "."))
+		if rec, ok := zone.LookupRecord(dns.TypeDNAME, candidate); ok {
+			return candidate, rec, true
+		}
+	}
+	return "", nil, false
+}
+
+func firstDNAME(rrs []dns.RR) (*dns.DNAME, bool) {
+	for _, rr := range rrs {
+		dname, ok := rr.(*dns.DNAME)
+		if ok {
+			return dname, true
+		}
+	}
+	return nil, false
+}
+
+func dnameRewriteTarget(qname, owner, target string) (string, bool) {
+	qname = strings.TrimSuffix(dns.Fqdn(qname), ".")
+	owner = strings.TrimSuffix(dns.Fqdn(owner), ".")
+	target = strings.TrimSuffix(dns.Fqdn(target), ".")
+	qLower := strings.ToLower(qname)
+	ownerLower := strings.ToLower(owner)
+	if qLower == ownerLower || !strings.HasSuffix(qLower, "."+ownerLower) {
+		return "", false
+	}
+	prefix := qname[:len(qname)-len(owner)-1]
+	if prefix == "" {
+		return dns.Fqdn(target), true
+	}
+	return dns.Fqdn(prefix + "." + target), true
+}
+
+func synthesizedDNAMECNAMEs(section []dns.RR) map[string]bool {
+	out := make(map[string]bool)
+	var dnames []*dns.DNAME
+	for _, rr := range section {
+		if dname, ok := rr.(*dns.DNAME); ok {
+			dnames = append(dnames, dname)
+		}
+	}
+	if len(dnames) == 0 {
+		return out
+	}
+	for _, rr := range section {
+		cname, ok := rr.(*dns.CNAME)
+		if !ok {
+			continue
+		}
+		for _, dname := range dnames {
+			if _, ok := dnameRewriteTarget(cname.Hdr.Name, dname.Hdr.Name, dname.Target); ok {
+				out[strings.ToLower(cname.Hdr.Name)] = true
+				break
+			}
+		}
+	}
+	return out
+}
+
+func authoritativeForName(name string) bool {
+	_, ok := lookupApexSOA(name)
+	return ok
 }
 
 func shouldReturnReferral(q dns.Question, delegation string) bool {
