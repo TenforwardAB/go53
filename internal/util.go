@@ -111,6 +111,11 @@ func MergeStructs(dst, src interface{}) {
 			if srcField.Float() != 0 {
 				dstField.SetFloat(srcField.Float())
 			}
+
+		case reflect.Map, reflect.Slice:
+			if !srcField.IsNil() && srcField.Len() > 0 {
+				dstField.Set(srcField)
+			}
 		}
 	}
 }

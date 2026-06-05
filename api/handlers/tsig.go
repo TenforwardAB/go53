@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"go53/distributed"
 	"go53/internal"
 	"go53/security"
 	"go53/storage"
@@ -64,6 +65,12 @@ func AddTSIGKeyHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to reload TSIG keys", http.StatusInternalServerError)
 		return
 	}
+	if distributed.Default != nil {
+		if err := distributed.Default.PublishTSIGKey(nameParam, input); err != nil {
+			http.Error(w, "TSIG key saved but distributed event failed", http.StatusInternalServerError)
+			return
+		}
+	}
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{
@@ -87,5 +94,11 @@ func DeleteTSIGKeyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	security.DeleteTSIGKey(name)
+	if distributed.Default != nil {
+		if err := distributed.Default.PublishTSIGKeyDelete(mux.Vars(r)["name"]); err != nil {
+			http.Error(w, "TSIG key deleted but distributed event failed", http.StatusInternalServerError)
+			return
+		}
+	}
 	w.WriteHeader(http.StatusNoContent)
 }

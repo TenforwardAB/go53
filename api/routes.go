@@ -34,6 +34,7 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 
 	r.HandleFunc("/api/config", handlers.UpdateLiveConfigHandler).Methods("PATCH")
 	r.HandleFunc("/api/config", handlers.GetLiveConfigHandler).Methods("GET")
+	r.HandleFunc("/.well-known/go53-node.json", handlers.GetWellKnownNodeHandler).Methods("GET")
 
 	r.HandleFunc("/api/zones", handlers.GetZonesHandler).Methods("GET")
 
@@ -57,6 +58,16 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 	r.HandleFunc("/api/ds/{zone}", disableSecondary(handlers.GetDSHandler)).Methods("GET")
 	r.HandleFunc("/api/cds/{zone}", disableSecondary(handlers.GetCDSHandler)).Methods("GET")
 	r.HandleFunc("/api/cdnskey/{zone}", disableSecondary(handlers.GetCDNSKEYHandler)).Methods("GET")
+
+	r.HandleFunc("/api/distributed/status", handlers.GetDistributedStatusHandler).Methods("GET")
+	r.HandleFunc("/api/distributed/keypair", handlers.GenerateDistributedKeyPairHandler).Methods("POST")
+	r.HandleFunc("/api/distributed/vector", handlers.GetDistributedVectorHandler).Methods("GET")
+	r.HandleFunc("/api/distributed/events", handlers.GetDistributedEventsHandler).Methods("GET")
+	r.HandleFunc("/api/distributed/events", handlers.PostDistributedEventHandler).Methods("POST")
+	r.HandleFunc("/api/distributed/merkle/roots", handlers.GetDistributedMerkleRootsHandler).Methods("GET")
+	r.HandleFunc("/api/distributed/merkle/branches", handlers.GetDistributedMerkleBranchesHandler).Methods("GET")
+	r.HandleFunc("/api/distributed/merkle/leaves", handlers.PostDistributedMerkleLeavesHandler).Methods("POST")
+	r.HandleFunc("/api/distributed/merkle/repair-events", handlers.PostDistributedMerkleRepairEventsHandler).Methods("POST")
 
 	return r
 }

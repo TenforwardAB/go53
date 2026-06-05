@@ -115,6 +115,67 @@ func (z *InMemoryZoneStore) AddRecord(zone, rtype, name string, record any) erro
 	return nil
 }
 
+func (z *InMemoryZoneStore) PutRecordRaw(zone, rtype, name string, record any) error {
+	dnssecPrimary := config.AppConfig.GetLive().DNSSECEnabled && config.AppConfig.GetLive().Mode != "secondary"
+
+	z.mu.Lock()
+	zones := z.cache["zones"]
+	if _, ok := zones[zone]; !ok {
+		zones[zone] = make(map[string]map[string]any)
+	}
+	if _, ok := zones[zone][rtype]; !ok {
+		zones[zone][rtype] = make(map[string]any)
+	}
+	zones[zone][rtype][name] = record
+	if dnssecPrimary {
+		z.invalidateRRSIGLocked(zone, rtype, name)
+		if shouldMaintainNSEC(rtype) {
+			z.rebuildNSECChainLocked(zone)
+			z.rebuildNSEC3ChainLocked(zone)
+		}
+	}
+	z.mu.Unlock()
+
+	if err := z.persist(zone); err != nil {
+		return err
+	}
+	if dnssecPrimary && rtype != string(types.TypeRRSIG) {
+		go z.maybeSignRRSet(zone, rtype, name)
+		if shouldMaintainNSEC(rtype) {
+			go z.signNSECChain(zone)
+			go z.signNSEC3Chain(zone)
+		}
+	}
+	return nil
+}
+
+func (z *InMemoryZoneStore) DeleteRecordRaw(zone, rtype, name string) error {
+	z.mu.Lock()
+	zones := z.cache["zones"]
+	if recType, ok := zones[zone][rtype]; ok {
+		delete(recType, name)
+		dnssecPrimary := config.AppConfig.GetLive().DNSSECEnabled && config.AppConfig.GetLive().Mode != "secondary"
+		if dnssecPrimary {
+			z.invalidateRRSIGLocked(zone, rtype, name)
+			if shouldMaintainNSEC(rtype) {
+				z.rebuildNSECChainLocked(zone)
+				z.rebuildNSEC3ChainLocked(zone)
+			}
+		}
+		z.mu.Unlock()
+		if err := z.persist(zone); err != nil {
+			return err
+		}
+		if dnssecPrimary && shouldMaintainNSEC(rtype) {
+			go z.signNSECChain(zone)
+			go z.signNSEC3Chain(zone)
+		}
+		return nil
+	}
+	z.mu.Unlock()
+	return nil
+}
+
 func (z *InMemoryZoneStore) GetRecord(zone, rtype, name string) (string, string, any, bool) {
 	z.mu.RLock()
 	defer z.mu.RUnlock()
@@ -125,6 +186,38 @@ func (z *InMemoryZoneStore) GetRecord(zone, rtype, name string) (string, string,
 	}
 	rec, exists := recType[name]
 	return zone, rtype, rec, exists
+}
+
+func (z *InMemoryZoneStore) ZoneRecordsSnapshot(zone string) map[string]map[string]any {
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+
+	out := map[string]map[string]any{}
+	zones := z.cache["zones"]
+	zoneMap, ok := zones[zone]
+	if !ok {
+		return out
+	}
+	for rtype, names := range zoneMap {
+		out[rtype] = make(map[string]any, len(names))
+		for name, value := range names {
+			out[rtype][name] = value
+		}
+	}
+	return out
+}
+
+func (z *InMemoryZoneStore) ZoneNamesSnapshot() []string {
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+
+	zones := z.cache["zones"]
+	out := make([]string, 0, len(zones))
+	for zone := range zones {
+		out = append(out, zone)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (z *InMemoryZoneStore) GetZone(zone string) ([]dns.RR, error) {
