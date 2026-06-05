@@ -8,6 +8,7 @@ import (
 	"go53/config"
 	"go53/internal"
 	"go53/types"
+	"strings"
 )
 
 type SOARecord struct{}
@@ -23,24 +24,12 @@ func (SOARecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 	}
 
 	var existing types.SOARecord
-	_, _, raw, found := memStore.GetRecord(sanitizedZone, string(types.TypeSOA), sanitizedZone)
+	_, _, raw, found := memStore.GetRecord(sanitizedZone, string(types.TypeSOA), "@")
 	if found {
-		switch v := raw.(type) {
-		case types.SOARecord:
-			existing = v
-		case map[string]interface{}:
-			existing = types.SOARecord{
-				Ns:      v["ns"].(string),
-				Mbox:    v["mbox"].(string),
-				Serial:  uint32(v["serial"].(float64)),
-				Refresh: uint32(v["refresh"].(float64)),
-				Retry:   uint32(v["retry"].(float64)),
-				Expire:  uint32(v["expire"].(float64)),
-				Minimum: uint32(v["minimum"].(float64)),
-				TTL:     uint32(v["ttl"].(float64)),
-			}
-		default:
-			return fmt.Errorf("unexpected SOA record format: %T", v)
+		var ok bool
+		existing, ok = soaRecordFromRaw(raw)
+		if !ok {
+			return fmt.Errorf("unexpected SOA record format: %T", raw)
 		}
 	}
 
@@ -67,34 +56,35 @@ func (SOARecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 		return fmt.Errorf("SOA Add expects a JSON object")
 	}
 
-	if v, ok := cfg["ns"].(string); ok {
-
+	if v, ok := soaString(cfg, "ns"); ok {
 		rec.Ns = dns.Fqdn(v)
 	}
-	if v, ok := cfg["mbox"].(string); ok {
+	if v, ok := soaString(cfg, "mbox"); ok {
 		rec.Mbox = dns.Fqdn(v)
 	}
-	if v, ok := cfg["refresh"].(float64); ok {
-		rec.Refresh = uint32(v)
+	if v, ok := soaUint32(cfg, "refresh"); ok {
+		rec.Refresh = v
 	}
-	if v, ok := cfg["retry"].(float64); ok {
-		rec.Retry = uint32(v)
+	if v, ok := soaUint32(cfg, "retry"); ok {
+		rec.Retry = v
 	}
-	if v, ok := cfg["expire"].(float64); ok {
-		rec.Expire = uint32(v)
+	if v, ok := soaUint32(cfg, "expire"); ok {
+		rec.Expire = v
 	}
-	if v, ok := cfg["minimum"].(float64); ok {
-		rec.Minimum = uint32(v)
+	if v, ok := soaUint32(cfg, "minimum"); ok {
+		rec.Minimum = v
 	}
 	if ttl != nil {
 		rec.TTL = *ttl
+	} else if v, ok := soaUint32(cfg, "ttl"); ok {
+		rec.TTL = v
 	}
 
 	slog.Crazy("[soa.go:Add] SOA record from cfg: ", rec)
 
 	if config.AppConfig.GetLive().Mode == "secondary" {
-		if v, ok := cfg["serial"].(float64); ok {
-			rec.Serial = uint32(v)
+		if v, ok := soaUint32(cfg, "serial"); ok {
+			rec.Serial = v
 		}
 	} else {
 		rec.Serial = internal.NextSerial(existing.Serial)
@@ -124,22 +114,8 @@ func (SOARecord) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
-	var rec types.SOARecord
-	switch v := val.(type) {
-	case types.SOARecord:
-		rec = v
-	case map[string]interface{}:
-		rec = types.SOARecord{
-			Ns:      v["ns"].(string),
-			Mbox:    v["mbox"].(string),
-			Serial:  uint32(v["serial"].(float64)),
-			Refresh: uint32(v["refresh"].(float64)),
-			Retry:   uint32(v["retry"].(float64)),
-			Expire:  uint32(v["expire"].(float64)),
-			Minimum: uint32(v["minimum"].(float64)),
-			TTL:     uint32(v["ttl"].(float64)),
-		}
-	default:
+	rec, ok := soaRecordFromRaw(val)
+	if !ok {
 		return nil, false
 	}
 
@@ -181,6 +157,92 @@ func (SOARecord) Delete(host string, value interface{}) error {
 
 func (SOARecord) Type() uint16 {
 	return dns.TypeSOA
+}
+
+func soaRecordFromRaw(raw interface{}) (types.SOARecord, bool) {
+	switch v := raw.(type) {
+	case types.SOARecord:
+		return v, true
+	case map[string]interface{}:
+		rec := types.SOARecord{}
+		if ns, ok := soaString(v, "ns"); ok {
+			rec.Ns = dns.Fqdn(ns)
+		}
+		if mbox, ok := soaString(v, "mbox"); ok {
+			rec.Mbox = dns.Fqdn(mbox)
+		}
+		if serial, ok := soaUint32(v, "serial"); ok {
+			rec.Serial = serial
+		}
+		if refresh, ok := soaUint32(v, "refresh"); ok {
+			rec.Refresh = refresh
+		}
+		if retry, ok := soaUint32(v, "retry"); ok {
+			rec.Retry = retry
+		}
+		if expire, ok := soaUint32(v, "expire"); ok {
+			rec.Expire = expire
+		}
+		if minimum, ok := soaUint32(v, "minimum"); ok {
+			rec.Minimum = minimum
+		}
+		if ttl, ok := soaUint32(v, "ttl"); ok {
+			rec.TTL = ttl
+		}
+		return rec, rec.Ns != "" && rec.Mbox != ""
+	default:
+		return types.SOARecord{}, false
+	}
+}
+
+func soaString(cfg map[string]interface{}, key string) (string, bool) {
+	for _, candidate := range soaKeyCandidates(key) {
+		if value, ok := cfg[candidate].(string); ok && value != "" {
+			return value, true
+		}
+	}
+	return "", false
+}
+
+func soaUint32(cfg map[string]interface{}, key string) (uint32, bool) {
+	var raw interface{}
+	var ok bool
+	for _, candidate := range soaKeyCandidates(key) {
+		raw, ok = cfg[candidate]
+		if ok {
+			break
+		}
+	}
+	if !ok {
+		return 0, false
+	}
+	switch v := raw.(type) {
+	case float64:
+		return uint32(v), true
+	case float32:
+		return uint32(v), true
+	case int:
+		return uint32(v), true
+	case int64:
+		return uint32(v), true
+	case int32:
+		return uint32(v), true
+	case uint:
+		return uint32(v), true
+	case uint64:
+		return uint32(v), true
+	case uint32:
+		return v, true
+	default:
+		return 0, false
+	}
+}
+
+func soaKeyCandidates(key string) []string {
+	if key == "" {
+		return []string{key}
+	}
+	return []string{key, strings.ToUpper(key[:1]) + key[1:]}
 }
 
 func init() {
