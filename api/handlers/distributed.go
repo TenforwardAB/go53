@@ -10,6 +10,19 @@ import (
 	"github.com/gorilla/mux"
 )
 
+func writeDistributedJSON(w http.ResponseWriter, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(value)
+}
+
+func distributedServiceReady(w http.ResponseWriter) bool {
+	if distributed.Default != nil {
+		return true
+	}
+	http.Error(w, "distributed service is not initialized", http.StatusServiceUnavailable)
+	return false
+}
+
 func GetDistributedStatusHandler(w http.ResponseWriter, r *http.Request) {
 	status := map[string]any{
 		"enabled":       distributed.Enabled(),
@@ -28,13 +41,11 @@ func GetDistributedStatusHandler(w http.ResponseWriter, r *http.Request) {
 			status["node"] = nodeInfo
 		}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(status)
+	writeDistributedJSON(w, status)
 }
 
 func GetWellKnownNodeHandler(w http.ResponseWriter, r *http.Request) {
-	if distributed.Default == nil {
-		http.Error(w, "distributed service is not initialized", http.StatusServiceUnavailable)
+	if !distributedServiceReady(w) {
 		return
 	}
 	info, err := distributed.Default.NodeInfo()
@@ -42,8 +53,7 @@ func GetWellKnownNodeHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(info)
+	writeDistributedJSON(w, info)
 }
 
 func GenerateDistributedKeyPairHandler(w http.ResponseWriter, r *http.Request) {
@@ -52,8 +62,7 @@ func GenerateDistributedKeyPairHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{
+	writeDistributedJSON(w, map[string]string{
 		"private_key": privateKey,
 		"public_key":  publicKey,
 	})
@@ -69,13 +78,11 @@ func GetDistributedVectorHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(vector)
+	writeDistributedJSON(w, vector)
 }
 
 func GetDistributedEventsHandler(w http.ResponseWriter, r *http.Request) {
-	if distributed.Default == nil {
-		http.Error(w, "distributed service is not initialized", http.StatusServiceUnavailable)
+	if !distributedServiceReady(w) {
 		return
 	}
 	after, err := strconv.ParseUint(r.URL.Query().Get("after"), 10, 64)
@@ -88,13 +95,11 @@ func GetDistributedEventsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(events)
+	writeDistributedJSON(w, events)
 }
 
 func PostDistributedEventHandler(w http.ResponseWriter, r *http.Request) {
-	if distributed.Default == nil {
-		http.Error(w, "distributed service is not initialized", http.StatusServiceUnavailable)
+	if !distributedServiceReady(w) {
 		return
 	}
 	if distributed.TCPTransportEnabled() && r.URL.Query().Get("resync") != "true" {
@@ -111,15 +116,13 @@ func PostDistributedEventHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	writeDistributedJSON(w, map[string]any{
 		"applied": applied,
 	})
 }
 
 func GetDistributedMerkleRootsHandler(w http.ResponseWriter, r *http.Request) {
-	if distributed.Default == nil {
-		http.Error(w, "distributed service is not initialized", http.StatusServiceUnavailable)
+	if !distributedServiceReady(w) {
 		return
 	}
 	roots, err := distributed.Default.MerkleZoneRoots()
@@ -127,13 +130,11 @@ func GetDistributedMerkleRootsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(roots)
+	writeDistributedJSON(w, roots)
 }
 
 func GetDistributedMerkleBranchesHandler(w http.ResponseWriter, r *http.Request) {
-	if distributed.Default == nil {
-		http.Error(w, "distributed service is not initialized", http.StatusServiceUnavailable)
+	if !distributedServiceReady(w) {
 		return
 	}
 	zone := r.URL.Query().Get("zone")
@@ -146,13 +147,11 @@ func GetDistributedMerkleBranchesHandler(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(branches)
+	writeDistributedJSON(w, branches)
 }
 
 func PostDistributedMerkleLeavesHandler(w http.ResponseWriter, r *http.Request) {
-	if distributed.Default == nil {
-		http.Error(w, "distributed service is not initialized", http.StatusServiceUnavailable)
+	if !distributedServiceReady(w) {
 		return
 	}
 	var req struct {
@@ -172,13 +171,11 @@ func PostDistributedMerkleLeavesHandler(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(leaves)
+	writeDistributedJSON(w, leaves)
 }
 
 func PostDistributedMerkleRepairEventsHandler(w http.ResponseWriter, r *http.Request) {
-	if distributed.Default == nil {
-		http.Error(w, "distributed service is not initialized", http.StatusServiceUnavailable)
+	if !distributedServiceReady(w) {
 		return
 	}
 	var req struct {
@@ -193,13 +190,11 @@ func PostDistributedMerkleRepairEventsHandler(w http.ResponseWriter, r *http.Req
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(events)
+	writeDistributedJSON(w, events)
 }
 
 func PostDistributedInviteHandler(w http.ResponseWriter, r *http.Request) {
-	if distributed.Default == nil {
-		http.Error(w, "distributed service is not initialized", http.StatusServiceUnavailable)
+	if !distributedServiceReady(w) {
 		return
 	}
 	var record distributed.InviteRecord
@@ -215,8 +210,7 @@ func PostDistributedInviteHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func PostDistributedInviteConsumeHandler(w http.ResponseWriter, r *http.Request) {
-	if distributed.Default == nil {
-		http.Error(w, "distributed service is not initialized", http.StatusServiceUnavailable)
+	if !distributedServiceReady(w) {
 		return
 	}
 	record, err := distributed.Default.ConsumeInvite(mux.Vars(r)["jti"])
@@ -224,6 +218,5 @@ func PostDistributedInviteConsumeHandler(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(record)
+	writeDistributedJSON(w, record)
 }

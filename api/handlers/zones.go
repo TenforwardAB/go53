@@ -3,8 +3,14 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"strings"
+
 	"github.com/gorilla/mux"
 	"github.com/miekg/dns"
+
 	"go53/config"
 	"go53/distributed"
 	"go53/dns/dnsutils"
@@ -12,11 +18,18 @@ import (
 	"go53/security"
 	"go53/zone"
 	"go53/zone/rtypes"
-	"io"
-	"log"
-	"net/http"
-	"strings"
 )
+
+type addRecordRequest struct {
+	name   string
+	value  map[string]interface{}
+	ttlPtr *uint32
+}
+
+type addRecordError struct {
+	message string
+	status  int
+}
 
 // POST /api/zones/{zone}/records/{rrtype}
 func AddRecordHandler(w http.ResponseWriter, r *http.Request) {
@@ -30,128 +43,175 @@ func AddRecordHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body map[string]interface{}
-	var value map[string]interface{}
-
-	var name string
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+	req, reqErr := newAddRecordRequest(r.Body, zoneName, rrtype)
+	if reqErr != nil {
+		http.Error(w, reqErr.message, reqErr.status)
 		return
 	}
-
-	switch rrtype {
-	case dns.TypeSOA:
-		name = zoneName
-	case dns.TypeDNSKEY:
-		// Always default to zone apex for DNSKEY
-		name, _ = internal.SanitizeFQDN(zoneName)
-
-		// Support keyid usage (optional)
-		keyidRaw, ok := body["keyid"]
-		if !ok {
-			http.Error(w, "Missing field: keyid", http.StatusBadRequest)
-			return
-		}
-		keyid, ok := keyidRaw.(string)
-		if !ok || strings.TrimSpace(keyid) == "" {
-			http.Error(w, "Field 'keyid' must be a non-empty string", http.StatusBadRequest)
-			return
-		}
-
-		// Load key from storage
-		_, storedKey, err := security.LoadPrivateKeyFromStorage(keyid)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Key not found: %v", err), http.StatusNotFound)
-			return
-		}
-
-		// Fill DNSKEYRecord fields
-		dnskey := map[string]interface{}{
-			"flags":      security.DNSKEYFlags(storedKey),
-			"protocol":   3,                                                     // always 3 for DNSSEC
-			"algorithm":  security.AlgorithmNumberFromName(storedKey.Algorithm), // convert "ED25519" -> 15
-			"public_key": storedKey.PublicKey,
-		}
-
-		if ttlRaw, ok := body["ttl"]; ok {
-			switch v := ttlRaw.(type) {
-			case float64:
-				dnskey["ttl"] = uint32(v)
-			case int:
-				dnskey["ttl"] = uint32(v)
-			default:
-				http.Error(w, "Field 'ttl' must be a number", http.StatusBadRequest)
-				return
-			}
-		}
-
-		// Set zone apex
-		name, _ = internal.SanitizeFQDN(zoneName)
-		value = dnskey
-
-		// Remove 'name' if it exists (we don't use it for DNSKEY)
-		delete(body, "name")
-	default:
-		rawName, ok := body["name"]
-		if !ok {
-			http.Error(w, "Missing field: name", http.StatusBadRequest)
-			return
-		}
-		name, ok = rawName.(string)
-		if !ok || strings.TrimSpace(name) == "" {
-			http.Error(w, "Field 'name' must be a non-empty string", http.StatusBadRequest)
-			return
-		}
-		delete(body, "name")
-	}
-
-	var ttlPtr *uint32
-	if rawTTL, ok := body["ttl"]; ok {
-		switch v := rawTTL.(type) {
-		case float64:
-			t := uint32(v)
-			ttlPtr = &t
-		case int:
-			t := uint32(v)
-			ttlPtr = &t
-		default:
-			http.Error(w, "Field 'ttl' must be a number", http.StatusBadRequest)
-			return
-		}
-		delete(body, "ttl")
-	}
-
-	if rrtype != dns.TypeDNSKEY {
-		value = body
-	}
-	log.Printf("body: %+v\n", value)
+	log.Printf("body: %+v\n", req.value)
 	log.Printf("zoneName: %+v\n", zoneName)
-	log.Printf("name: %+v\n", name)
+	log.Printf("name: %+v\n", req.name)
 
-	if err := zone.AddRecord(rrtype, zoneName, name, value, ttlPtr); err != nil {
+	if err := zone.AddRecord(rrtype, zoneName, req.name, req.value, req.ttlPtr); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	if rrtype != dns.TypeSOA {
-		if err := dnsutils.UpdateSOASerial(zoneName); err != nil {
-			log.Printf("warning: failed to update SOA serial: %v", err)
-		} else if config.AppConfig.GetLive().Mode != "secondary" {
-			go dnsutils.ScheduleNotify(zoneName)
-		}
-	}
-	if err := publishDistributedUpsert(zoneName, rrtypeStr, name); err != nil {
+	if err := afterRecordUpsert(zoneName, rrtypeStr, rrtype, req.name); err != nil {
 		http.Error(w, "record stored but distributed event failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if rrtype != dns.TypeSOA {
-		if err := publishDistributedUpsert(zoneName, "SOA", "@"); err != nil {
-			http.Error(w, "record stored but distributed SOA event failed: "+err.Error(), http.StatusInternalServerError)
-			return
+
+	w.WriteHeader(http.StatusCreated)
+}
+
+func newAddRecordRequest(body io.Reader, zoneName string, rrtype uint16) (addRecordRequest, *addRecordError) {
+	payload, err := decodeRecordPayload(body)
+	if err != nil {
+		return addRecordRequest{}, err
+	}
+
+	req, err := recordRequestFromPayload(zoneName, rrtype, payload)
+	if err != nil {
+		return addRecordRequest{}, err
+	}
+
+	ttlPtr, err := extractTTL(payload)
+	if err != nil {
+		return addRecordRequest{}, err
+	}
+	req.ttlPtr = ttlPtr
+	return req, nil
+}
+
+func decodeRecordPayload(body io.Reader) (map[string]interface{}, *addRecordError) {
+	var payload map[string]interface{}
+	if err := json.NewDecoder(body).Decode(&payload); err != nil {
+		return nil, badRecordRequest("Invalid JSON")
+	}
+	return payload, nil
+}
+
+func recordRequestFromPayload(zoneName string, rrtype uint16, payload map[string]interface{}) (addRecordRequest, *addRecordError) {
+	switch rrtype {
+	case dns.TypeSOA:
+		return addRecordRequest{name: zoneName, value: payload}, nil
+	case dns.TypeDNSKEY:
+		return dnskeyRecordRequest(zoneName, payload)
+	default:
+		return namedRecordRequest(payload)
+	}
+}
+
+func dnskeyRecordRequest(zoneName string, payload map[string]interface{}) (addRecordRequest, *addRecordError) {
+	keyid, err := requiredStringField(payload, "keyid")
+	if err != nil {
+		return addRecordRequest{}, err
+	}
+
+	_, storedKey, loadErr := security.LoadPrivateKeyFromStorage(keyid)
+	if loadErr != nil {
+		return addRecordRequest{}, &addRecordError{
+			message: fmt.Sprintf("Key not found: %v", loadErr),
+			status:  http.StatusNotFound,
 		}
 	}
 
-	w.WriteHeader(http.StatusCreated)
+	value := map[string]interface{}{
+		"flags":      security.DNSKEYFlags(storedKey),
+		"protocol":   3,
+		"algorithm":  security.AlgorithmNumberFromName(storedKey.Algorithm),
+		"public_key": storedKey.PublicKey,
+	}
+	if ttl, ok, err := optionalTTL(payload); err != nil {
+		return addRecordRequest{}, err
+	} else if ok {
+		value["ttl"] = ttl
+	}
+
+	name, _ := internal.SanitizeFQDN(zoneName)
+	delete(payload, "name")
+	return addRecordRequest{name: name, value: value}, nil
+}
+
+func namedRecordRequest(payload map[string]interface{}) (addRecordRequest, *addRecordError) {
+	name, err := requiredStringField(payload, "name")
+	if err != nil {
+		return addRecordRequest{}, err
+	}
+	delete(payload, "name")
+	return addRecordRequest{name: name, value: payload}, nil
+}
+
+func requiredStringField(payload map[string]interface{}, field string) (string, *addRecordError) {
+	raw, ok := payload[field]
+	if !ok {
+		return "", badRecordRequest("Missing field: " + field)
+	}
+	value, ok := raw.(string)
+	if !ok || strings.TrimSpace(value) == "" {
+		return "", badRecordRequest(fmt.Sprintf("Field '%s' must be a non-empty string", field))
+	}
+	return value, nil
+}
+
+func extractTTL(payload map[string]interface{}) (*uint32, *addRecordError) {
+	ttl, ok, err := optionalTTL(payload)
+	if err != nil || !ok {
+		return nil, err
+	}
+	delete(payload, "ttl")
+	return &ttl, nil
+}
+
+func optionalTTL(payload map[string]interface{}) (uint32, bool, *addRecordError) {
+	raw, ok := payload["ttl"]
+	if !ok {
+		return 0, false, nil
+	}
+	ttl, err := ttlUint32(raw)
+	if err != nil {
+		return 0, false, err
+	}
+	return ttl, true, nil
+}
+
+func ttlUint32(raw interface{}) (uint32, *addRecordError) {
+	switch value := raw.(type) {
+	case float64:
+		return uint32(value), nil
+	case int:
+		return uint32(value), nil
+	default:
+		return 0, badRecordRequest("Field 'ttl' must be a number")
+	}
+}
+
+func badRecordRequest(message string) *addRecordError {
+	return &addRecordError{message: message, status: http.StatusBadRequest}
+}
+
+func afterRecordUpsert(zoneName, rrtypeStr string, rrtype uint16, name string) error {
+	if rrtype != dns.TypeSOA {
+		updateSOAAfterRecordChange(zoneName)
+	}
+	if err := publishDistributedUpsert(zoneName, rrtypeStr, name); err != nil {
+		return err
+	}
+	if rrtype == dns.TypeSOA {
+		return nil
+	}
+	return publishDistributedUpsert(zoneName, "SOA", "@")
+}
+
+func updateSOAAfterRecordChange(zoneName string) {
+	if err := dnsutils.UpdateSOASerial(zoneName); err != nil {
+		log.Printf("warning: failed to update SOA serial: %v", err)
+		return
+	}
+	if config.AppConfig.GetLive().Mode != "secondary" {
+		go dnsutils.ScheduleNotify(zoneName)
+	}
 }
 
 // GET /api/zones/{zone}/records/{rrtype}/{name}
