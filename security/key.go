@@ -7,11 +7,8 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha1"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -104,71 +101,135 @@ func GenerateAndStoreAllKeys(zone string) error {
 }
 
 func GetDS(zone string) ([]*dns.DS, error) {
+	return GetDSWithDigestTypes(zone, []uint8{dns.SHA256})
+}
+
+func GetDSWithDigestTypes(zone string, digestTypes []uint8) ([]*dns.DS, error) {
+	dnskeys, err := ParentDSDNSKEYs(zone, time.Now().Unix())
+	if err != nil {
+		return nil, err
+	}
+	if len(digestTypes) == 0 {
+		digestTypes = []uint8{dns.SHA256}
+	}
+	var dsList []*dns.DS
+	for _, dnskey := range dnskeys {
+		for _, digestType := range digestTypes {
+			ds := dnskey.ToDS(digestType)
+			if ds == nil {
+				return nil, fmt.Errorf("failed to build DS digest type %d for key tag %d", digestType, dnskey.KeyTag())
+			}
+			dsList = append(dsList, ds)
+		}
+	}
+	sort.SliceStable(dsList, func(i, j int) bool {
+		if dsList[i].KeyTag != dsList[j].KeyTag {
+			return dsList[i].KeyTag < dsList[j].KeyTag
+		}
+		return dsList[i].DigestType < dsList[j].DigestType
+	})
+	return dsList, nil
+}
+
+func GetCDS(zone string) ([]*dns.CDS, error) {
+	dsList, err := GetDSWithDigestTypes(zone, []uint8{dns.SHA256})
+	if err != nil {
+		return nil, err
+	}
+	cdsList := make([]*dns.CDS, 0, len(dsList))
+	for _, ds := range dsList {
+		cdsList = append(cdsList, ds.ToCDS())
+	}
+	return cdsList, nil
+}
+
+func GetCDNSKEY(zone string) ([]*dns.CDNSKEY, error) {
+	dnskeys, err := ParentDSDNSKEYs(zone, time.Now().Unix())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*dns.CDNSKEY, 0, len(dnskeys))
+	for _, key := range dnskeys {
+		out = append(out, key.ToCDNSKEY())
+	}
+	return out, nil
+}
+
+func DeleteDSCDS(zone string, ttl uint32) *dns.CDS {
+	if ttl == 0 {
+		ttl = 3600
+	}
+	return &dns.CDS{DS: dns.DS{
+		Hdr: dns.RR_Header{
+			Name:   dns.Fqdn(zone),
+			Rrtype: dns.TypeCDS,
+			Class:  dns.ClassINET,
+			Ttl:    ttl,
+		},
+		KeyTag:     0,
+		Algorithm:  0,
+		DigestType: 0,
+		Digest:     "00",
+	}}
+}
+
+func DeleteDSCDNSKEY(zone string, ttl uint32) *dns.CDNSKEY {
+	if ttl == 0 {
+		ttl = 3600
+	}
+	return &dns.CDNSKEY{DNSKEY: dns.DNSKEY{
+		Hdr: dns.RR_Header{
+			Name:   dns.Fqdn(zone),
+			Rrtype: dns.TypeCDNSKEY,
+			Class:  dns.ClassINET,
+			Ttl:    ttl,
+		},
+		Flags:     0,
+		Protocol:  3,
+		Algorithm: 0,
+		PublicKey: "AA==",
+	}}
+}
+
+func ParentDSDNSKEYs(zone string, now int64) ([]*dns.DNSKEY, error) {
 	sz, err := internal.SanitizeFQDN(zone)
 	if err != nil {
 		return nil, fmt.Errorf("FQDN sanitize check failed: %w", err)
 	}
 
-	recs, found := zonereader.LookupRecord(dns.TypeDNSKEY, sz)
-	if !found {
-		return nil, fmt.Errorf("no DNSKEYs found for zone %s", sz)
+	keys, err := LoadPublishedKeysForZone(sz, now)
+	if err != nil {
+		return nil, err
 	}
-
-	var dsList []*dns.DS
-	for _, rr := range recs {
-		dnskey, ok := rr.(*dns.DNSKEY)
-		if !ok || dnskey.Flags != 257 {
-			continue // Only consider KSKs
+	var out []*dns.DNSKEY
+	for _, key := range keys {
+		if !isKSK(key) || !keySignsAt(key, now) {
+			continue
 		}
-
-		keyTag := dnskey.KeyTag()
-
-		wire := make([]byte, 1024)
-		off, err := dns.PackRR(dnskey, wire, 0, nil, true)
-		if err != nil {
-			return nil, fmt.Errorf("failed to pack DNSKEY: %w", err)
-		}
-		wire = wire[:off]
-		digestInput := wire[12:]
-
-		// SHA-1 digest (type 1)
-		sha1sum := sha1.Sum(digestInput)
-		ds1 := &dns.DS{
-			Hdr: dns.RR_Header{
-				Name:   dns.Fqdn(zone),
-				Rrtype: dns.TypeDS,
-				Class:  dns.ClassINET,
-				Ttl:    dnskey.Hdr.Ttl,
-			},
-			KeyTag:     keyTag,
-			Algorithm:  dnskey.Algorithm,
-			DigestType: dns.SHA1,
-			Digest:     hex.EncodeToString(sha1sum[:]),
-		}
-		dsList = append(dsList, ds1)
-
-		// SHA-256 digest (type 2)
-		sha256sum := sha256.Sum256(digestInput)
-		ds2 := &dns.DS{
-			Hdr: dns.RR_Header{
-				Name:   dns.Fqdn(zone),
-				Rrtype: dns.TypeDS,
-				Class:  dns.ClassINET,
-				Ttl:    dnskey.Hdr.Ttl,
-			},
-			KeyTag:     keyTag,
-			Algorithm:  dnskey.Algorithm,
-			DigestType: dns.SHA256,
-			Digest:     hex.EncodeToString(sha256sum[:]),
-		}
-		dsList = append(dsList, ds2)
+		out = append(out, storedKeyToDNSKEY(sz, key, 3600))
 	}
-
-	if len(dsList) == 0 {
-		return nil, fmt.Errorf("no KSK found in DNSKEYs for zone %s", zone)
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no active KSK DNSKEY found for zone %s", sz)
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].KeyTag() < out[j].KeyTag()
+	})
+	return out, nil
+}
 
-	return dsList, nil
+func storedKeyToDNSKEY(zone string, key *types.StoredKey, ttl uint32) *dns.DNSKEY {
+	return &dns.DNSKEY{
+		Hdr: dns.RR_Header{
+			Name:   dns.Fqdn(zone),
+			Rrtype: dns.TypeDNSKEY,
+			Class:  dns.ClassINET,
+			Ttl:    ttl,
+		},
+		Flags:     DNSKEYFlags(key),
+		Protocol:  3,
+		Algorithm: AlgorithmNumberFromName(key.Algorithm),
+		PublicKey: key.PublicKey,
+	}
 }
 
 func generateKeyPair(algorithm uint8) (crypto.PrivateKey, crypto.PublicKey, error) {

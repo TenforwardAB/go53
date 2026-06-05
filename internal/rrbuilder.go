@@ -174,6 +174,39 @@ var RRBuilders = map[string]RRBuilder{
 		return rrs
 	},
 
+	"CDS": func(name string, data any) []dns.RR {
+		var rrs []dns.RR
+
+		switch v := data.(type) {
+		case []types.CDSRecord:
+			for _, rec := range v {
+				rrs = append(rrs, &dns.CDS{DS: dns.DS{
+					Hdr:        dns.RR_Header{Name: name, Rrtype: dns.TypeCDS, Class: dns.ClassINET, Ttl: rec.TTL},
+					KeyTag:     rec.KeyTag,
+					Algorithm:  rec.Algorithm,
+					DigestType: rec.DigestType,
+					Digest:     strings.ToUpper(rec.Digest),
+				}})
+			}
+		case []interface{}:
+			for _, raw := range v {
+				rec, ok := raw.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				rrs = append(rrs, &dns.CDS{DS: dns.DS{
+					Hdr:        dns.RR_Header{Name: name, Rrtype: dns.TypeCDS, Class: dns.ClassINET, Ttl: toTTL(rec)},
+					KeyTag:     uint16(getFloat64(rec["key_tag"])),
+					Algorithm:  uint8(getFloat64(rec["algorithm"])),
+					DigestType: uint8(getFloat64(rec["digest_type"])),
+					Digest:     strings.ToUpper(fmt.Sprint(rec["digest"])),
+				}})
+			}
+		}
+
+		return rrs
+	},
+
 	"MX": func(name string, data any) []dns.RR {
 		var rrs []dns.RR
 
@@ -696,6 +729,98 @@ var RRBuilders = map[string]RRBuilder{
 		return nil
 	},
 
+	"CDNSKEY": func(name string, data any) []dns.RR {
+		switch v := data.(type) {
+		case []types.CDNSKEYRecord:
+			var out []dns.RR
+			for _, v := range data.([]types.CDNSKEYRecord) {
+				out = append(out, &dns.CDNSKEY{DNSKEY: dns.DNSKEY{
+					Hdr: dns.RR_Header{
+						Name:   dns.Fqdn(name),
+						Rrtype: dns.TypeCDNSKEY,
+						Class:  dns.ClassINET,
+						Ttl:    v.TTL,
+					},
+					Flags:     v.Flags,
+					Protocol:  v.Protocol,
+					Algorithm: v.Algorithm,
+					PublicKey: v.PublicKey,
+				}})
+			}
+			return out
+
+		case types.CDNSKEYRecord:
+			return []dns.RR{&dns.CDNSKEY{DNSKEY: dns.DNSKEY{
+				Hdr: dns.RR_Header{
+					Name:   dns.Fqdn(name),
+					Rrtype: dns.TypeCDNSKEY,
+					Class:  dns.ClassINET,
+					Ttl:    v.TTL,
+				},
+				Flags:     v.Flags,
+				Protocol:  v.Protocol,
+				Algorithm: v.Algorithm,
+				PublicKey: v.PublicKey,
+			}}}
+
+		case map[string]interface{}:
+			flags := uint16(v["flags"].(float64))
+			protocol := uint8(3)
+			if p, ok := v["protocol"].(float64); ok {
+				protocol = uint8(p)
+			}
+			algorithm := uint8(v["algorithm"].(float64))
+			publicKey := v["public_key"].(string)
+			ttl := toTTL(v)
+
+			return []dns.RR{&dns.CDNSKEY{DNSKEY: dns.DNSKEY{
+				Hdr: dns.RR_Header{
+					Name:   dns.Fqdn(name),
+					Rrtype: dns.TypeCDNSKEY,
+					Class:  dns.ClassINET,
+					Ttl:    ttl,
+				},
+				Flags:     flags,
+				Protocol:  protocol,
+				Algorithm: algorithm,
+				PublicKey: publicKey,
+			}}}
+
+		case []interface{}:
+			var out []dns.RR
+			for _, item := range v {
+				m, ok := item.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				flags := uint16(m["flags"].(float64))
+				protocol := uint8(3)
+				if p, ok := m["protocol"].(float64); ok {
+					protocol = uint8(p)
+				}
+				algorithm := uint8(m["algorithm"].(float64))
+				publicKey := m["public_key"].(string)
+				ttl := toTTL(m)
+
+				out = append(out, &dns.CDNSKEY{DNSKEY: dns.DNSKEY{
+					Hdr: dns.RR_Header{
+						Name:   dns.Fqdn(name),
+						Rrtype: dns.TypeCDNSKEY,
+						Class:  dns.ClassINET,
+						Ttl:    ttl,
+					},
+					Flags:     flags,
+					Protocol:  protocol,
+					Algorithm: algorithm,
+					PublicKey: publicKey,
+				}})
+			}
+			return out
+		}
+
+		return nil
+	},
+
 	"RRSIG": func(name string, data any) []dns.RR {
 		var rrs []dns.RR
 		slog.Crazy("[rrbuilder.go:RRBuilder] data for RSIG is: %+v", data)
@@ -784,8 +909,10 @@ func RRToZoneData(rrs []dns.RR) types.ZoneData {
 	zd.NSEC = map[string]types.NSECRecord{}
 	zd.NSEC3 = map[string]types.NSEC3Record{}
 	zd.DNSKEY = map[string][]types.DNSKEYRecord{}
+	zd.CDNSKEY = map[string][]types.CDNSKEYRecord{}
 	zd.RRSIG = map[string][]*types.RRSIGRecord{}
 	zd.DS = map[string][]types.DSRecord{}
+	zd.CDS = map[string][]types.CDSRecord{}
 	zd.NAPTR = map[string][]types.NAPTRRecord{}
 	zd.SPF = map[string]types.SPFRecord{}
 	zd.HTTPS = map[string][]types.HTTPSRecord{}
@@ -836,6 +963,30 @@ func RRToZoneData(rrs []dns.RR) types.ZoneData {
 				Algorithm: v.Algorithm,
 				PublicKey: v.PublicKey,
 				TTL:       v.Hdr.Ttl,
+			})
+		case *dns.CDNSKEY:
+			zd.CDNSKEY[name] = append(zd.CDNSKEY[name], types.CDNSKEYRecord{
+				Flags:     v.Flags,
+				Protocol:  v.Protocol,
+				Algorithm: v.Algorithm,
+				PublicKey: v.PublicKey,
+				TTL:       v.Hdr.Ttl,
+			})
+		case *dns.DS:
+			zd.DS[name] = append(zd.DS[name], types.DSRecord{
+				KeyTag:     v.KeyTag,
+				Algorithm:  v.Algorithm,
+				DigestType: v.DigestType,
+				Digest:     strings.ToUpper(v.Digest),
+				TTL:        v.Hdr.Ttl,
+			})
+		case *dns.CDS:
+			zd.CDS[name] = append(zd.CDS[name], types.CDSRecord{
+				KeyTag:     v.KeyTag,
+				Algorithm:  v.Algorithm,
+				DigestType: v.DigestType,
+				Digest:     strings.ToUpper(v.Digest),
+				TTL:        v.Hdr.Ttl,
 			})
 		case *dns.RRSIG:
 			// Use .TypeCovered to group RRSIGs for different RRsets

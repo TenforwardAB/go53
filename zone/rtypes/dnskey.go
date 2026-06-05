@@ -8,6 +8,7 @@ import (
 	"go53/internal"
 	"go53/security"
 	"go53/types"
+	"strings"
 	"time"
 )
 
@@ -35,60 +36,9 @@ func (DNSKEYRecord) Add(zone, name string, value interface{}, ttl *uint32) error
 		return fmt.Errorf("DNSKEYRecord expects value to be a JSON object, got %T", value)
 	}
 
-	rec := types.DNSKEYRecord{
-		TTL:      3600,
-		Protocol: 3,
-	}
-
-	if ttl != nil {
-		rec.TTL = *ttl
-	}
-
-	if f, ok := m["flags"]; ok {
-		switch v := f.(type) {
-		case float64:
-			rec.Flags = uint16(v)
-		case int:
-			rec.Flags = uint16(v)
-		case uint16:
-			rec.Flags = v
-		default:
-			return fmt.Errorf("DNSKEYRecord: invalid 'flags' type %T", v)
-		}
-	} else {
-		return errors.New("DNSKEYRecord: missing 'flags'")
-	}
-
-	if p, ok := m["protocol"]; ok {
-		switch v := p.(type) {
-		case float64:
-			rec.Protocol = uint8(v)
-		case int:
-			rec.Protocol = uint8(v)
-		case uint8:
-			rec.Protocol = v
-		}
-	}
-
-	if a, ok := m["algorithm"]; ok {
-		switch v := a.(type) {
-		case float64:
-			rec.Algorithm = uint8(v)
-		case int:
-			rec.Algorithm = uint8(v)
-		case uint8:
-			rec.Algorithm = v
-		default:
-			return fmt.Errorf("DNSKEYRecord: invalid 'algorithm' type %T", v)
-		}
-	} else {
-		return errors.New("DNSKEYRecord: missing 'algorithm'")
-	}
-
-	if pk, ok := m["public_key"].(string); ok {
-		rec.PublicKey = pk
-	} else {
-		return errors.New("DNSKEYRecord: missing or invalid 'public_key'")
+	rec, err := dnskeyRecordFromMap(m, ttl)
+	if err != nil {
+		return err
 	}
 
 	if memStore == nil {
@@ -141,24 +91,7 @@ func (DNSKEYRecord) Lookup(host string) ([]dns.RR, bool) {
 
 	var records []types.DNSKEYRecord
 	if _, _, val, ok := memStore.GetRecord(sz, string(types.TypeDNSKEY), name); ok {
-		switch v := val.(type) {
-		case []types.DNSKEYRecord:
-			records = v
-		case []interface{}:
-			for _, item := range v {
-				if obj, ok := item.(map[string]interface{}); ok {
-					if rec, ok := internal.ParseToDNSKEYRecord(obj); ok {
-						records = append(records, rec)
-					}
-				}
-			}
-		case map[string]interface{}:
-			if rec, ok := internal.ParseToDNSKEYRecord(v); ok {
-				records = append(records, rec)
-			}
-		case types.DNSKEYRecord:
-			records = append(records, v)
-		}
+		records = dnskeyRecordsFromRaw(val)
 	}
 
 	if name == "@" {
@@ -266,4 +199,118 @@ func (DNSKEYRecord) Type() uint16 {
 
 func init() {
 	Register(DNSKEYRecord{})
+}
+
+func dnskeyRecordFromMap(m map[string]interface{}, ttl *uint32) (types.DNSKEYRecord, error) {
+	rec := types.DNSKEYRecord{
+		TTL:      3600,
+		Protocol: 3,
+	}
+
+	if ttl != nil {
+		rec.TTL = *ttl
+	}
+
+	if f, ok := m["flags"]; ok {
+		switch v := f.(type) {
+		case float64:
+			rec.Flags = uint16(v)
+		case int:
+			rec.Flags = uint16(v)
+		case uint16:
+			rec.Flags = v
+		default:
+			return rec, fmt.Errorf("DNSKEYRecord: invalid 'flags' type %T", v)
+		}
+	} else {
+		return rec, errors.New("DNSKEYRecord: missing 'flags'")
+	}
+
+	if p, ok := m["protocol"]; ok {
+		switch v := p.(type) {
+		case float64:
+			rec.Protocol = uint8(v)
+		case int:
+			rec.Protocol = uint8(v)
+		case uint8:
+			rec.Protocol = v
+		}
+	}
+
+	if a, ok := m["algorithm"]; ok {
+		switch v := a.(type) {
+		case float64:
+			rec.Algorithm = uint8(v)
+		case int:
+			rec.Algorithm = uint8(v)
+		case uint8:
+			rec.Algorithm = v
+		default:
+			return rec, fmt.Errorf("DNSKEYRecord: invalid 'algorithm' type %T", v)
+		}
+	} else {
+		return rec, errors.New("DNSKEYRecord: missing 'algorithm'")
+	}
+
+	if pk, ok := m["public_key"].(string); ok && strings.TrimSpace(pk) != "" {
+		rec.PublicKey = pk
+	} else {
+		return rec, errors.New("DNSKEYRecord: missing or invalid 'public_key'")
+	}
+	if t, ok := m["ttl"].(float64); ok {
+		rec.TTL = uint32(t)
+	}
+
+	return rec, nil
+}
+
+func dnskeyRecordsFromRaw(raw any) []types.DNSKEYRecord {
+	var records []types.DNSKEYRecord
+	switch v := raw.(type) {
+	case []types.DNSKEYRecord:
+		return append([]types.DNSKEYRecord(nil), v...)
+	case []types.CDNSKEYRecord:
+		for _, rec := range v {
+			records = append(records, types.DNSKEYRecord(rec))
+		}
+	case []interface{}:
+		for _, item := range v {
+			if obj, ok := item.(map[string]interface{}); ok {
+				if rec, ok := internal.ParseToDNSKEYRecord(obj); ok {
+					records = append(records, rec)
+				}
+			}
+		}
+	case map[string]interface{}:
+		if rec, ok := internal.ParseToDNSKEYRecord(v); ok {
+			records = append(records, rec)
+		}
+	case types.DNSKEYRecord:
+		records = append(records, v)
+	case types.CDNSKEYRecord:
+		records = append(records, types.DNSKEYRecord(v))
+	}
+	return records
+}
+
+func dedupeDNSKEYLike(rrs []dns.RR) []dns.RR {
+	seen := make(map[string]bool)
+	out := make([]dns.RR, 0, len(rrs))
+	for _, rr := range rrs {
+		var key string
+		switch v := rr.(type) {
+		case *dns.DNSKEY:
+			key = fmt.Sprintf("%s/%d/%d/%s", strings.ToLower(v.Hdr.Name), v.Flags, v.Algorithm, v.PublicKey)
+		case *dns.CDNSKEY:
+			key = fmt.Sprintf("%s/%d/%d/%s", strings.ToLower(v.Hdr.Name), v.Flags, v.Algorithm, v.PublicKey)
+		default:
+			key = rr.String()
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, rr)
+	}
+	return out
 }

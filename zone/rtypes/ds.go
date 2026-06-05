@@ -205,3 +205,25 @@ func rawTTL(m map[string]interface{}) uint32 {
 	}
 	return 3600
 }
+
+func dedupeDSLike(rrs []dns.RR) []dns.RR {
+	seen := make(map[string]bool)
+	out := make([]dns.RR, 0, len(rrs))
+	for _, rr := range rrs {
+		var key string
+		switch v := rr.(type) {
+		case *dns.DS:
+			key = fmt.Sprintf("%s/%d/%d/%d/%s", strings.ToLower(v.Hdr.Name), v.KeyTag, v.Algorithm, v.DigestType, strings.ToUpper(v.Digest))
+		case *dns.CDS:
+			key = fmt.Sprintf("%s/%d/%d/%d/%s", strings.ToLower(v.Hdr.Name), v.KeyTag, v.Algorithm, v.DigestType, strings.ToUpper(v.Digest))
+		default:
+			key = rr.String()
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, rr)
+	}
+	return out
+}

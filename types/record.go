@@ -14,11 +14,13 @@ const (
 	TypePTR       RecordType = "PTR"
 	TypeCAA       RecordType = "CAA"
 	TypeDNSKEY    RecordType = "DNSKEY"
+	TypeCDNSKEY   RecordType = "CDNSKEY"
 	TypeRRSIG     RecordType = "RRSIG"
 	TypeNSEC      RecordType = "NSEC"
 	TypeNSEC3     RecordType = "NSEC3"
 	TypeNSECPARAM RecordType = "NSECPARAM"
 	TypeDS        RecordType = "DS"
+	TypeCDS       RecordType = "CDS"
 	TypeNAPTR     RecordType = "NAPTR"
 	TypeSPF       RecordType = "SPF"
 	TypeHTTPS     RecordType = "HTTPS"
@@ -105,6 +107,14 @@ type DNSKEYRecord struct {
 	TTL       uint32 `json:"ttl"`
 }
 
+type CDNSKEYRecord struct {
+	Flags     uint16 `json:"flags"`
+	Protocol  uint8  `json:"protocol"`
+	Algorithm uint8  `json:"algorithm"`
+	PublicKey string `json:"public_key"`
+	TTL       uint32 `json:"ttl"`
+}
+
 type RRSIGRecord struct {
 	Name        string `json:"name"`         // <-- not wire, just internal
 	TypeCovered string `json:"type_covered"` // e.g., "A", "NS", etc.
@@ -144,6 +154,14 @@ type NSEC3ParamRecord struct {
 }
 
 type DSRecord struct {
+	KeyTag     uint16 `json:"key_tag"`
+	Algorithm  uint8  `json:"algorithm"`
+	DigestType uint8  `json:"digest_type"`
+	Digest     string `json:"digest"` //hex
+	TTL        uint32 `json:"ttl"`
+}
+
+type CDSRecord struct {
 	KeyTag     uint16 `json:"key_tag"`
 	Algorithm  uint8  `json:"algorithm"`
 	DigestType uint8  `json:"digest_type"`
@@ -218,32 +236,34 @@ type APLRecord struct {
 }
 
 type ZoneData struct {
-	A          map[string][]ARecord      `json:"a,omitempty"`
-	AAAA       map[string][]AAAARecord   `json:"aaaa,omitempty"`
-	MX         map[string][]MXRecord     `json:"mx,omitempty"`
-	SOA        *SOARecord                `json:"soa,omitempty"` // Only one per zone
-	CNAME      map[string]CNAMERecord    `json:"cname,omitempty"`
-	NS         map[string][]NSRecord     `json:"ns,omitempty"`
-	SRV        map[string][]SRVRecord    `json:"srv,omitempty"`
-	TXT        map[string][]TXTRecord    `json:"txt,omitempty"`
-	PTR        map[string][]PTRRecord    `json:"ptr,omitempty"`
-	CAA        map[string][]CAARecord    `json:"caa,omitempty"`
-	DNSKEY     map[string][]DNSKEYRecord `json:"dnskey,omitempty"`
-	RRSIG      map[string][]*RRSIGRecord `json:"rrsig,omitempty"`
-	NSEC       map[string]NSECRecord     `json:"nsec,omitempty"`  // one per name
-	NSEC3      map[string]NSEC3Record    `json:"nsec3,omitempty"` // one per name
-	NSEC3PARAM *NSEC3ParamRecord         `json:"nsec3param,omitempty"`
-	DS         map[string][]DSRecord     `json:"ds,omitempty"`
-	NAPTR      map[string][]NAPTRRecord  `json:"naptr,omitempty"`
-	SPF        map[string]SPFRecord      `json:"spf,omitempty"`
-	HTTPS      map[string][]HTTPSRecord  `json:"https,omitempty"`
-	SVCB       map[string][]SVCBRecord   `json:"svcb,omitempty"`
-	LOC        map[string][]LOCRecord    `json:"loc,omitempty"`
-	CERT       map[string][]CERTRecord   `json:"cert,omitempty"`
-	SSHFP      map[string][]SSHFPRecord  `json:"sshfp,omitempty"`
-	URI        map[string][]URIRecord    `json:"uri,omitempty"`
-	APL        map[string][]APLRecord    `json:"apl,omitempty"`
-	DNAME      map[string]DNAMERecord    `json:"dname,omitempty"`
+	A          map[string][]ARecord       `json:"a,omitempty"`
+	AAAA       map[string][]AAAARecord    `json:"aaaa,omitempty"`
+	MX         map[string][]MXRecord      `json:"mx,omitempty"`
+	SOA        *SOARecord                 `json:"soa,omitempty"` // Only one per zone
+	CNAME      map[string]CNAMERecord     `json:"cname,omitempty"`
+	NS         map[string][]NSRecord      `json:"ns,omitempty"`
+	SRV        map[string][]SRVRecord     `json:"srv,omitempty"`
+	TXT        map[string][]TXTRecord     `json:"txt,omitempty"`
+	PTR        map[string][]PTRRecord     `json:"ptr,omitempty"`
+	CAA        map[string][]CAARecord     `json:"caa,omitempty"`
+	DNSKEY     map[string][]DNSKEYRecord  `json:"dnskey,omitempty"`
+	CDNSKEY    map[string][]CDNSKEYRecord `json:"cdnskey,omitempty"`
+	RRSIG      map[string][]*RRSIGRecord  `json:"rrsig,omitempty"`
+	NSEC       map[string]NSECRecord      `json:"nsec,omitempty"`  // one per name
+	NSEC3      map[string]NSEC3Record     `json:"nsec3,omitempty"` // one per name
+	NSEC3PARAM *NSEC3ParamRecord          `json:"nsec3param,omitempty"`
+	DS         map[string][]DSRecord      `json:"ds,omitempty"`
+	CDS        map[string][]CDSRecord     `json:"cds,omitempty"`
+	NAPTR      map[string][]NAPTRRecord   `json:"naptr,omitempty"`
+	SPF        map[string]SPFRecord       `json:"spf,omitempty"`
+	HTTPS      map[string][]HTTPSRecord   `json:"https,omitempty"`
+	SVCB       map[string][]SVCBRecord    `json:"svcb,omitempty"`
+	LOC        map[string][]LOCRecord     `json:"loc,omitempty"`
+	CERT       map[string][]CERTRecord    `json:"cert,omitempty"`
+	SSHFP      map[string][]SSHFPRecord   `json:"sshfp,omitempty"`
+	URI        map[string][]URIRecord     `json:"uri,omitempty"`
+	APL        map[string][]APLRecord     `json:"apl,omitempty"`
+	DNAME      map[string]DNAMERecord     `json:"dname,omitempty"`
 }
 
 type StoredKey struct {

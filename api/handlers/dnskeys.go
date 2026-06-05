@@ -7,6 +7,7 @@ import (
 	"go53/security"
 	"go53/storage"
 	"go53/types"
+	zonepkg "go53/zone"
 	"net/http"
 	"strconv"
 	"time"
@@ -79,6 +80,10 @@ func CreateDNSKeyHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Key generation failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if err := zonepkg.RefreshDNSSECKeyMaterial(zone); err != nil {
+		http.Error(w, "Key generation succeeded but DNSSEC refresh failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]string{
@@ -115,6 +120,10 @@ func CreateRolloverDNSKeyHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Rollover key generation failed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	if err := zonepkg.RefreshDNSSECKeyMaterial(req.Zone); err != nil {
+		http.Error(w, "Rollover key generated but DNSSEC refresh failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -135,6 +144,10 @@ func UpdateDNSKeyLifecycleHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to update key lifecycle: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	if err := zonepkg.RefreshDNSSECKeyMaterial(key.Zone); err != nil {
+		http.Error(w, "Key lifecycle updated but DNSSEC refresh failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	_ = json.NewEncoder(w).Encode(key)
 }
 
@@ -143,6 +156,10 @@ func RetireDNSKeyHandler(w http.ResponseWriter, r *http.Request) {
 	key, err := security.RetireKey(keyID, removeAfter(r))
 	if err != nil {
 		http.Error(w, "Failed to retire key: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := zonepkg.RefreshDNSSECKeyMaterial(key.Zone); err != nil {
+		http.Error(w, "Key retired but DNSSEC refresh failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	_ = json.NewEncoder(w).Encode(key)
@@ -155,15 +172,26 @@ func RevokeDNSKeyHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to revoke key: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	if err := zonepkg.RefreshDNSSECKeyMaterial(key.Zone); err != nil {
+		http.Error(w, "Key revoked but DNSSEC refresh failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	_ = json.NewEncoder(w).Encode(key)
 }
 
 func DeleteDNSKeyHandler(w http.ResponseWriter, r *http.Request) {
 	keyID := mux.Vars(r)["keyid"]
+	storedKey, _ := security.LoadStoredKey(keyID)
 
 	if err := storage.Backend.DeleteFromTable("dnssec_keys", keyID); err != nil {
 		http.Error(w, "Failed to delete key", http.StatusInternalServerError)
 		return
+	}
+	if storedKey != nil {
+		if err := zonepkg.RefreshDNSSECKeyMaterial(storedKey.Zone); err != nil {
+			http.Error(w, "Key deleted but DNSSEC refresh failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)

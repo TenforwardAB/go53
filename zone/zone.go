@@ -113,6 +113,14 @@ func EnsureSignedRRSet(rrs []dns.RR) ([]dns.RR, error) {
 	return mem.EnsureSignedRRSet(rrs)
 }
 
+func RefreshDNSSECKeyMaterial(zone string) error {
+	mem := rtypes.GetMemStore()
+	if mem == nil {
+		return fmt.Errorf("memory store is not initialized")
+	}
+	return mem.RefreshDNSSECKeyMaterial(zone)
+}
+
 func FindNSECProof(name string) ([]dns.RR, bool) {
 	mem := rtypes.GetMemStore()
 	if mem == nil {

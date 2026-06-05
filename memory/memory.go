@@ -319,6 +319,36 @@ func (z *InMemoryZoneStore) EnsureSignedRRSet(rrs []dns.RR) ([]dns.RR, error) {
 	return signed, nil
 }
 
+func (z *InMemoryZoneStore) RefreshDNSSECKeyMaterial(zone string) error {
+	zone, err := internal.SanitizeFQDN(zone)
+	if err != nil {
+		return err
+	}
+	dnssecPrimary := config.AppConfig.GetLive().DNSSECEnabled && config.AppConfig.GetLive().Mode != "secondary"
+
+	z.mu.Lock()
+	if _, ok := z.cache["zones"][zone]; !ok {
+		z.cache["zones"][zone] = make(map[string]map[string]any)
+	}
+	if dnssecPrimary {
+		z.invalidateAllRRSIGsLocked(zone)
+		z.rebuildNSECChainLocked(zone)
+		z.rebuildNSEC3ChainLocked(zone)
+	}
+	z.mu.Unlock()
+
+	if !dnssecPrimary {
+		return z.persist(zone)
+	}
+
+	if err := z.persist(zone); err != nil {
+		return err
+	}
+	go z.signNSECChain(zone)
+	go z.signNSEC3Chain(zone)
+	return nil
+}
+
 func (z *InMemoryZoneStore) FindNSECProof(name string) ([]dns.RR, bool) {
 	zoneName, _, ok := internal.SplitName(name)
 	if !ok {
@@ -649,6 +679,24 @@ func isUnsignedDelegationOwner(name string, typesForOwner map[string]bool) bool 
 	return true
 }
 
+func addAutomaticDNSSECKeyFlowTypes(zone string, owners map[string]map[string]bool) {
+	now := time.Now().Unix()
+	publishedKeys, err := security.LoadPublishedKeysForZone(zone, now)
+	if err == nil && len(publishedKeys) > 0 {
+		if _, ok := owners["@"]; !ok {
+			owners["@"] = make(map[string]bool)
+		}
+		owners["@"][string(types.TypeDNSKEY)] = true
+	}
+	if _, err := security.ParentDSDNSKEYs(zone, now); err == nil {
+		if _, ok := owners["@"]; !ok {
+			owners["@"] = make(map[string]bool)
+		}
+		owners["@"][string(types.TypeCDS)] = true
+		owners["@"][string(types.TypeCDNSKEY)] = true
+	}
+}
+
 func nsec3IntervalHasOmittedOptOut(ownerHash, nextHash string, omittedHashes []string) bool {
 	for _, omittedHash := range omittedHashes {
 		if nsec3Covers(strings.ToUpper(ownerHash), strings.ToUpper(nextHash), strings.ToUpper(omittedHash)) {
@@ -679,6 +727,7 @@ func (z *InMemoryZoneStore) rebuildNSECChainLocked(zone string) {
 			owners[name][rtype] = true
 		}
 	}
+	addAutomaticDNSSECKeyFlowTypes(zone, owners)
 
 	if len(owners) == 0 {
 		delete(zoneMap, string(types.TypeNSEC))
@@ -754,6 +803,7 @@ func (z *InMemoryZoneStore) rebuildNSEC3ChainLocked(zone string) {
 			owners[name][rtype] = true
 		}
 	}
+	addAutomaticDNSSECKeyFlowTypes(zone, owners)
 
 	if nsec3OptOutEnabled(params) {
 		for name, typesForOwner := range owners {
@@ -907,6 +957,14 @@ func (z *InMemoryZoneStore) invalidateAllRRSIGLocked(zone, typeName string) {
 	if rrsigMap, ok := zoneMap[string(types.TypeRRSIG)]; ok {
 		delete(rrsigMap, typeName)
 	}
+}
+
+func (z *InMemoryZoneStore) invalidateAllRRSIGsLocked(zone string) {
+	zoneMap, ok := z.cache["zones"][zone]
+	if !ok {
+		return
+	}
+	delete(zoneMap, string(types.TypeRRSIG))
 }
 
 func ownerFQDN(zone, name string) string {

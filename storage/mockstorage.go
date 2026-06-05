@@ -58,3 +58,10 @@ func (m *MockStorage) SaveTable(table string, key string, value []byte) error {
 	m.Tables[table][key] = value
 	return nil
 }
+
+func (m *MockStorage) DeleteFromTable(table string, key string) error {
+	if _, ok := m.Tables[table]; ok {
+		delete(m.Tables[table], key)
+	}
+	return nil
+}

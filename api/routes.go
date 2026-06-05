@@ -55,6 +55,8 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 	r.HandleFunc("/api/dnskeys/{keyid}", disableSecondary(handlers.DeleteDNSKeyHandler)).Methods("DELETE")
 
 	r.HandleFunc("/api/ds/{zone}", disableSecondary(handlers.GetDSHandler)).Methods("GET")
+	r.HandleFunc("/api/cds/{zone}", disableSecondary(handlers.GetCDSHandler)).Methods("GET")
+	r.HandleFunc("/api/cdnskey/{zone}", disableSecondary(handlers.GetCDNSKEYHandler)).Methods("GET")
 
 	return r
 }
