@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"github.com/TenforwardAB/slog"
 	"go53/api"
 	"go53/config"
+	"go53/distributed"
 	"go53/dns"
 	"go53/dns/dnsutils"
 	"go53/memory"
@@ -75,8 +77,10 @@ func main() {
 		log.Fatal(err)
 	}
 	rtypes.InitMemoryStore(store)
+	distributed.Init(store)
 
 	go dnsutils.ProcessFetchQueue()
+	distributed.Start(context.Background())
 
 	go func() {
 		log.Println("Starting DNS server on", base.DNSPort)

@@ -45,9 +45,18 @@ type DNSSECSignaturePolicy struct {
 	InceptionSkewSeconds  int `json:"inception_skew_seconds"`
 }
 
+type DistributedConfig struct {
+	NodeID          string            `json:"node_id"`
+	Peers           string            `json:"peers"`
+	PrivateKey      string            `json:"private_key"`
+	PeerPublicKeys  map[string]string `json:"peer_public_keys"`
+	PushTimeoutMs   int               `json:"push_timeout_ms"`
+	ResyncIntervalS int               `json:"resync_interval_s"`
+}
+
 type LiveConfig struct {
 	LogLevel       string `json:"log_level"`       // debug/info/warn
-	Mode           string `json:"mode"`            // primary/secondary/replication
+	Mode           string `json:"mode"`            // primary/secondary/distributed
 	AllowTransfer  string `json:"allow_transfer"`  // comma-separated IPs
 	AllowRecursion bool   `json:"allow_recursion"` // "true"/"false"
 	DNSSECEnabled  bool   `json:"dnssec_enabled"`  // "true"/"false"
@@ -60,10 +69,11 @@ type LiveConfig struct {
 	DefaultNS      string `json:"default_ns"`      // e.g. ns1.example.com
 	EnforceTSIG    bool   `json:"enforce_tsig"`
 
-	Primary   PrimaryConfig         `json:"primary"`
-	Secondary SecondaryConfig       `json:"secondary"`
-	Dev       DevConfig             `json:"dev"`
-	DNSSEC    DNSSECSignaturePolicy `json:"dnssec"`
+	Primary     PrimaryConfig         `json:"primary"`
+	Secondary   SecondaryConfig       `json:"secondary"`
+	Dev         DevConfig             `json:"dev"`
+	DNSSEC      DNSSECSignaturePolicy `json:"dnssec"`
+	Distributed DistributedConfig     `json:"distributed"`
 }
 
 type ConfigManager struct {

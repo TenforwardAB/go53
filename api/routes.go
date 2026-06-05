@@ -58,6 +58,12 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 	r.HandleFunc("/api/cds/{zone}", disableSecondary(handlers.GetCDSHandler)).Methods("GET")
 	r.HandleFunc("/api/cdnskey/{zone}", disableSecondary(handlers.GetCDNSKEYHandler)).Methods("GET")
 
+	r.HandleFunc("/api/distributed/status", handlers.GetDistributedStatusHandler).Methods("GET")
+	r.HandleFunc("/api/distributed/keypair", handlers.GenerateDistributedKeyPairHandler).Methods("POST")
+	r.HandleFunc("/api/distributed/vector", handlers.GetDistributedVectorHandler).Methods("GET")
+	r.HandleFunc("/api/distributed/events", handlers.GetDistributedEventsHandler).Methods("GET")
+	r.HandleFunc("/api/distributed/events", handlers.PostDistributedEventHandler).Methods("POST")
+
 	return r
 }
 

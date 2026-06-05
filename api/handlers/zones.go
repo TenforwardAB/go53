@@ -6,10 +6,12 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/miekg/dns"
 	"go53/config"
+	"go53/distributed"
 	"go53/dns/dnsutils"
 	"go53/internal"
 	"go53/security"
 	"go53/zone"
+	"go53/zone/rtypes"
 	"io"
 	"log"
 	"net/http"
@@ -138,6 +140,16 @@ func AddRecordHandler(w http.ResponseWriter, r *http.Request) {
 			go dnsutils.ScheduleNotify(zoneName)
 		}
 	}
+	if err := publishDistributedUpsert(zoneName, rrtypeStr, name); err != nil {
+		http.Error(w, "record stored but distributed event failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if rrtype != dns.TypeSOA {
+		if err := publishDistributedUpsert(zoneName, "SOA", "@"); err != nil {
+			http.Error(w, "record stored but distributed SOA event failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 
 	w.WriteHeader(http.StatusCreated)
 }
@@ -203,6 +215,16 @@ func DeleteRecordHandler(w http.ResponseWriter, r *http.Request) {
 			go dnsutils.ScheduleNotify(zoneName)
 		}
 	}
+	if err := publishDistributedDelete(zoneName, rrtypeStr, name); err != nil {
+		http.Error(w, "record deleted but distributed event failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if rrtype != dns.TypeSOA {
+		if err := publishDistributedUpsert(zoneName, "SOA", "@"); err != nil {
+			http.Error(w, "record deleted but distributed SOA event failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -223,4 +245,51 @@ func GetZonesHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
+}
+
+func publishDistributedUpsert(zoneName, rrtypeStr, name string) error {
+	if distributed.Default == nil || !distributed.Enabled() {
+		return nil
+	}
+	mem := rtypes.GetMemStore()
+	if mem == nil {
+		return fmt.Errorf("memory store is not initialized")
+	}
+	recordName := canonicalRecordName(zoneName, rrtypeStr, name)
+	zoneKey, typeKey, value, ok := mem.GetRecord(zoneName, strings.ToUpper(rrtypeStr), recordName)
+	if !ok && recordName != name {
+		zoneKey, typeKey, value, ok = mem.GetRecord(zoneName, strings.ToUpper(rrtypeStr), name)
+	}
+	if !ok {
+		return fmt.Errorf("stored record not found after add")
+	}
+	return distributed.Default.PublishUpsert(zoneKey, typeKey, recordName, value)
+}
+
+func publishDistributedDelete(zoneName, rrtypeStr, name string) error {
+	if distributed.Default == nil || !distributed.Enabled() {
+		return nil
+	}
+	return distributed.Default.PublishDelete(zoneName, strings.ToUpper(rrtypeStr), canonicalRecordName(zoneName, rrtypeStr, name))
+}
+
+func canonicalRecordName(zoneName, rrtypeStr, name string) string {
+	if strings.EqualFold(rrtypeStr, "SOA") {
+		return "@"
+	}
+	if strings.TrimSpace(name) == "" {
+		return "@"
+	}
+	sanitizedZone, err := internal.SanitizeFQDN(zoneName)
+	if err == nil && dns.IsFqdn(name) {
+		fqdnName := dns.Fqdn(name)
+		if strings.EqualFold(fqdnName, sanitizedZone) {
+			return "@"
+		}
+		suffix := "." + sanitizedZone
+		if strings.HasSuffix(strings.ToLower(fqdnName), strings.ToLower(suffix)) {
+			return strings.TrimSuffix(fqdnName[:len(fqdnName)-len(suffix)], ".")
+		}
+	}
+	return name
 }

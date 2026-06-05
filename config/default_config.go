@@ -38,6 +38,15 @@ var DefaultLiveConfig = LiveConfig{
 		JitterSeconds:         3600,
 		InceptionSkewSeconds:  3600,
 	},
+
+	Distributed: DistributedConfig{
+		NodeID:          "",
+		Peers:           "",
+		PrivateKey:      "",
+		PeerPublicKeys:  map[string]string{},
+		PushTimeoutMs:   2000,
+		ResyncIntervalS: 30,
+	},
 }
 
 var DefaultBaseConfig = BaseConfig{
