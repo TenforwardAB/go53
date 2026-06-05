@@ -64,7 +64,7 @@ func (z *InMemoryZoneStore) loadFromStorage() error {
 		if dnssecPrimary {
 			z.rebuildNSECChainLocked(zone)
 			z.rebuildNSEC3ChainLocked(zone)
-			if err := z.persist(zone); err != nil {
+			if err := z.persistLocked(zone); err != nil {
 				log.Printf("failed to persist regenerated denial chains for %s: %v", zone, err)
 			}
 		}
@@ -74,11 +74,29 @@ func (z *InMemoryZoneStore) loadFromStorage() error {
 }
 
 func (z *InMemoryZoneStore) persist(zone string) error {
-	data, err := encodeZoneData(z.cache["zones"][zone])
+	z.mu.RLock()
+	data, err := z.encodeZoneDataLocked(zone)
+	z.mu.RUnlock()
 	if err != nil {
 		return err
 	}
 	return z.storage.SaveZone(zone, data)
+}
+
+func (z *InMemoryZoneStore) persistLocked(zone string) error {
+	data, err := z.encodeZoneDataLocked(zone)
+	if err != nil {
+		return err
+	}
+	return z.storage.SaveZone(zone, data)
+}
+
+func (z *InMemoryZoneStore) encodeZoneDataLocked(zone string) ([]byte, error) {
+	data, err := encodeZoneData(z.cache["zones"][zone])
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 func (z *InMemoryZoneStore) AddRecord(zone, rtype, name string, record any) error {
