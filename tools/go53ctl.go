@@ -99,6 +99,43 @@ type jwtHeader struct {
 	KeyID     string `json:"kid,omitempty"`
 }
 
+type clusterInviteOptions struct {
+	Nodes            repeatedFlag
+	APIEndpoint      string
+	IssuerNode       string
+	IssuerPrivateKey string
+	ClusterID        string
+	JoinNodeID       string
+	JoinAPIEndpoint  string
+	JoinSyncEndpoint string
+	TTL              string
+	Transport        string
+	SyncBindHost     string
+	SyncPort         string
+	PushTimeoutMs    int
+	ResyncIntervalS  int
+	UsageCount       int
+}
+
+type clusterJoinOptions struct {
+	Token        string
+	APIEndpoint  string
+	SyncEndpoint string
+	DryRun       bool
+}
+
+type inviteDiscovery struct {
+	LocalConfig map[string]any
+	LocalInfo   nodeDiscovery
+}
+
+type joinPlan struct {
+	Claims        clusterInviteClaims
+	LocalPatch    map[string]any
+	RemotePatches map[string]map[string]any
+	PublicKey     string
+}
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "cluster" {
 		handleCluster(os.Args[2:])
@@ -181,82 +218,27 @@ Examples:
 }
 
 func handleListAllZones(db *badger.DB, countOnly bool) {
-	result := make(map[string]map[string]map[string]interface{})
-
-	err := db.View(func(txn *badger.Txn) error {
-		it := txn.NewIterator(badger.DefaultIteratorOptions)
-		defer it.Close()
-		for it.Rewind(); it.Valid(); it.Next() {
-			item := it.Item()
-			log.Println(item)
-			zone := string(item.Key())
-
-			err := item.Value(func(val []byte) error {
-				// val holds JSON like: {"A": { ... }, "SOA": { ... }, …}
-				var records map[string]map[string]interface{}
-				if err := json.Unmarshal(val, &records); err != nil {
-					fmt.Printf("Skipping %s: failed to unmarshal: %v\n", zone, err)
-					return nil
-				}
-
-				result[zone] = make(map[string]map[string]interface{}, len(records))
-				for rtype, entries := range records {
-					result[zone][rtype] = entries
-				}
-				return nil
-			})
-
-			if err != nil {
-				fmt.Printf("Error reading zone %s: %v\n", zone, err)
-			}
-		}
-		return nil
-	})
-
+	result, err := loadAllZones(db)
 	if err != nil {
 		log.Fatalf("DB read failed: %v", err)
 	}
-
 	if countOnly {
-		for zone, types := range result {
-			fmt.Printf("%s:\n", zone)
-			for rtype, count := range types {
-				fmt.Printf("  %s: %d\n", rtype, count)
-			}
-		}
-	} else {
-		printIndentedJSON(result)
+		printAllZoneCounts(result)
+		return
 	}
+	printIndentedJSON(result)
 }
 
 func handleListZone(db *badger.DB, zone string, countOnly bool) {
-	err := db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get([]byte(zone))
-		if err != nil {
-			return fmt.Errorf("zone '%s' not found", zone)
-		}
-
-		return item.Value(func(val []byte) error {
-			var records map[string]map[string]interface{}
-			if err := json.Unmarshal(val, &records); err != nil {
-				return fmt.Errorf("unmarshal error: %v", err)
-			}
-
-			if countOnly {
-				fmt.Printf("%s:\n", zone)
-				for rtype, entries := range records {
-					fmt.Printf("  %s: %d\n", rtype, len(entries))
-				}
-			} else {
-				printIndentedJSON(records)
-			}
-			return nil
-		})
-	})
-
+	records, err := loadZoneRecords(db, zone)
 	if err != nil {
 		log.Fatalf("Error: %v", err)
 	}
+	if countOnly {
+		printZoneCounts(zone, records)
+		return
+	}
+	printIndentedJSON(records)
 }
 
 func dumpAll(db *badger.DB) {
@@ -267,17 +249,7 @@ func dumpAll(db *badger.DB) {
 		for it.Rewind(); it.Valid(); it.Next() {
 			item := it.Item()
 			zone := string(item.Key())
-			err := item.Value(func(val []byte) error {
-				fmt.Printf("Zone: %s\n", zone)
-				var raw json.RawMessage
-				if err := json.Unmarshal(val, &raw); err != nil {
-					fmt.Printf("  [Unparseable value]\n\n")
-					return nil
-				}
-				printIndentedZoneValue(raw)
-				return nil
-			})
-			if err != nil {
+			if err := dumpZoneItem(zone, item); err != nil {
 				fmt.Printf("Error reading zone %s: %v\n", zone, err)
 			}
 		}
@@ -287,6 +259,78 @@ func dumpAll(db *badger.DB) {
 	if err != nil {
 		log.Fatalf("DB iteration failed: %v", err)
 	}
+}
+
+func loadAllZones(db *badger.DB) (map[string]map[string]map[string]interface{}, error) {
+	result := make(map[string]map[string]map[string]interface{})
+	err := db.View(func(txn *badger.Txn) error {
+		it := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer it.Close()
+		for it.Rewind(); it.Valid(); it.Next() {
+			item := it.Item()
+			log.Println(item)
+			readZoneItem(result, string(item.Key()), item)
+		}
+		return nil
+	})
+	return result, err
+}
+
+func readZoneItem(result map[string]map[string]map[string]interface{}, zone string, item *badger.Item) {
+	if err := item.Value(func(val []byte) error {
+		var records map[string]map[string]interface{}
+		if err := json.Unmarshal(val, &records); err != nil {
+			fmt.Printf("Skipping %s: failed to unmarshal: %v\n", zone, err)
+			return nil
+		}
+		result[zone] = records
+		return nil
+	}); err != nil {
+		fmt.Printf("Error reading zone %s: %v\n", zone, err)
+	}
+}
+
+func loadZoneRecords(db *badger.DB, zone string) (map[string]map[string]interface{}, error) {
+	var records map[string]map[string]interface{}
+	err := db.View(func(txn *badger.Txn) error {
+		item, err := txn.Get([]byte(zone))
+		if err != nil {
+			return fmt.Errorf("zone '%s' not found", zone)
+		}
+		return item.Value(func(val []byte) error {
+			if err := json.Unmarshal(val, &records); err != nil {
+				return fmt.Errorf("unmarshal error: %v", err)
+			}
+			return nil
+		})
+	})
+	return records, err
+}
+
+func printAllZoneCounts(zones map[string]map[string]map[string]interface{}) {
+	for zone, records := range zones {
+		printZoneCounts(zone, records)
+	}
+}
+
+func printZoneCounts(zone string, records map[string]map[string]interface{}) {
+	fmt.Printf("%s:\n", zone)
+	for rtype, entries := range records {
+		fmt.Printf("  %s: %d\n", rtype, len(entries))
+	}
+}
+
+func dumpZoneItem(zone string, item *badger.Item) error {
+	return item.Value(func(val []byte) error {
+		fmt.Printf("Zone: %s\n", zone)
+		var raw json.RawMessage
+		if err := json.Unmarshal(val, &raw); err != nil {
+			fmt.Printf("  [Unparseable value]\n\n")
+			return nil
+		}
+		printIndentedZoneValue(raw)
+		return nil
+	})
 }
 
 func handleCluster(args []string) {
@@ -335,106 +379,152 @@ cluster join flags:
 }
 
 func handleClusterInvite(args []string) {
-	fs := flag.NewFlagSet("cluster invite", flag.ExitOnError)
-	var nodes repeatedFlag
-	var apiEndpoint, issuerNode, issuerPrivateKey, clusterID, joinNodeID, joinAPIEndpoint, joinSyncEndpoint string
-	var ttl, transport, syncBindHost, syncPort string
-	var pushTimeoutMs, resyncIntervalS, usageCount int
-	fs.StringVar(&apiEndpoint, "api", "http://127.0.0.1:8053", "Local issuer API endpoint")
-	fs.StringVar(&issuerNode, "issuer-node", "", "Existing node_id that signs the invite")
-	fs.StringVar(&issuerPrivateKey, "issuer-private-key", "", "Base64 Ed25519 private key for issuer node")
-	fs.StringVar(&clusterID, "cluster-id", "", "Stable cluster identifier")
-	fs.StringVar(&joinNodeID, "join-node-id", "", "Node ID for the new node")
-	fs.StringVar(&joinAPIEndpoint, "join-api-endpoint", "", "API endpoint where existing nodes can reach the new node")
-	fs.StringVar(&joinSyncEndpoint, "join-sync-endpoint", "", "Distributed sync endpoint for the new node")
-	fs.Var(&nodes, "node", "Existing node API endpoint. Repeat for every current node.")
-	fs.StringVar(&ttl, "ttl", "10m", "Invite lifetime")
-	fs.IntVar(&usageCount, "usage-count", 1, "Number of allowed uses to record for this invite")
-	fs.StringVar(&transport, "transport", "tls", "Distributed transport")
-	fs.StringVar(&syncBindHost, "sync-bind-host", "0.0.0.0", "Local bind host to configure on joining node")
-	fs.StringVar(&syncPort, "sync-port", "", "Local sync port to configure on joining node")
-	fs.IntVar(&pushTimeoutMs, "push-timeout-ms", 2000, "Distributed push timeout")
-	fs.IntVar(&resyncIntervalS, "resync-interval-s", 30, "Distributed resync interval")
-	_ = fs.Parse(args)
+	opts := parseClusterInviteOptions(args)
+	discovery := discoverInviteDefaults(opts.APIEndpoint)
+	opts.applyDefaults(discovery)
+	if err := opts.validate(); err != nil {
+		log.Fatal(err)
+	}
+	claims, privateKey, err := buildInviteClaims(opts, discovery.LocalConfig)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := saveInvite(opts.APIEndpoint, claims, privateKey); err != nil {
+		log.Fatal(err)
+	}
+}
 
+func parseClusterInviteOptions(args []string) clusterInviteOptions {
+	fs := flag.NewFlagSet("cluster invite", flag.ExitOnError)
+	opts := clusterInviteOptions{}
+	fs.StringVar(&opts.APIEndpoint, "api", "http://127.0.0.1:8053", "Local issuer API endpoint")
+	fs.StringVar(&opts.IssuerNode, "issuer-node", "", "Existing node_id that signs the invite")
+	fs.StringVar(&opts.IssuerPrivateKey, "issuer-private-key", "", "Base64 Ed25519 private key for issuer node")
+	fs.StringVar(&opts.ClusterID, "cluster-id", "", "Stable cluster identifier")
+	fs.StringVar(&opts.JoinNodeID, "join-node-id", "", "Node ID for the new node")
+	fs.StringVar(&opts.JoinAPIEndpoint, "join-api-endpoint", "", "API endpoint where existing nodes can reach the new node")
+	fs.StringVar(&opts.JoinSyncEndpoint, "join-sync-endpoint", "", "Distributed sync endpoint for the new node")
+	fs.Var(&opts.Nodes, "node", "Existing node API endpoint. Repeat for every current node.")
+	fs.StringVar(&opts.TTL, "ttl", "10m", "Invite lifetime")
+	fs.IntVar(&opts.UsageCount, "usage-count", 1, "Number of allowed uses to record for this invite")
+	fs.StringVar(&opts.Transport, "transport", "tls", "Distributed transport")
+	fs.StringVar(&opts.SyncBindHost, "sync-bind-host", "0.0.0.0", "Local bind host to configure on joining node")
+	fs.StringVar(&opts.SyncPort, "sync-port", "", "Local sync port to configure on joining node")
+	fs.IntVar(&opts.PushTimeoutMs, "push-timeout-ms", 2000, "Distributed push timeout")
+	fs.IntVar(&opts.ResyncIntervalS, "resync-interval-s", 30, "Distributed resync interval")
+	_ = fs.Parse(args)
+	return opts
+}
+
+func discoverInviteDefaults(apiEndpoint string) inviteDiscovery {
 	localConfig, _ := fetchLiveConfig(apiEndpoint)
 	localInfo, _ := fetchNodeDiscovery(apiEndpoint)
-	if issuerNode == "" {
-		issuerNode = localInfo.NodeID
+	return inviteDiscovery{LocalConfig: localConfig, LocalInfo: localInfo}
+}
+
+func (opts *clusterInviteOptions) applyDefaults(discovery inviteDiscovery) {
+	if opts.IssuerNode == "" {
+		opts.IssuerNode = discovery.LocalInfo.NodeID
 	}
-	if issuerPrivateKey == "" {
-		issuerPrivateKey = stringFromPath(localConfig, "distributed", "private_key")
+	if opts.IssuerPrivateKey == "" {
+		opts.IssuerPrivateKey = stringFromPath(discovery.LocalConfig, "distributed", "private_key")
 	}
-	if clusterID == "" {
-		clusterID = issuerNode
+	if opts.ClusterID == "" {
+		opts.ClusterID = opts.IssuerNode
 	}
-	if transport == "" {
-		transport = stringFromPath(localConfig, "distributed", "transport")
+	if opts.Transport == "" {
+		opts.Transport = stringFromPath(discovery.LocalConfig, "distributed", "transport")
 	}
-	if syncBindHost == "" {
-		syncBindHost = stringFromPath(localConfig, "distributed", "sync_bind_host")
+	if opts.SyncBindHost == "" {
+		opts.SyncBindHost = stringFromPath(discovery.LocalConfig, "distributed", "sync_bind_host")
 	}
-	if pushTimeoutMs == 0 {
-		pushTimeoutMs = intFromPath(localConfig, "distributed", "push_timeout_ms")
+	if opts.PushTimeoutMs == 0 {
+		opts.PushTimeoutMs = intFromPath(discovery.LocalConfig, "distributed", "push_timeout_ms")
 	}
-	if resyncIntervalS == 0 {
-		resyncIntervalS = intFromPath(localConfig, "distributed", "resync_interval_s")
+	if opts.ResyncIntervalS == 0 {
+		opts.ResyncIntervalS = intFromPath(discovery.LocalConfig, "distributed", "resync_interval_s")
 	}
-	if len(nodes) == 0 && localInfo.NodeID != "" {
-		nodes = append(nodes, strings.TrimRight(apiEndpoint, "/"))
-		for _, peerAPI := range peerAPIEndpointsFromConfig(localConfig) {
-			nodes = append(nodes, peerAPI)
-		}
+	if len(opts.Nodes) == 0 && discovery.LocalInfo.NodeID != "" {
+		opts.Nodes = append(opts.Nodes, defaultInviteNodes(opts.APIEndpoint, discovery.LocalConfig)...)
 	}
-	if usageCount <= 0 {
-		log.Fatalf("--usage-count must be greater than zero")
+	if opts.SyncPort == "" {
+		opts.SyncPort = syncPortFromEndpoint(opts.JoinSyncEndpoint)
 	}
-	if issuerNode == "" || issuerPrivateKey == "" || clusterID == "" || len(nodes) == 0 {
-		log.Fatalf("missing required invite data; ensure local node is distributed or pass explicit flags")
+}
+
+func defaultInviteNodes(apiEndpoint string, localConfig map[string]any) []string {
+	nodes := []string{strings.TrimRight(apiEndpoint, "/")}
+	return append(nodes, peerAPIEndpointsFromConfig(localConfig)...)
+}
+
+func (opts clusterInviteOptions) validate() error {
+	if opts.UsageCount <= 0 {
+		return errors.New("--usage-count must be greater than zero")
 	}
-	duration, err := time.ParseDuration(ttl)
+	if opts.IssuerNode == "" || opts.IssuerPrivateKey == "" || opts.ClusterID == "" || len(opts.Nodes) == 0 {
+		return errors.New("missing required invite data; ensure local node is distributed or pass explicit flags")
+	}
+	return nil
+}
+
+func buildInviteClaims(opts clusterInviteOptions, localConfig map[string]any) (clusterInviteClaims, ed25519.PrivateKey, error) {
+	duration, err := time.ParseDuration(opts.TTL)
 	if err != nil {
-		log.Fatalf("invalid --ttl: %v", err)
+		return clusterInviteClaims{}, nil, fmt.Errorf("invalid --ttl: %w", err)
 	}
-	if syncPort == "" {
-		syncPort = syncPortFromEndpoint(joinSyncEndpoint)
-	}
-	privateKey, err := decodeEd25519PrivateKey(issuerPrivateKey)
+	privateKey, err := decodeEd25519PrivateKey(opts.IssuerPrivateKey)
 	if err != nil {
-		log.Fatal(err)
+		return clusterInviteClaims{}, nil, err
 	}
 	issuerPublicKey := base64.StdEncoding.EncodeToString(privateKey.Public().(ed25519.PublicKey))
-	now := time.Now().Unix()
+	claims, err := newInviteClaims(opts, issuerPublicKey, duration)
+	if err != nil {
+		return clusterInviteClaims{}, nil, err
+	}
+	if err := populateInviteNodes(&claims, opts.Nodes, localConfig); err != nil {
+		return clusterInviteClaims{}, nil, err
+	}
+	if err := validateInviteClaims(claims, issuerPublicKey); err != nil {
+		return clusterInviteClaims{}, nil, err
+	}
+	return claims, privateKey, nil
+}
+
+func newInviteClaims(opts clusterInviteOptions, issuerPublicKey string, duration time.Duration) (clusterInviteClaims, error) {
 	tokenID, err := newTokenID()
 	if err != nil {
-		log.Fatal(err)
+		return clusterInviteClaims{}, err
 	}
-	claims := clusterInviteClaims{
-		Issuer:           issuerNode,
+	now := time.Now().Unix()
+	return clusterInviteClaims{
+		Issuer:           opts.IssuerNode,
 		Audience:         jwtAudienceClusterJoin,
 		ExpiresAt:        time.Now().Add(duration).Unix(),
 		IssuedAt:         now,
 		TokenID:          tokenID,
-		ClusterID:        clusterID,
-		JoinNodeID:       joinNodeID,
-		JoinAPIEndpoint:  strings.TrimRight(joinAPIEndpoint, "/"),
-		JoinSyncEndpoint: joinSyncEndpoint,
-		Transport:        strings.ToLower(strings.TrimSpace(transport)),
-		SyncBindHost:     syncBindHost,
-		SyncPort:         syncPort,
-		PushTimeoutMs:    pushTimeoutMs,
-		ResyncIntervalS:  resyncIntervalS,
-		UsageCount:       usageCount,
+		ClusterID:        opts.ClusterID,
+		JoinNodeID:       opts.JoinNodeID,
+		JoinAPIEndpoint:  strings.TrimRight(opts.JoinAPIEndpoint, "/"),
+		JoinSyncEndpoint: opts.JoinSyncEndpoint,
+		Transport:        strings.ToLower(strings.TrimSpace(opts.Transport)),
+		SyncBindHost:     opts.SyncBindHost,
+		SyncPort:         opts.SyncPort,
+		PushTimeoutMs:    opts.PushTimeoutMs,
+		ResyncIntervalS:  opts.ResyncIntervalS,
+		UsageCount:       opts.UsageCount,
 		IssuerPublicKey:  issuerPublicKey,
 		Nodes:            map[string]clusterNode{},
-	}
+	}, nil
+}
+
+func populateInviteNodes(claims *clusterInviteClaims, nodes []string, localConfig map[string]any) error {
 	for _, endpoint := range nodes {
 		info, err := fetchNodeDiscovery(endpoint)
 		if err != nil {
-			log.Fatalf("fetch %s: %v", endpoint, err)
+			return fmt.Errorf("fetch %s: %w", endpoint, err)
 		}
 		if info.NodeID == "" || info.PublicKey == "" || info.SyncEndpoint == "" {
-			log.Fatalf("node %s discovery is missing node_id, public_key, or sync_endpoint", endpoint)
+			return fmt.Errorf("node %s discovery is missing node_id, public_key, or sync_endpoint", endpoint)
 		}
 		claims.Nodes[info.NodeID] = clusterNode{
 			APIEndpoint:     strings.TrimRight(endpoint, "/"),
@@ -444,23 +534,43 @@ func handleClusterInvite(args []string) {
 			TLSPublicKeyPin: info.TLSPublicKeyPin,
 		}
 	}
+	addConfiguredPeerKeys(claims, localConfig)
+	return nil
+}
+
+func addConfiguredPeerKeys(claims *clusterInviteClaims, localConfig map[string]any) {
 	for nodeID, publicKey := range stringMapFromPath(localConfig, "distributed", "peer_public_keys") {
 		if _, ok := claims.Nodes[nodeID]; ok {
 			continue
 		}
 		claims.Nodes[nodeID] = clusterNode{PublicKey: publicKey}
 	}
-	if _, ok := claims.Nodes[issuerNode]; !ok {
-		log.Fatalf("issuer-node %q must be included in --node discovery endpoints", issuerNode)
+}
+
+func validateInviteClaims(claims clusterInviteClaims, issuerPublicKey string) error {
+	if _, ok := claims.Nodes[claims.Issuer]; !ok {
+		return fmt.Errorf("issuer-node %q must be included in --node discovery endpoints", claims.Issuer)
 	}
-	if claims.Nodes[issuerNode].PublicKey != issuerPublicKey {
-		log.Fatalf("issuer private key does not match public key advertised by %q", issuerNode)
+	if claims.Nodes[claims.Issuer].PublicKey != issuerPublicKey {
+		return fmt.Errorf("issuer private key does not match public key advertised by %q", claims.Issuer)
 	}
+	return nil
+}
+
+func saveInvite(apiEndpoint string, claims clusterInviteClaims, privateKey ed25519.PrivateKey) error {
 	token, err := signInviteJWT(claims, privateKey)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-	record := distributedInviteRecord{
+	if err := saveDistributedInviteAPI(apiEndpoint, inviteRecord(claims, token)); err != nil {
+		return fmt.Errorf("save distributed invite via API: %w", err)
+	}
+	fmt.Println(token)
+	return nil
+}
+
+func inviteRecord(claims clusterInviteClaims, token string) distributedInviteRecord {
+	return distributedInviteRecord{
 		TokenID:    claims.TokenID,
 		ClusterID:  claims.ClusterID,
 		JoinNodeID: claims.JoinNodeID,
@@ -472,66 +582,94 @@ func handleClusterInvite(args []string) {
 		ExpiresAt:  claims.ExpiresAt,
 		CreatedAt:  time.Now().Unix(),
 	}
-	if err := saveDistributedInviteAPI(apiEndpoint, record); err != nil {
-		log.Fatalf("save distributed invite via API: %v", err)
-	}
-	fmt.Println(token)
 }
 
 func handleClusterJoin(args []string) {
+	opts := parseClusterJoinOptions(args)
+	claims, err := verifyInviteJWT(opts.Token)
+	if err != nil {
+		log.Fatal(err)
+	}
+	opts.applyDefaults(claims)
+	plan, err := buildJoinPlan(opts, claims)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if opts.DryRun {
+		printJoinPlan(plan)
+		return
+	}
+	if err := applyJoinPlan(opts.APIEndpoint, plan); err != nil {
+		log.Fatal(err)
+	}
+	printJoinOutput(plan)
+}
+
+func parseClusterJoinOptions(args []string) clusterJoinOptions {
 	fs := flag.NewFlagSet("cluster join", flag.ExitOnError)
-	var token, apiEndpoint, syncEndpoint string
-	var dryRun bool
-	fs.StringVar(&token, "token", "", "JWT invite token")
-	fs.StringVar(&apiEndpoint, "api", "", "Local node API endpoint")
-	fs.StringVar(&syncEndpoint, "sync-endpoint", "", "Advertised sync endpoint for this joining node")
-	fs.BoolVar(&dryRun, "dry-run", false, "Print config and remote patches without applying them")
+	opts := clusterJoinOptions{}
+	fs.StringVar(&opts.Token, "token", "", "JWT invite token")
+	fs.StringVar(&opts.APIEndpoint, "api", "", "Local node API endpoint")
+	fs.StringVar(&opts.SyncEndpoint, "sync-endpoint", "", "Advertised sync endpoint for this joining node")
+	fs.BoolVar(&opts.DryRun, "dry-run", false, "Print config and remote patches without applying them")
 	_ = fs.Parse(args)
-	if token == "" {
+	if opts.Token == "" {
 		fs.Usage()
 		os.Exit(1)
 	}
-	claims, err := verifyInviteJWT(token)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if apiEndpoint == "" {
-		apiEndpoint = claims.JoinAPIEndpoint
-	}
-	if apiEndpoint == "" {
-		apiEndpoint = "http://127.0.0.1:8053"
-	}
+	return opts
+}
 
-	localConfig, _ := fetchLiveConfig(apiEndpoint)
-	localInfo, _ := fetchNodeDiscovery(apiEndpoint)
-	claims = completeJoinClaims(claims, apiEndpoint, syncEndpoint, localConfig, localInfo)
+func (opts *clusterJoinOptions) applyDefaults(claims clusterInviteClaims) {
+	if opts.APIEndpoint == "" {
+		opts.APIEndpoint = claims.JoinAPIEndpoint
+	}
+	if opts.APIEndpoint == "" {
+		opts.APIEndpoint = "http://127.0.0.1:8053"
+	}
+}
+
+func buildJoinPlan(opts clusterJoinOptions, claims clusterInviteClaims) (joinPlan, error) {
+	localConfig, _ := fetchLiveConfig(opts.APIEndpoint)
+	localInfo, _ := fetchNodeDiscovery(opts.APIEndpoint)
+	claims = completeJoinClaims(claims, opts.APIEndpoint, opts.SyncEndpoint, localConfig, localInfo)
 	privateKey, publicKey, err := joinKeyPair(localConfig)
 	if err != nil {
-		log.Fatal(err)
+		return joinPlan{}, err
 	}
-	localPatch := joinLocalConfig(claims, privateKey)
-	remotePatches := joinRemotePatches(claims, publicKey)
+	return joinPlan{
+		Claims:        claims,
+		LocalPatch:    joinLocalConfig(claims, privateKey),
+		RemotePatches: joinRemotePatches(claims, publicKey),
+		PublicKey:     publicKey,
+	}, nil
+}
 
-	if dryRun {
-		printJSON("local config patch", localPatch)
-		for endpoint, patch := range remotePatches {
-			printJSON("remote config patch "+endpoint, patch)
-		}
-		return
+func printJoinPlan(plan joinPlan) {
+	printJSON("local config patch", plan.LocalPatch)
+	for endpoint, patch := range plan.RemotePatches {
+		printJSON("remote config patch "+endpoint, patch)
 	}
-	if err := consumeDistributedInvite(claims); err != nil {
-		log.Fatalf("consume invite: %v", err)
+}
+
+func applyJoinPlan(apiEndpoint string, plan joinPlan) error {
+	if err := consumeDistributedInvite(plan.Claims); err != nil {
+		return fmt.Errorf("consume invite: %w", err)
 	}
-	if err := patchConfig(apiEndpoint, localPatch); err != nil {
-		log.Fatalf("patch local node %s: %v", apiEndpoint, err)
+	if err := patchConfig(apiEndpoint, plan.LocalPatch); err != nil {
+		return fmt.Errorf("patch local node %s: %w", apiEndpoint, err)
 	}
-	for endpoint, patch := range remotePatches {
+	for endpoint, patch := range plan.RemotePatches {
 		if err := patchConfig(endpoint, patch); err != nil {
-			log.Fatalf("patch existing node %s: %v", endpoint, err)
+			return fmt.Errorf("patch existing node %s: %w", endpoint, err)
 		}
 	}
-	fmt.Printf("joined cluster %s as %s\n", claims.ClusterID, claims.JoinNodeID)
-	fmt.Printf("local public_key: %s\n", publicKey)
+	return nil
+}
+
+func printJoinOutput(plan joinPlan) {
+	fmt.Printf("joined cluster %s as %s\n", plan.Claims.ClusterID, plan.Claims.JoinNodeID)
+	fmt.Printf("local public_key: %s\n", plan.PublicKey)
 }
 
 func fetchNodeDiscovery(apiEndpoint string) (nodeDiscovery, error) {
@@ -631,43 +769,41 @@ func completeJoinClaims(claims clusterInviteClaims, apiEndpoint, syncEndpoint st
 		claims.JoinSyncEndpoint = strings.TrimSpace(syncEndpoint)
 		claims.SyncPort = syncPortFromEndpoint(claims.JoinSyncEndpoint)
 	}
-	if claims.JoinNodeID == "" {
-		claims.JoinNodeID = strings.TrimSpace(localInfo.NodeID)
-	}
-	if claims.JoinNodeID == "" {
-		claims.JoinNodeID = stringFromPath(localConfig, "distributed", "node_id")
-	}
-	if claims.JoinNodeID == "" {
-		claims.JoinNodeID = "node-" + time.Now().UTC().Format("20060102150405")
-	}
-	if claims.JoinAPIEndpoint == "" {
-		claims.JoinAPIEndpoint = strings.TrimRight(apiEndpoint, "/")
-	}
-	if claims.JoinSyncEndpoint == "" {
-		claims.JoinSyncEndpoint = strings.TrimSpace(syncEndpoint)
-	}
-	if claims.JoinSyncEndpoint == "" {
-		claims.JoinSyncEndpoint = strings.TrimSpace(localInfo.SyncEndpoint)
-	}
-	if claims.JoinSyncEndpoint == "" {
-		claims.JoinSyncEndpoint = "tls://127.0.0.1" + syncPortOrDefault(claims.SyncPort)
-	}
-	if claims.SyncPort == "" {
-		claims.SyncPort = syncPortFromEndpoint(claims.JoinSyncEndpoint)
-	}
-	if claims.Transport == "" {
-		claims.Transport = "tls"
-	}
-	if claims.SyncBindHost == "" {
-		claims.SyncBindHost = "0.0.0.0"
-	}
-	if claims.PushTimeoutMs <= 0 {
-		claims.PushTimeoutMs = 2000
-	}
-	if claims.ResyncIntervalS <= 0 {
-		claims.ResyncIntervalS = 30
-	}
+	claims.JoinNodeID = firstNonEmpty(
+		claims.JoinNodeID,
+		strings.TrimSpace(localInfo.NodeID),
+		stringFromPath(localConfig, "distributed", "node_id"),
+		"node-"+time.Now().UTC().Format("20060102150405"),
+	)
+	claims.JoinAPIEndpoint = firstNonEmpty(claims.JoinAPIEndpoint, strings.TrimRight(apiEndpoint, "/"))
+	claims.JoinSyncEndpoint = firstNonEmpty(
+		claims.JoinSyncEndpoint,
+		strings.TrimSpace(syncEndpoint),
+		strings.TrimSpace(localInfo.SyncEndpoint),
+		"tls://127.0.0.1"+syncPortOrDefault(claims.SyncPort),
+	)
+	claims.SyncPort = firstNonEmpty(claims.SyncPort, syncPortFromEndpoint(claims.JoinSyncEndpoint))
+	claims.Transport = firstNonEmpty(claims.Transport, "tls")
+	claims.SyncBindHost = firstNonEmpty(claims.SyncBindHost, "0.0.0.0")
+	claims.PushTimeoutMs = positiveOrDefault(claims.PushTimeoutMs, 2000)
+	claims.ResyncIntervalS = positiveOrDefault(claims.ResyncIntervalS, 30)
 	return claims
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func positiveOrDefault(value, fallback int) int {
+	if value > 0 {
+		return value
+	}
+	return fallback
 }
 
 func joinKeyPair(localConfig map[string]any) (privateKeyB64 string, publicKeyB64 string, err error) {
@@ -710,6 +846,17 @@ func joinLocalConfig(claims clusterInviteClaims, privateKey string) map[string]a
 }
 
 func joinRemotePatches(claims clusterInviteClaims, joinPublicKey string) map[string]map[string]any {
+	allNodes := joinAllNodes(claims, joinPublicKey)
+	out := map[string]map[string]any{}
+	for nodeID, target := range claims.Nodes {
+		if target.APIEndpoint != "" {
+			out[target.APIEndpoint] = remotePatchForNode(nodeID, allNodes)
+		}
+	}
+	return out
+}
+
+func joinAllNodes(claims clusterInviteClaims, joinPublicKey string) map[string]clusterNode {
 	allNodes := make(map[string]clusterNode, len(claims.Nodes)+1)
 	for nodeID, node := range claims.Nodes {
 		allNodes[nodeID] = node
@@ -719,31 +866,33 @@ func joinRemotePatches(claims clusterInviteClaims, joinPublicKey string) map[str
 		SyncEndpoint: claims.JoinSyncEndpoint,
 		PublicKey:    joinPublicKey,
 	}
-	out := map[string]map[string]any{}
-	for nodeID, target := range claims.Nodes {
-		if target.APIEndpoint == "" {
+	return allNodes
+}
+
+func remotePatchForNode(nodeID string, allNodes map[string]clusterNode) map[string]any {
+	peers, peerKeys := remotePeersForNode(nodeID, allNodes)
+	return map[string]any{
+		"distributed": map[string]any{
+			"peers":            strings.Join(peers, ","),
+			"peer_public_keys": peerKeys,
+		},
+	}
+}
+
+func remotePeersForNode(nodeID string, allNodes map[string]clusterNode) ([]string, map[string]string) {
+	peers := make([]string, 0, len(allNodes)-1)
+	peerKeys := map[string]string{}
+	for peerID, peer := range allNodes {
+		if peerID == nodeID {
 			continue
 		}
-		peers := make([]string, 0, len(allNodes)-1)
-		peerKeys := map[string]string{}
-		for peerID, peer := range allNodes {
-			if peerID == nodeID {
-				continue
-			}
-			if peer.SyncEndpoint != "" {
-				peers = append(peers, peer.SyncEndpoint)
-			}
-			peerKeys[peerID] = peer.PublicKey
+		if peer.SyncEndpoint != "" {
+			peers = append(peers, peer.SyncEndpoint)
 		}
-		sortStrings(peers)
-		out[target.APIEndpoint] = map[string]any{
-			"distributed": map[string]any{
-				"peers":            strings.Join(peers, ","),
-				"peer_public_keys": peerKeys,
-			},
-		}
+		peerKeys[peerID] = peer.PublicKey
 	}
-	return out
+	sortStrings(peers)
+	return peers, peerKeys
 }
 
 func patchConfig(apiEndpoint string, patch map[string]any) error {
