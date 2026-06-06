@@ -287,6 +287,12 @@ func TestTCPAddressAndTLSConfigHelpers(t *testing.T) {
 	if clientCfg.ServerName != "node-local" || len(clientCfg.Certificates) != 1 {
 		t.Fatalf("client TLS config incomplete: %#v", clientCfg)
 	}
+	if clientCfg.InsecureSkipVerify {
+		t.Fatalf("client TLS config must not skip certificate verification")
+	}
+	if clientCfg.RootCAs == nil || clientCfg.VerifyConnection == nil {
+		t.Fatalf("client TLS config must pin peer public keys")
+	}
 	if err := verifyPeerCertificate(nil, nil); err == nil {
 		t.Fatalf("verifyPeerCertificate accepted empty cert list")
 	}

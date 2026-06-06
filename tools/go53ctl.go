@@ -119,40 +119,11 @@ func main() {
 	flag.Parse()
 
 	if len(os.Args) == 1 {
-		fmt.Println(`Usage: go53ctl [COMMAND] [OPTIONS]
-
-Commands:
-  cluster invite       Create a JWT invite token for a new distributed node
-  cluster join         Join/configure a distributed node from a JWT invite token
-
-Zone storage tools:
-  --db PATH            Path to BadgerDB (default: ../data/go53)
-  --list-all-zones     List all zones with their record rtypes and counts
-  --list-zone ZONE     List a specific zone's records
-  --count-only         Only show record counts instead of full record data
-
-Examples:
-  go53ctl cluster invite
-  go53ctl cluster join --token TOKEN --api http://10.0.0.11:8053 --sync-endpoint tls://10.0.0.11:53530
-  go53ctl --list-all-zones --count-only`)
+		printMainUsage(false)
 		os.Exit(0)
 	}
 	if os.Args[1] == "help" || os.Args[1] == "--help" || os.Args[1] == "-h" {
-		fmt.Println(`Usage: go53ctl [COMMAND] [OPTIONS]
-
-Commands:
-  cluster invite       Create a JWT invite token for a new distributed node
-  cluster join         Join/configure a distributed node from a JWT invite token
-
-Cluster examples:
-  go53ctl cluster invite
-  go53ctl cluster join --token TOKEN
-
-Zone storage tools:
-  go53ctl --list-all-zones --count-only
-  go53ctl --list-zone go53.test
-  go53ctl --list-zone go53.test --count-only
-`)
+		printMainUsage(true)
 		os.Exit(0)
 	}
 
@@ -176,6 +147,37 @@ Zone storage tools:
 	default:
 		dumpAll(db)
 	}
+}
+
+func printMainUsage(help bool) {
+	fmt.Println(`Usage: go53ctl [COMMAND] [OPTIONS]
+
+Commands:
+  cluster invite       Create a JWT invite token for a new distributed node
+  cluster join         Join/configure a distributed node from a JWT invite token`)
+	if help {
+		fmt.Println(`
+Cluster examples:
+  go53ctl cluster invite
+  go53ctl cluster join --token TOKEN
+
+Zone storage tools:
+  go53ctl --list-all-zones --count-only
+  go53ctl --list-zone go53.test
+  go53ctl --list-zone go53.test --count-only`)
+		return
+	}
+	fmt.Println(`
+Zone storage tools:
+  --db PATH            Path to BadgerDB (default: ../data/go53)
+  --list-all-zones     List all zones with their record rtypes and counts
+  --list-zone ZONE     List a specific zone's records
+  --count-only         Only show record counts instead of full record data
+
+Examples:
+  go53ctl cluster invite
+  go53ctl cluster join --token TOKEN --api http://10.0.0.11:8053 --sync-endpoint tls://10.0.0.11:53530
+  go53ctl --list-all-zones --count-only`)
 }
 
 func handleListAllZones(db *badger.DB, countOnly bool) {
@@ -223,8 +225,7 @@ func handleListAllZones(db *badger.DB, countOnly bool) {
 			}
 		}
 	} else {
-		out, _ := json.MarshalIndent(result, "", "  ")
-		fmt.Println(string(out))
+		printIndentedJSON(result)
 	}
 }
 
@@ -247,8 +248,7 @@ func handleListZone(db *badger.DB, zone string, countOnly bool) {
 					fmt.Printf("  %s: %d\n", rtype, len(entries))
 				}
 			} else {
-				out, _ := json.MarshalIndent(records, "", "  ")
-				fmt.Println(string(out))
+				printIndentedJSON(records)
 			}
 			return nil
 		})
@@ -274,8 +274,7 @@ func dumpAll(db *badger.DB) {
 					fmt.Printf("  [Unparseable value]\n\n")
 					return nil
 				}
-				out, _ := json.MarshalIndent(raw, "  ", "  ")
-				fmt.Printf("  %s\n\n", out)
+				printIndentedZoneValue(raw)
 				return nil
 			})
 			if err != nil {
@@ -537,62 +536,52 @@ func handleClusterJoin(args []string) {
 
 func fetchNodeDiscovery(apiEndpoint string) (nodeDiscovery, error) {
 	url := strings.TrimRight(apiEndpoint, "/") + "/.well-known/go53-node.json"
-	resp, err := http.Get(url)
-	if err != nil {
-		return nodeDiscovery{}, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nodeDiscovery{}, fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(data)))
-	}
 	var info nodeDiscovery
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+	if err := getJSON(url, &info); err != nil {
 		return nodeDiscovery{}, err
 	}
 	return info, nil
 }
 
 func fetchLiveConfig(apiEndpoint string) (map[string]any, error) {
-	resp, err := http.Get(strings.TrimRight(apiEndpoint, "/") + "/api/config")
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(data)))
-	}
 	var cfg map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
+	if err := getJSON(strings.TrimRight(apiEndpoint, "/")+"/api/config", &cfg); err != nil {
 		return nil, err
 	}
 	return cfg, nil
 }
 
-func stringFromPath(root map[string]any, keys ...string) string {
+func getJSON(url string, out any) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if err := responseError(resp); err != nil {
+		return err
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func valueFromPath(root map[string]any, keys ...string) any {
 	var current any = root
 	for _, key := range keys {
 		m, ok := current.(map[string]any)
 		if !ok {
-			return ""
+			return nil
 		}
 		current = m[key]
 	}
-	value, _ := current.(string)
+	return current
+}
+
+func stringFromPath(root map[string]any, keys ...string) string {
+	value, _ := valueFromPath(root, keys...).(string)
 	return value
 }
 
 func intFromPath(root map[string]any, keys ...string) int {
-	var current any = root
-	for _, key := range keys {
-		m, ok := current.(map[string]any)
-		if !ok {
-			return 0
-		}
-		current = m[key]
-	}
-	switch v := current.(type) {
+	switch v := valueFromPath(root, keys...).(type) {
 	case float64:
 		return int(v)
 	case int:
@@ -603,16 +592,8 @@ func intFromPath(root map[string]any, keys ...string) int {
 }
 
 func stringMapFromPath(root map[string]any, keys ...string) map[string]string {
-	var current any = root
-	for _, key := range keys {
-		m, ok := current.(map[string]any)
-		if !ok {
-			return map[string]string{}
-		}
-		current = m[key]
-	}
 	out := map[string]string{}
-	switch m := current.(type) {
+	switch m := valueFromPath(root, keys...).(type) {
 	case map[string]any:
 		for key, value := range m {
 			if s, ok := value.(string); ok {
@@ -766,47 +747,11 @@ func joinRemotePatches(claims clusterInviteClaims, joinPublicKey string) map[str
 }
 
 func patchConfig(apiEndpoint string, patch map[string]any) error {
-	body, err := json.Marshal(patch)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequest(http.MethodPatch, strings.TrimRight(apiEndpoint, "/")+"/api/config", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(data)))
-	}
-	return nil
+	return requestJSON(http.MethodPatch, strings.TrimRight(apiEndpoint, "/")+"/api/config", patch)
 }
 
 func saveDistributedInviteAPI(apiEndpoint string, record distributedInviteRecord) error {
-	body, err := json.Marshal(record)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(apiEndpoint, "/")+"/api/distributed/invites", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		data, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(data)))
-	}
-	return nil
+	return requestJSON(http.MethodPost, strings.TrimRight(apiEndpoint, "/")+"/api/distributed/invites", record)
 }
 
 func consumeDistributedInvite(claims clusterInviteClaims) error {
@@ -814,7 +759,11 @@ func consumeDistributedInvite(claims clusterInviteClaims) error {
 	if !ok || issuer.APIEndpoint == "" {
 		return errors.New("invite does not include issuer API endpoint")
 	}
-	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(issuer.APIEndpoint, "/")+"/api/distributed/invites/"+claims.TokenID+"/consume", nil)
+	return requestNoBody(http.MethodPost, strings.TrimRight(issuer.APIEndpoint, "/")+"/api/distributed/invites/"+claims.TokenID+"/consume")
+}
+
+func requestNoBody(method, url string) error {
+	req, err := http.NewRequest(method, url, nil)
 	if err != nil {
 		return err
 	}
@@ -823,6 +772,28 @@ func consumeDistributedInvite(claims clusterInviteClaims) error {
 		return err
 	}
 	defer resp.Body.Close()
+	return responseError(resp)
+}
+
+func requestJSON(method, url string, value any) error {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(method, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return responseError(resp)
+}
+
+func responseError(resp *http.Response) error {
 	if resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(data)))
@@ -970,8 +941,20 @@ func syncPortOrDefault(port string) string {
 }
 
 func printJSON(label string, value any) {
-	data, _ := json.MarshalIndent(value, "", "  ")
-	fmt.Printf("%s:\n%s\n", label, string(data))
+	fmt.Printf("%s:\n%s\n", label, indentedJSON(value, "", "  "))
+}
+
+func printIndentedJSON(value any) {
+	fmt.Println(indentedJSON(value, "", "  "))
+}
+
+func printIndentedZoneValue(value any) {
+	fmt.Printf("  %s\n\n", indentedJSON(value, "  ", "  "))
+}
+
+func indentedJSON(value any, prefix, indent string) string {
+	data, _ := json.MarshalIndent(value, prefix, indent)
+	return string(data)
 }
 
 func sortStrings(values []string) {

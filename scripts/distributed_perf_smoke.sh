@@ -18,6 +18,7 @@ DNSPERF_STATS_INTERVAL="${DNSPERF_STATS_INTERVAL:-10}"
 ZONE="${ZONE:-perf.go53.test.}"
 KEEP_TMP="${KEEP_TMP:-0}"
 
+LOCAL_HOST="127.0.0.1"
 SERVER_BIN="${WORK_DIR}/go53-server"
 CTL_BIN="${WORK_DIR}/go53ctl"
 BUILD_GOCACHE="${GOCACHE:-/tmp/go53-gocache}"
@@ -25,14 +26,14 @@ BUILD_GOTMPDIR="${GOTMPDIR:-/tmp/go53-gotmp}"
 
 NODE_A_DB="${WORK_DIR}/node-a-db"
 NODE_B_DB="${WORK_DIR}/node-b-db"
-NODE_A_API="http://127.0.0.1:18140"
-NODE_B_API="http://127.0.0.1:18141"
+NODE_A_API="http://${LOCAL_HOST}:18140"
+NODE_B_API="http://${LOCAL_HOST}:18141"
 NODE_A_DNS_PORT="15440"
 NODE_B_DNS_PORT="15441"
 NODE_A_SYNC_PORT="53540"
 NODE_B_SYNC_PORT="53541"
-NODE_A_SYNC="tls://127.0.0.1:${NODE_A_SYNC_PORT}"
-NODE_B_SYNC="tls://127.0.0.1:${NODE_B_SYNC_PORT}"
+NODE_A_SYNC="tls://${LOCAL_HOST}:${NODE_A_SYNC_PORT}"
+NODE_B_SYNC="tls://${LOCAL_HOST}:${NODE_B_SYNC_PORT}"
 
 PIDS=()
 
@@ -82,6 +83,33 @@ api_status_ok() {
 	[[ "$status" == 2* ]]
 }
 
+record_url() {
+	local api_base="$1"
+	local rrtype="$2"
+	printf '%s/api/zones/%s/records/%s' "$api_base" "$ZONE" "$rrtype"
+}
+
+post_record() {
+	local api_base="$1"
+	local rrtype="$2"
+	local body="$3"
+	api POST "$(record_url "$api_base" "$rrtype")" "$body" >/dev/null
+}
+
+post_record_ok() {
+	local api_base="$1"
+	local rrtype="$2"
+	local body="$3"
+	api_status_ok POST "$(record_url "$api_base" "$rrtype")" "$body" >/dev/null
+}
+
+dns_query() {
+	local port="$1"
+	local name="$2"
+	local rrtype="$3"
+	dig @"$LOCAL_HOST" -p "$port" "$name" "$rrtype" +time=1 +tries=1 +short >/dev/null 2>&1
+}
+
 wait_http() {
 	local url="$1"
 	local timeout="${2:-20}"
@@ -99,7 +127,7 @@ wait_dns() {
 	local port="$1"
 	local timeout="${2:-20}"
 	local deadline=$((SECONDS + timeout))
-	until dig @"127.0.0.1" -p "$port" "$ZONE" SOA +time=1 +tries=1 +short >/dev/null 2>&1; do
+	until dns_query "$port" "$ZONE" SOA; do
 		if (( SECONDS >= deadline )); then
 			printf 'timeout waiting for DNS port %s\n' "$port" >&2
 			return 1
@@ -116,13 +144,32 @@ start_node() {
 	local log_file="${WORK_DIR}/${name}.log"
 
 	BADGER_DIR="$db" \
-	BIND_HOST="127.0.0.1" \
+	BIND_HOST="$LOCAL_HOST" \
 	DNS_PORT=":${dns_port}" \
 	API_PORT=":${api_port}" \
 	STORAGE_BACKEND="badger" \
 	"$SERVER_BIN" >"$log_file" 2>&1 &
 	PIDS+=("$!")
-	wait_http "http://127.0.0.1:${api_port}/api/config"
+	wait_http "http://${LOCAL_HOST}:${api_port}/api/config"
+}
+
+start_node_a() {
+	start_node node-a "$NODE_A_DB" "$NODE_A_DNS_PORT" 18140
+}
+
+start_node_b() {
+	start_node node-b "$NODE_B_DB" "$NODE_B_DNS_PORT" 18141
+}
+
+restart_node_a() {
+	stop_all_nodes
+	start_node_a
+}
+
+restart_cluster_nodes() {
+	stop_all_nodes
+	start_node_a
+	start_node_b
 }
 
 stop_all_nodes() {
@@ -152,7 +199,7 @@ configure_distributed_node() {
   \"distributed\": {
     \"node_id\": \"${node_id}\",
     \"transport\": \"tls\",
-    \"sync_bind_host\": \"127.0.0.1\",
+    \"sync_bind_host\": \"${LOCAL_HOST}\",
     \"sync_port\": \":${sync_port}\",
     \"peers\": \"\",
     \"private_key\": \"${private_key}\",
@@ -181,7 +228,7 @@ configure_primary_readonly_node() {
   \"enable_edns\": true,
   \"primary\": {
     \"notify_debounce_ms\": 1000,
-    \"ip\": \"127.0.0.1\",
+    \"ip\": \"${LOCAL_HOST}\",
     \"port\": 53
   }
 }" >/dev/null
@@ -189,15 +236,15 @@ configure_primary_readonly_node() {
 
 seed_zone() {
 	local api_base="$1"
-	api POST "${api_base}/api/zones/${ZONE}/records/SOA" \
-		'{"ttl":60,"ns":"ns1.perf.go53.test.","mbox":"hostmaster.perf.go53.test.","refresh":3600,"retry":600,"expire":1209600,"minimum":60}' >/dev/null
-	api POST "${api_base}/api/zones/${ZONE}/records/NS" \
-		'{"name":"perf.go53.test.","ttl":60,"ns":"ns1.perf.go53.test."}' >/dev/null
-	api POST "${api_base}/api/zones/${ZONE}/records/A" \
-		'{"name":"ns1.perf.go53.test.","ttl":60,"ip":"192.0.2.53"}' >/dev/null
+	post_record "$api_base" SOA \
+		'{"ttl":60,"ns":"ns1.perf.go53.test.","mbox":"hostmaster.perf.go53.test.","refresh":3600,"retry":600,"expire":1209600,"minimum":60}'
+	post_record "$api_base" NS \
+		'{"name":"perf.go53.test.","ttl":60,"ns":"ns1.perf.go53.test."}'
+	post_record "$api_base" A \
+		'{"name":"ns1.perf.go53.test.","ttl":60,"ip":"192.0.2.53"}'
 	for i in $(seq 1 100); do
-		api POST "${api_base}/api/zones/${ZONE}/records/A" \
-			"{\"name\":\"host-${i}.perf.go53.test.\",\"ttl\":60,\"ip\":\"192.0.2.$((i % 250 + 1))\"}" >/dev/null
+		post_record "$api_base" A \
+			"{\"name\":\"host-${i}.perf.go53.test.\",\"ttl\":60,\"ip\":\"192.0.2.$((i % 250 + 1))\"}"
 	done
 }
 
@@ -223,7 +270,7 @@ read_worker() {
 		(( RANDOM % 20 == 0 )) && rtype="SOA"
 		local port="$NODE_A_DNS_PORT"
 		(( RANDOM % 2 == 0 )) && port="$NODE_B_DNS_PORT"
-		if dig @"127.0.0.1" -p "$port" "$name" "$rtype" +time=1 +tries=1 +short >/dev/null 2>&1; then
+		if dns_query "$port" "$name" "$rtype"; then
 			inc_counter "read_ok_${id}"
 		else
 			inc_counter "read_fail_${id}"
@@ -244,26 +291,26 @@ write_worker() {
 		local ok=0
 		case "$op" in
 			0)
-				api_status_ok POST "${api_base}/api/zones/${ZONE}/records/A" \
-					"{\"name\":\"${suffix}.perf.go53.test.\",\"ttl\":60,\"ip\":\"198.51.100.$((RANDOM % 250 + 1))\"}" >/dev/null && ok=1
+				post_record_ok "$api_base" A \
+					"{\"name\":\"${suffix}.perf.go53.test.\",\"ttl\":60,\"ip\":\"198.51.100.$((RANDOM % 250 + 1))\"}" && ok=1
 				;;
 			1)
 				local hextet
 				hextet="$(printf '%x' "$((RANDOM % 65535 + 1))")"
-				api_status_ok POST "${api_base}/api/zones/${ZONE}/records/AAAA" \
-					"{\"name\":\"${suffix}.perf.go53.test.\",\"ttl\":60,\"ip\":\"2001:db8::${hextet}\"}" >/dev/null && ok=1
+				post_record_ok "$api_base" AAAA \
+					"{\"name\":\"${suffix}.perf.go53.test.\",\"ttl\":60,\"ip\":\"2001:db8::${hextet}\"}" && ok=1
 				;;
 			2)
-				api_status_ok POST "${api_base}/api/zones/${ZONE}/records/TXT" \
-					"{\"name\":\"txt-${suffix}.perf.go53.test.\",\"ttl\":60,\"text\":\"load-${suffix}\"}" >/dev/null && ok=1
+				post_record_ok "$api_base" TXT \
+					"{\"name\":\"txt-${suffix}.perf.go53.test.\",\"ttl\":60,\"text\":\"load-${suffix}\"}" && ok=1
 				;;
 			3)
-				api_status_ok POST "${api_base}/api/zones/${ZONE}/records/MX" \
-					"{\"name\":\"mx-${suffix}.perf.go53.test.\",\"ttl\":60,\"host\":\"mail-${suffix}.perf.go53.test.\",\"priority\":10}" >/dev/null && ok=1
+				post_record_ok "$api_base" MX \
+					"{\"name\":\"mx-${suffix}.perf.go53.test.\",\"ttl\":60,\"host\":\"mail-${suffix}.perf.go53.test.\",\"priority\":10}" && ok=1
 				;;
 			*)
-				api_status_ok POST "${api_base}/api/zones/${ZONE}/records/CNAME" \
-					"{\"name\":\"alias-${suffix}.perf.go53.test.\",\"ttl\":60,\"target\":\"host-$((RANDOM % 100 + 1)).perf.go53.test.\"}" >/dev/null && ok=1
+				post_record_ok "$api_base" CNAME \
+					"{\"name\":\"alias-${suffix}.perf.go53.test.\",\"ttl\":60,\"target\":\"host-$((RANDOM % 100 + 1)).perf.go53.test.\"}" && ok=1
 				;;
 		esac
 		if (( ok == 1 )); then
@@ -293,7 +340,7 @@ run_dnsperf_read_worker() {
 	local queries_file="$3"
 	local log_file="${WORK_DIR}/dnsperf-${id}.log"
 	local args=(
-		-s 127.0.0.1
+		-s "$LOCAL_HOST"
 		-p "$port"
 		-d "$queries_file"
 		-l "$DURATION_SECONDS"
@@ -309,29 +356,31 @@ run_dnsperf_read_worker() {
 	dnsperf "${args[@]}" >"$log_file" 2>&1
 }
 
-dnsperf_metric() {
-	local metric="$1"
-	local total=0
-	local value file
-	for file in "$WORK_DIR"/dnsperf-*.log; do
-		[[ -e "$file" ]] || continue
-		value="$(sed -n "s/.*${metric}:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p" "$file" | tail -n 1)"
-		[[ -n "$value" ]] || continue
-		total=$((total + value))
-	done
-	printf '%s' "$total"
-}
-
-dnsperf_qps_total() {
+sum_dnsperf_logs() {
+	local sed_expr="$1"
+	local mode="${2:-int}"
 	local total="0"
 	local value file
 	for file in "$WORK_DIR"/dnsperf-*.log; do
 		[[ -e "$file" ]] || continue
-		value="$(sed -n 's/.*Queries per second:[[:space:]]*\([0-9.][0-9.]*\).*/\1/p' "$file" | tail -n 1)"
+		value="$(sed -n "$sed_expr" "$file" | tail -n 1)"
 		[[ -n "$value" ]] || continue
-		total="$(awk -v a="$total" -v b="$value" 'BEGIN { printf "%.2f", a + b }')"
+		if [[ "$mode" == "float" ]]; then
+			total="$(awk -v a="$total" -v b="$value" 'BEGIN { printf "%.2f", a + b }')"
+		else
+			total=$((total + value))
+		fi
 	done
 	printf '%s' "$total"
+}
+
+dnsperf_metric() {
+	local metric="$1"
+	sum_dnsperf_logs "s/.*${metric}:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p"
+}
+
+dnsperf_qps_total() {
+	sum_dnsperf_logs 's/.*Queries per second:[[:space:]]*\([0-9.][0-9.]*\).*/\1/p' float
 }
 
 sum_counters() {
@@ -373,9 +422,9 @@ print_summary() {
 	fi
 	if [[ "$PROFILE" == "distributed" ]]; then
 		printf '\nDistributed status\n'
-		curl -fsS "${NODE_A_API}/api/distributed/status" || true
+		api GET "${NODE_A_API}/api/distributed/status" || true
 		printf '\n'
-		curl -fsS "${NODE_B_API}/api/distributed/status" || true
+		api GET "${NODE_B_API}/api/distributed/status" || true
 		printf '\n'
 	fi
 }
@@ -409,35 +458,31 @@ GOCACHE="$BUILD_GOCACHE" GOTMPDIR="$BUILD_GOTMPDIR" go build -o "$CTL_BIN" "$ROO
 
 if [[ "$PROFILE" == "udp-readonly" ]]; then
 	log "starting node-a bootstrap for UDP read-only profile"
-	start_node node-a "$NODE_A_DB" "$NODE_A_DNS_PORT" 18140
+	start_node_a
 	configure_primary_readonly_node "$NODE_A_API"
 
 	log "restarting node-a with primary DNSSEC-off config"
-	stop_all_nodes
-	start_node node-a "$NODE_A_DB" "$NODE_A_DNS_PORT" 18140
+	restart_node_a
 else
 	log "starting node-a bootstrap"
-	start_node node-a "$NODE_A_DB" "$NODE_A_DNS_PORT" 18140
+	start_node_a
 	node_a_key_json="$(api POST "${NODE_A_API}/api/distributed/keypair")"
 	node_a_private_key="$(json_field private_key "$node_a_key_json")"
 	configure_distributed_node "$NODE_A_API" "node-a" "$NODE_A_SYNC_PORT" "$node_a_private_key"
 
 	log "restarting node-a with distributed listener"
-	stop_all_nodes
-	start_node node-a "$NODE_A_DB" "$NODE_A_DNS_PORT" 18140
+	restart_node_a
 	wait_http "${NODE_A_API}/.well-known/go53-node.json"
 
 	log "starting node-b bootstrap"
-	start_node node-b "$NODE_B_DB" "$NODE_B_DNS_PORT" 18141
+	start_node_b
 
 	log "creating one-use invite and joining node-b"
-	invite_token="$("$CTL_BIN" cluster invite --api "$NODE_A_API" --usage-count 1 --ttl 15m --sync-bind-host 127.0.0.1 --resync-interval-s 5)"
+	invite_token="$("$CTL_BIN" cluster invite --api "$NODE_A_API" --usage-count 1 --ttl 15m --sync-bind-host "$LOCAL_HOST" --resync-interval-s 5)"
 	"$CTL_BIN" cluster join --token "$invite_token" --api "$NODE_B_API" --sync-endpoint "$NODE_B_SYNC"
 
 	log "restarting both nodes after join config"
-	stop_all_nodes
-	start_node node-a "$NODE_A_DB" "$NODE_A_DNS_PORT" 18140
-	start_node node-b "$NODE_B_DB" "$NODE_B_DNS_PORT" 18141
+	restart_cluster_nodes
 	wait_http "${NODE_A_API}/.well-known/go53-node.json"
 	wait_http "${NODE_B_API}/.well-known/go53-node.json"
 	log "waiting ${SETTLE_SECONDS}s for initial distributed resync"

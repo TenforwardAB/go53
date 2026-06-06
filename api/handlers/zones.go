@@ -48,9 +48,7 @@ func AddRecordHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, reqErr.message, reqErr.status)
 		return
 	}
-	log.Printf("body: %+v\n", req.value)
-	log.Printf("zoneName: %+v\n", zoneName)
-	log.Printf("name: %+v\n", req.name)
+	log.Printf("record add request accepted: rrtype=%s zone_status=present", rrtypeStr)
 
 	if err := zone.AddRecord(rrtype, zoneName, req.name, req.value, req.ttlPtr); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
