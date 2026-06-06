@@ -3,7 +3,10 @@ package distributed
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"go53/config"
 	"go53/memory"
@@ -11,6 +14,57 @@ import (
 	"go53/storage"
 	"go53/types"
 )
+
+func TestInitSetsDefaultService(t *testing.T) {
+	priv, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	mock := &storage.MockStorage{}
+	if err := mock.Init(); err != nil {
+		t.Fatalf("mock init: %v", err)
+	}
+	storage.Backend = mock
+	config.AppConfig.Live = config.DefaultLiveConfig
+	config.AppConfig.Live.Mode = "distributed"
+	config.AppConfig.Live.Distributed.NodeID = "node-init"
+	config.AppConfig.Live.Distributed.PrivateKey = priv
+	config.AppConfig.Live.Distributed.PushTimeoutMs = 25
+	mem, err := memory.NewZoneStore(mock)
+	if err != nil {
+		t.Fatalf("NewZoneStore: %v", err)
+	}
+	t.Cleanup(func() {
+		Default = nil
+	})
+
+	svc := Init(mem)
+	if svc == nil || Default != svc {
+		t.Fatalf("Init did not set Default service")
+	}
+	if svc.store != mem || svc.storage != mock || svc.client == nil || svc.peerQueues == nil {
+		t.Fatalf("initialized service is incomplete: %#v", svc)
+	}
+}
+
+func TestStartAndPeerWorkersReturnOnCanceledContext(t *testing.T) {
+	Start(context.Background())
+
+	priv, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	svc := newTestService(t, "node-a", priv, nil)
+	Default = svc
+	t.Cleanup(func() {
+		Default = nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	Start(ctx)
+	svc.SyncAllPeers(ctx)
+	svc.StartPeerWorkers(ctx)
+}
 
 func TestReceiveSignedEventAppliesRawRecord(t *testing.T) {
 	aPriv, aPub, err := GenerateKeyPair()
@@ -60,6 +114,172 @@ func TestReceiveSignedEventAppliesRawRecord(t *testing.T) {
 	}
 	if vector["node-a"] != 1 {
 		t.Fatalf("vector[node-a] = %d, want 1", vector["node-a"])
+	}
+}
+
+func TestPublishMetadataEventsAndInviteLifecycle(t *testing.T) {
+	priv, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	svc := newTestService(t, "node-a", priv, nil)
+
+	if err := svc.PublishConfig(config.LiveConfig{DefaultTTL: 600}); err != nil {
+		t.Fatalf("PublishConfig: %v", err)
+	}
+	if err := svc.PublishTSIGKey("xfr-key.", map[string]any{"algorithm": "hmac-sha256.", "secret": "abc"}); err != nil {
+		t.Fatalf("PublishTSIGKey: %v", err)
+	}
+	if err := svc.PublishTSIGKeyDelete("xfr-key."); err != nil {
+		t.Fatalf("PublishTSIGKeyDelete: %v", err)
+	}
+	if err := svc.PublishDNSSECKey("key-1", types.StoredKey{Zone: "example.test.", Algorithm: "ED25519", PublicKey: "pub"}); err != nil {
+		t.Fatalf("PublishDNSSECKey: %v", err)
+	}
+	if err := svc.PublishDNSSECKeyDelete("key-1"); err != nil {
+		t.Fatalf("PublishDNSSECKeyDelete: %v", err)
+	}
+	if err := svc.PublishDelete("example.test.", "A", "www"); err != nil {
+		t.Fatalf("PublishDelete: %v", err)
+	}
+	events, err := svc.Events("node-a", 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(events) != 6 {
+		t.Fatalf("events len = %d, want 6", len(events))
+	}
+
+	record := InviteRecord{TokenID: "invite-1", UsageCount: 1, ExpiresAt: time.Now().Add(time.Hour).Unix()}
+	if err := svc.SaveInvite(record); err != nil {
+		t.Fatalf("SaveInvite: %v", err)
+	}
+	consumed, err := svc.ConsumeInvite("invite-1")
+	if err != nil {
+		t.Fatalf("ConsumeInvite: %v", err)
+	}
+	if consumed.UsedCount != 1 || consumed.LastUsedAt == 0 {
+		t.Fatalf("consumed invite = %#v", consumed)
+	}
+	if _, err := svc.ConsumeInvite("invite-1"); err == nil {
+		t.Fatalf("ConsumeInvite allowed second use")
+	}
+	if err := svc.SaveInvite(InviteRecord{TokenID: "bad"}); err == nil {
+		t.Fatalf("SaveInvite accepted zero usage count")
+	}
+}
+
+func TestDistributedTransportAndReadinessHelpers(t *testing.T) {
+	t.Cleanup(func() {
+		config.AppConfig.Live.Distributed.Peers = ""
+		config.AppConfig.Live.Distributed.Transport = ""
+	})
+	config.AppConfig.Live = config.DefaultLiveConfig
+	config.AppConfig.Live.Mode = "distributed"
+	config.AppConfig.Live.Distributed.NodeID = "node-a"
+	config.AppConfig.Live.Distributed.PrivateKey = "priv"
+	config.AppConfig.Live.Distributed.Transport = "tls"
+	config.AppConfig.Live.Distributed.Peers = " http://a.local/ , tls://b.local:53530 , "
+
+	if !Enabled() || !TCPTransportEnabled() || !TLSTransportEnabled() || !readyToPublish() {
+		t.Fatalf("distributed readiness helpers returned false")
+	}
+	gotPeers := peers()
+	if len(gotPeers) != 2 || gotPeers[0] != "http://a.local" || gotPeers[1] != "tls://b.local:53530" {
+		t.Fatalf("peers = %#v", gotPeers)
+	}
+	if peerURL("http://a.local/", "/api") != "http://a.local/api" {
+		t.Fatalf("peerURL did not trim slash")
+	}
+	if !useTCPTransport("tls://b.local:53530") || useTCPTransport("https://b.local") {
+		t.Fatalf("useTCPTransport returned unexpected values")
+	}
+
+	config.AppConfig.Live.Distributed.Transport = "http"
+	if TCPTransportEnabled() || TLSTransportEnabled() {
+		t.Fatalf("socket helpers true for http transport")
+	}
+}
+
+func TestHTTPPeerFetchPushAndRepairPaths(t *testing.T) {
+	priv, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	svc := newTestService(t, "node-a", priv, nil)
+	config.AppConfig.Live.Distributed.Transport = "http"
+	if err := svc.store.PutRecordRaw("example.test.", "A", "www", []any{map[string]any{"ip": "192.0.2.1"}}); err != nil {
+		t.Fatalf("PutRecordRaw: %v", err)
+	}
+
+	event := Event{
+		EventID:   "event-1",
+		Origin:    "node-b",
+		Seq:       1,
+		Entity:    entityKey("example.test.", "A", "www"),
+		Zone:      "example.test.",
+		RRType:    "A",
+		Name:      "www",
+		Operation: OperationUpsert,
+		Value:     json.RawMessage(`{"ip":"192.0.2.1"}`),
+		Vector:    map[string]uint64{"node-b": 1},
+	}
+	branch := MerkleBranch{Prefix: "aa", Hash: "branch", LeafCount: 1}
+	leaf := MerkleLeaf{Entity: event.Entity, Hash: "leaf"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/distributed/events":
+			if r.Method == http.MethodPost {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			_ = json.NewEncoder(w).Encode([]Event{event})
+		case "/api/distributed/vector":
+			_ = json.NewEncoder(w).Encode(map[string]uint64{"node-b": 1})
+		case "/api/distributed/merkle/roots":
+			roots, _ := svc.merkleZoneRoots()
+			_ = json.NewEncoder(w).Encode(roots)
+		case "/api/distributed/merkle/branches":
+			_ = json.NewEncoder(w).Encode(map[string]MerkleBranch{"aa": branch})
+		case "/api/distributed/merkle/leaves":
+			_ = json.NewEncoder(w).Encode(map[string]MerkleLeaf{event.Entity: leaf})
+		case "/api/distributed/merkle/repair-events":
+			_ = json.NewEncoder(w).Encode([]Event{event})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	if err := svc.pushEvent(ctx, server.URL, event); err != nil {
+		t.Fatalf("pushEvent: %v", err)
+	}
+	if vector, err := svc.fetchPeerVector(ctx, server.URL); err != nil || vector["node-b"] != 1 {
+		t.Fatalf("fetchPeerVector = %#v err=%v", vector, err)
+	}
+	if events, err := svc.fetchPeerEvents(ctx, server.URL, "node-b", 0); err != nil || len(events) != 1 {
+		t.Fatalf("fetchPeerEvents len=%d err=%v", len(events), err)
+	}
+	if roots, err := svc.fetchPeerMerkleRoots(ctx, server.URL); err != nil || roots["example.test."].Root == "" {
+		t.Fatalf("fetchPeerMerkleRoots = %#v err=%v", roots, err)
+	}
+	if branches, err := svc.fetchPeerMerkleBranches(ctx, server.URL, "example.test."); err != nil || branches["aa"].Hash != "branch" {
+		t.Fatalf("fetchPeerMerkleBranches = %#v err=%v", branches, err)
+	}
+	if leaves, err := svc.fetchPeerMerkleLeaves(ctx, server.URL, "example.test.", []string{"aa"}); err != nil || leaves[event.Entity].Hash != "leaf" {
+		t.Fatalf("fetchPeerMerkleLeaves = %#v err=%v", leaves, err)
+	}
+	if repairEvents, err := svc.fetchPeerMerkleRepairEvents(ctx, server.URL, []string{event.Entity}); err != nil || len(repairEvents) != 1 {
+		t.Fatalf("fetchPeerMerkleRepairEvents len=%d err=%v", len(repairEvents), err)
+	}
+
+	if err := svc.repairPeerZones(ctx, server.URL); err != nil {
+		t.Fatalf("repairPeerZones: %v", err)
+	}
+	if err := svc.pushEvent(ctx, server.URL+"/missing", event); err == nil {
+		t.Fatalf("pushEvent accepted error response")
 	}
 }
 
@@ -307,6 +527,62 @@ func TestEventWinsFallsBackToTieBreakForConcurrentVectors(t *testing.T) {
 	}
 }
 
+func TestLatestEventsForEntitiesUsesVectorWinner(t *testing.T) {
+	priv, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	svc := newTestService(t, "node-local", priv, nil)
+	entity := entityKey("example.com.", "A", "www")
+	current := Event{
+		EventID: "current",
+		Origin:  "node-a",
+		Seq:     2,
+		Entity:  entity,
+		Zone:    "example.com.",
+		RRType:  "A",
+		Name:    "www",
+		Vector:  map[string]uint64{"node-a": 2},
+	}
+	winner := Event{
+		EventID: "winner",
+		Origin:  "node-b",
+		Seq:     1,
+		Entity:  entity,
+		Zone:    "example.com.",
+		RRType:  "A",
+		Name:    "www",
+		Vector:  map[string]uint64{"node-a": 2, "node-b": 1},
+	}
+	otherType := Event{
+		EventID:    "config",
+		Origin:     "node-c",
+		Seq:        1,
+		EntityType: EntityConfig,
+		Entity:     EntityConfig + "/live",
+		Vector:     map[string]uint64{"node-c": 1},
+	}
+	if err := svc.saveEvent(current); err != nil {
+		t.Fatalf("save current: %v", err)
+	}
+	if err := svc.saveEvent(winner); err != nil {
+		t.Fatalf("save winner: %v", err)
+	}
+	if err := svc.saveEvent(otherType); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	latest, err := svc.LatestEventsForEntities([]string{entity, EntityConfig + "/live", ""})
+	if err != nil {
+		t.Fatalf("LatestEventsForEntities: %v", err)
+	}
+	if len(latest) != 1 || latest[0].EventID != "winner" {
+		t.Fatalf("latest = %#v, want winner only", latest)
+	}
+	if eventWinsEvent(current, winner) {
+		t.Fatalf("stale event unexpectedly wins over dominating event")
+	}
+}
+
 func TestMerkleRepairDetectsAndRepairsZoneDrift(t *testing.T) {
 	aPriv, aPub, err := GenerateKeyPair()
 	if err != nil {
@@ -423,6 +699,7 @@ func newTestService(t *testing.T, nodeID, privateKey string, peerKeys map[string
 	config.AppConfig.Live.Mode = "distributed"
 	config.AppConfig.Live.DNSSECEnabled = false
 	config.AppConfig.Live.Distributed.NodeID = nodeID
+	config.AppConfig.Live.Distributed.Peers = ""
 	config.AppConfig.Live.Distributed.PrivateKey = privateKey
 	config.AppConfig.Live.Distributed.PeerPublicKeys = peerKeys
 
@@ -433,7 +710,7 @@ func newTestService(t *testing.T, nodeID, privateKey string, peerKeys map[string
 	return &Service{
 		store:      mem,
 		storage:    mock,
-		client:     nil,
+		client:     &http.Client{Timeout: time.Second},
 		peerQueues: make(map[string]chan Event),
 	}
 }

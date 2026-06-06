@@ -254,6 +254,7 @@ func TestPersistLiveConfig_SaveTableFails(t *testing.T) {
 
 func TestInitUsesDefaults(t *testing.T) {
 	os.Clearenv()
+	t.Setenv("BADGER_DIR", t.TempDir())
 	cfg := &config.ConfigManager{}
 	cfg.Init()
 

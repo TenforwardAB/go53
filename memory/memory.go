@@ -248,7 +248,7 @@ func (z *InMemoryZoneStore) GetZone(zone string) ([]dns.RR, error) {
 	defer z.mu.RUnlock()
 
 	zonesMap, ok := z.cache["zones"]
-	log.Println("zonesMap: %v with length: %d", zonesMap, len(zonesMap))
+	log.Printf("zonesMap: %v with length: %d", zonesMap, len(zonesMap))
 	if !ok {
 		return nil, errors.New("zones cache missing")
 	}
@@ -264,7 +264,7 @@ func (z *InMemoryZoneStore) GetZone(zone string) ([]dns.RR, error) {
 	for rtype, namesMap := range zoneMap {
 		builder, ok := internal.RRBuilders[rtype]
 		if !ok {
-			slog.Warn("[GetZone] no builder for rtype", "rtype", rtype)
+			slog.Warn("[GetZone] no builder for rtype %s", rtype)
 			continue
 		}
 
@@ -273,7 +273,7 @@ func (z *InMemoryZoneStore) GetZone(zone string) ([]dns.RR, error) {
 			for _, innerData := range namesMap {
 				innerMap, ok := innerData.(map[string]any)
 				if !ok {
-					slog.Warn("[GetZone] RRSIG innerData unexpected type", "type", reflect.TypeOf(innerData))
+					slog.Warn("[GetZone] RRSIG innerData unexpected type %v", reflect.TypeOf(innerData))
 					continue
 				}
 				for innerName, rawData := range innerMap {
@@ -711,7 +711,7 @@ func (z *InMemoryZoneStore) maybeSignRRSet(zone, rtype, name string) {
 	rrs, err := security.ToRRSet(rrsetName, rtype, record)
 	slog.Crazy("rrs is: %v", rrs)
 	if err != nil || len(rrs) == 0 {
-		slog.Error("ERROR ToRRSet:", err)
+		slog.Error("ERROR ToRRSet: %v", err)
 		return
 	}
 

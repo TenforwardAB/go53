@@ -10,6 +10,20 @@ import (
 )
 
 func Start(cfg config.BaseConfig) error {
+	addr, udpServer, tcpServer := buildDNSServers(cfg)
+
+	go func() {
+		log.Printf("Starting TCP DNS server on %s", addr)
+		if err := tcpServer.ListenAndServe(); err != nil {
+			log.Printf("TCP DNS server error: %v", err)
+		}
+	}()
+
+	log.Printf("Starting UDP DNS server on %s", addr)
+	return udpServer.ListenAndServe()
+}
+
+func buildDNSServers(cfg config.BaseConfig) (string, *dns.Server, *dns.Server) {
 	dns.HandleFunc(".", handleRequest)
 
 	addr := fmt.Sprintf("%s%s", cfg.BindHost, cfg.DNSPort)
@@ -33,13 +47,5 @@ func Start(cfg config.BaseConfig) error {
 		ReusePort:     true, // MAKE configurable not valid on all OS
 	}
 
-	go func() {
-		log.Printf("Starting TCP DNS server on %s", addr)
-		if err := tcpServer.ListenAndServe(); err != nil {
-			log.Printf("TCP DNS server error: %v", err)
-		}
-	}()
-
-	log.Printf("Starting UDP DNS server on %s", addr)
-	return udpServer.ListenAndServe()
+	return addr, udpServer, tcpServer
 }

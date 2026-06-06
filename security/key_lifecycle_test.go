@@ -2,7 +2,9 @@ package security
 
 import (
 	"testing"
+	"time"
 
+	"go53/storage"
 	"go53/types"
 )
 
@@ -64,6 +66,78 @@ func TestKeyLifecycleSemantics(t *testing.T) {
 	}
 	if keySignsAt(revoked, now) {
 		t.Fatalf("revoked key must not sign")
+	}
+}
+
+func TestStoredKeyLifecycleStoragePaths(t *testing.T) {
+	storage.Backend = &storage.MockStorage{Zones: map[string][]byte{}, Tables: map[string]map[string][]byte{}}
+	if err := storage.Backend.Init(); err != nil {
+		t.Fatalf("storage init: %v", err)
+	}
+	if err := InitDNSSECKeyCache(); err != nil {
+		t.Fatalf("InitDNSSECKeyCache: %v", err)
+	}
+
+	now := time.Now().Unix()
+	keyID, key, err := GenerateRolloverKey("life.test.", "ksk", "ED25519", now-20, now-10)
+	if err != nil {
+		t.Fatalf("GenerateRolloverKey: %v", err)
+	}
+	if keyID == "" || key == nil {
+		t.Fatalf("missing generated key")
+	}
+	stored, err := LoadStoredKey(keyID)
+	if err != nil {
+		t.Fatalf("LoadStoredKey: %v", err)
+	}
+	if stored.Zone != "life.test" || stored.State != KeyStateActive {
+		t.Fatalf("stored key = %#v", stored)
+	}
+	if DNSKEYKeyTag(stored) == 0 {
+		t.Fatalf("DNSKEYKeyTag returned 0")
+	}
+
+	listed, err := ListStoredKeys()
+	if err != nil {
+		t.Fatalf("ListStoredKeys: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("ListStoredKeys len = %d", len(listed))
+	}
+	zoneKeys, err := LoadAllKeysForZone("life.test")
+	if err != nil || len(zoneKeys) != 1 {
+		t.Fatalf("LoadAllKeysForZone len=%d err=%v", len(zoneKeys), err)
+	}
+	if ids, err := GetDNSSECKeyNamesForRRSet("life.test", true); err != nil || len(ids) != 1 || ids[0] != keyID {
+		t.Fatalf("GetDNSSECKeyNamesForRRSet ids=%#v err=%v", ids, err)
+	}
+
+	updated, err := UpdateKeyLifecycle(keyID, types.StoredKey{PublishAt: now - 30, ActivateAt: now - 20})
+	if err != nil {
+		t.Fatalf("UpdateKeyLifecycle: %v", err)
+	}
+	if updated.PublishAt != now-30 || updated.ActivateAt != now-20 {
+		t.Fatalf("updated key = %#v", updated)
+	}
+	retired, err := RetireKey(keyID, time.Hour)
+	if err != nil {
+		t.Fatalf("RetireKey: %v", err)
+	}
+	if retired.State != KeyStateRetired || retired.RemoveAt == 0 {
+		t.Fatalf("retired key = %#v", retired)
+	}
+	revoked, err := RevokeKey(keyID, time.Hour)
+	if err != nil {
+		t.Fatalf("RevokeKey: %v", err)
+	}
+	if revoked.State != KeyStateRevoked || !revoked.Revoke || revoked.RevokedAt == 0 {
+		t.Fatalf("revoked key = %#v", revoked)
+	}
+	if err := DeleteStoredKey(keyID); err != nil {
+		t.Fatalf("DeleteStoredKey: %v", err)
+	}
+	if _, err := LoadStoredKey(keyID); err == nil {
+		t.Fatalf("LoadStoredKey found deleted key")
 	}
 }
 

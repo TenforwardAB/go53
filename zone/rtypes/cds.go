@@ -145,6 +145,9 @@ func init() {
 }
 
 func cdsRecordsFromRaw(raw any) []types.CDSRecord {
+	if records, ok := raw.([]types.CDSRecord); ok {
+		return append([]types.CDSRecord(nil), records...)
+	}
 	dsRecords := dsRecordsFromRaw(raw)
 	out := make([]types.CDSRecord, 0, len(dsRecords))
 	for _, rec := range dsRecords {
