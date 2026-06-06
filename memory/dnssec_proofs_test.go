@@ -13,45 +13,27 @@ import (
 func TestDNSSECDenialProofsAndOwnerHelpers(t *testing.T) {
 	store, zone := setupDNSSECProofStore(t)
 
-	if !store.NameExists("www." + zone) {
-		t.Fatalf("NameExists returned false for www")
-	}
-	if store.NameExists("missing." + zone) {
-		t.Fatalf("NameExists returned true for missing owner")
-	}
-	wildcard, ok := store.WildcardName("missing.wild." + zone)
+	requireNameExists(t, store, "www."+zone)
+	requireNameMissing(t, store, "missing."+zone)
+	wildcard, ok := store.WildcardName(owner(zone, "missing.wild"))
 	if !ok || wildcard != "*.wild."+zone {
 		t.Fatalf("WildcardName = %q ok=%v", wildcard, ok)
 	}
-	if !store.WildcardExists("missing.wild." + zone) {
+	if !store.WildcardExists(owner(zone, "missing.wild")) {
 		t.Fatalf("WildcardExists returned false")
 	}
-	delegation, ns, ok := store.DelegationFor("host.child." + zone)
+	delegation, ns, ok := store.DelegationFor(owner(zone, "host.child"))
 	if !ok || delegation != "child."+zone || len(ns) != 1 {
 		t.Fatalf("DelegationFor = delegation=%q ns=%#v ok=%v", delegation, ns, ok)
 	}
 
-	nsec, ok := store.FindNSECProof("missing." + zone)
-	if !ok || len(nsec) == 0 || nsec[0].Header().Rrtype != dns.TypeNSEC {
-		t.Fatalf("FindNSECProof = %#v ok=%v", nsec, ok)
-	}
-	nsec3, ok := store.FindNSEC3Proof("missing." + zone)
-	if !ok || len(nsec3) == 0 || nsec3[0].Header().Rrtype != dns.TypeNSEC3 {
-		t.Fatalf("FindNSEC3Proof = %#v ok=%v", nsec3, ok)
-	}
-
-	nxProofs := store.DenialProofs("missing."+zone, dns.TypeA, true)
-	if len(nxProofs) == 0 {
-		t.Fatalf("NXDOMAIN denial proofs empty")
-	}
-	noDataProofs := store.DenialProofs("www."+zone, dns.TypeMX, false)
-	if len(noDataProofs) == 0 {
-		t.Fatalf("no-data denial proofs empty")
-	}
-	wildcardProofs := store.DenialProofs("missing.wild."+zone, dns.TypeA, false)
-	if len(wildcardProofs) == 0 {
-		t.Fatalf("wildcard denial proofs empty")
-	}
+	nsec, ok := store.FindNSECProof(owner(zone, "missing"))
+	requireProof(t, "FindNSECProof", dns.TypeNSEC, nsec, ok)
+	nsec3, ok := store.FindNSEC3Proof(owner(zone, "missing"))
+	requireProof(t, "FindNSEC3Proof", dns.TypeNSEC3, nsec3, ok)
+	requireDenialProofs(t, store, "NXDOMAIN", owner(zone, "missing"), dns.TypeA, true)
+	requireDenialProofs(t, store, "no-data", owner(zone, "www"), dns.TypeMX, false)
+	requireDenialProofs(t, store, "wildcard", owner(zone, "missing.wild"), dns.TypeA, false)
 }
 
 func TestDNSSECChainRebuildAndRawConverters(t *testing.T) {
@@ -64,16 +46,16 @@ func TestDNSSECChainRebuildAndRawConverters(t *testing.T) {
 		t.Fatalf("rebuilt chains are empty: nsec=%#v nsec3=%#v", nsecMap, nsec3Map)
 	}
 
-	if rec, ok := nsecRecordFromRaw(map[string]interface{}{"next_domain": "next.example.test.", "types": []interface{}{"A", "RRSIG"}, "ttl": float64(300)}); !ok || rec.TTL != 300 || len(rec.Types) != 2 {
+	if rec, ok := nsecRecordFromRaw(nsecRaw("next.example.test.", "A", "RRSIG")); !ok || rec.TTL != proofTTL || len(rec.Types) != 2 {
 		t.Fatalf("nsecRecordFromRaw map = %#v ok=%v", rec, ok)
 	}
 	if _, ok := nsecRecordFromRaw("bad"); ok {
 		t.Fatalf("nsecRecordFromRaw accepted bad input")
 	}
-	if rec, ok := nsec3ParamFromRaw(map[string]interface{}{"hash_algorithm": float64(1), "flags": float64(1), "iterations": float64(0), "salt": "-", "ttl": float64(300)}); !ok || rec.Salt != "" || rec.Flags != 1 {
+	if rec, ok := nsec3ParamFromRaw(nsec3ParamRaw("-", 1)); !ok || rec.Salt != "" || rec.Flags != 1 {
 		t.Fatalf("nsec3ParamFromRaw map = %#v ok=%v", rec, ok)
 	}
-	if rec, ok := nsec3RecordFromRaw(map[string]interface{}{"hash_algorithm": float64(1), "flags": float64(1), "iterations": float64(0), "salt": "-", "next_hashed": dns.HashName(zone, dns.SHA1, 0, ""), "types": []interface{}{"A"}, "ttl": float64(300)}); !ok || rec.HashAlg != 1 || len(rec.Types) != 1 {
+	if rec, ok := nsec3RecordFromRaw(nsec3Raw(zone, "-", "A")); !ok || rec.HashAlg != 1 || len(rec.Types) != 1 {
 		t.Fatalf("nsec3RecordFromRaw map = %#v ok=%v", rec, ok)
 	}
 	if nsec3HashLength(dns.HashName(zone, dns.SHA1, 0, "")) == 0 {
@@ -91,69 +73,51 @@ func TestDNSSECChainRebuildAndRawConverters(t *testing.T) {
 }
 
 func TestRRSIGCacheHelpers(t *testing.T) {
-	store, err := NewZoneStore(setupMemoryStoreBackend(t))
-	if err != nil {
-		t.Fatalf("NewZoneStore: %v", err)
-	}
+	store := setupProofZoneStore(t)
 	zone := "sig.test."
-	sig := &types.RRSIGRecord{
-		TypeCovered: "A",
-		Algorithm:   15,
-		Labels:      3,
-		OrigTTL:     300,
-		Expiration:  uint32(time.Now().Add(10 * 24 * time.Hour).Unix()),
-		Inception:   uint32(time.Now().Add(-time.Minute).Unix()),
-		KeyTag:      12345,
-		SignerName:  zone,
-		Signature:   "abc",
-		TTL:         300,
-	}
+	sig := testRRSIG(zone)
 	store.storeRRSIG(zone, "A", "www", sig)
 	store.storeRRSIG(zone, "A", "www", sig)
 
-	cached := store.cachedRRSIGs(zone, "A", "www", dns.TypeA, "www."+zone)
+	cached := store.cachedRRSIGs(zone, "A", "www", dns.TypeA, owner(zone, "www"))
 	if len(cached) != 1 {
 		t.Fatalf("cachedRRSIGs returned %d records: %#v", len(cached), cached)
 	}
-	if parsed := rrsigRecordsFromRaw([]interface{}{map[string]interface{}{"type_covered": "A", "algorithm": float64(15), "labels": float64(3), "original_ttl": float64(300), "expiration": float64(sig.Expiration), "inception": float64(sig.Inception), "key_tag": float64(12345), "signer_name": zone, "signature": "abc", "ttl": float64(300)}}); len(parsed) != 1 {
+	if parsed := rrsigRecordsFromRaw([]interface{}{rrsigRaw(zone, sig)}); len(parsed) != 1 {
 		t.Fatalf("rrsigRecordsFromRaw parsed %d records", len(parsed))
 	}
-	if _, err := rrsigRecordToDNS("www."+zone, &types.RRSIGRecord{TypeCovered: "NOPE"}); err == nil {
+	if _, err := rrsigRecordToDNS(owner(zone, "www"), &types.RRSIGRecord{TypeCovered: "NOPE"}); err == nil {
 		t.Fatalf("rrsigRecordToDNS accepted invalid covered type")
 	}
 
 	store.mu.Lock()
 	store.invalidateRRSIGLocked(zone, "A", "www")
 	store.mu.Unlock()
-	if cached := store.cachedRRSIGs(zone, "A", "www", dns.TypeA, "www."+zone); len(cached) != 0 {
+	if cached := store.cachedRRSIGs(zone, "A", "www", dns.TypeA, owner(zone, "www")); len(cached) != 0 {
 		t.Fatalf("RRSIG cache remained after invalidate: %#v", cached)
 	}
 }
 
 func setupDNSSECProofStore(t *testing.T) (*InMemoryZoneStore, string) {
 	t.Helper()
-	backend := setupMemoryStoreBackend(t)
 	configureProofDefaults()
-	store, err := NewZoneStore(backend)
-	if err != nil {
-		t.Fatalf("NewZoneStore: %v", err)
-	}
+	store := setupProofZoneStore(t)
 	zone := "proof.test."
 	store.cache["zones"][zone] = map[string]map[string]any{
 		string(types.TypeSOA): {
-			"@": types.SOARecord{Ns: "ns1.proof.test.", Mbox: "hostmaster.proof.test.", Serial: 1, Refresh: 3600, Retry: 600, Expire: 86400, Minimum: 300, TTL: 300},
+			"@": proofSOA(),
 		},
 		string(types.TypeNS): {
-			"@":     []types.NSRecord{{NS: "ns1.proof.test.", TTL: 300}},
-			"child": []types.NSRecord{{NS: "ns.child.proof.test.", TTL: 300}},
+			"@":     nsRecords("ns1." + zone),
+			"child": nsRecords("ns.child." + zone),
 		},
 		string(types.TypeA): {
-			"www":    []types.ARecord{{IP: "192.0.2.1", TTL: 300}},
-			"wild":   []types.ARecord{{IP: "192.0.2.3", TTL: 300}},
-			"*.wild": []types.ARecord{{IP: "192.0.2.2", TTL: 300}},
+			"www":    aRecords("192.0.2.1"),
+			"wild":   aRecords("192.0.2.3"),
+			"*.wild": aRecords("192.0.2.2"),
 		},
 		"NSEC3PARAM": {
-			"@": types.NSEC3ParamRecord{HashAlgorithm: dns.SHA1, Flags: 1, Iterations: 0, Salt: "", TTL: 300},
+			"@": proofNSEC3Param(),
 		},
 	}
 	store.mu.Lock()
@@ -163,7 +127,144 @@ func setupDNSSECProofStore(t *testing.T) (*InMemoryZoneStore, string) {
 	return store, zone
 }
 
+const proofTTL = 300
+
+func setupProofZoneStore(t *testing.T) *InMemoryZoneStore {
+	t.Helper()
+	store, err := NewZoneStore(setupMemoryStoreBackend(t))
+	if err != nil {
+		t.Fatalf("NewZoneStore: %v", err)
+	}
+	return store
+}
+
 func configureProofDefaults() {
-	config.AppConfig.Live.DefaultTTL = 300
+	config.AppConfig.Live.DefaultTTL = proofTTL
 	config.AppConfig.Live.DNSSECEnabled = false
+}
+
+func owner(zone, name string) string {
+	return name + "." + zone
+}
+
+func requireNameExists(t *testing.T, store *InMemoryZoneStore, name string) {
+	t.Helper()
+	if !store.NameExists(name) {
+		t.Fatalf("NameExists(%q) returned false", name)
+	}
+}
+
+func requireNameMissing(t *testing.T, store *InMemoryZoneStore, name string) {
+	t.Helper()
+	if store.NameExists(name) {
+		t.Fatalf("NameExists(%q) returned true", name)
+	}
+}
+
+func requireProof(t *testing.T, label string, rrtype uint16, proof []dns.RR, ok bool) {
+	t.Helper()
+	if !ok || len(proof) == 0 || proof[0].Header().Rrtype != rrtype {
+		t.Fatalf("%s = %#v ok=%v", label, proof, ok)
+	}
+}
+
+func requireDenialProofs(t *testing.T, store *InMemoryZoneStore, label, name string, rrtype uint16, nxdomain bool) {
+	t.Helper()
+	if proofs := store.DenialProofs(name, rrtype, nxdomain); len(proofs) == 0 {
+		t.Fatalf("%s denial proofs empty", label)
+	}
+}
+
+func proofSOA() types.SOARecord {
+	return types.SOARecord{
+		Ns:      "ns1.proof.test.",
+		Mbox:    "hostmaster.proof.test.",
+		Serial:  1,
+		Refresh: 3600,
+		Retry:   600,
+		Expire:  86400,
+		Minimum: proofTTL,
+		TTL:     proofTTL,
+	}
+}
+
+func nsRecords(ns string) []types.NSRecord {
+	return []types.NSRecord{{NS: ns, TTL: proofTTL}}
+}
+
+func aRecords(ip string) []types.ARecord {
+	return []types.ARecord{{IP: ip, TTL: proofTTL}}
+}
+
+func proofNSEC3Param() types.NSEC3ParamRecord {
+	return types.NSEC3ParamRecord{
+		HashAlgorithm: dns.SHA1,
+		Flags:         1,
+		Iterations:    0,
+		Salt:          "",
+		TTL:           proofTTL,
+	}
+}
+
+func nsecRaw(next string, types ...string) map[string]interface{} {
+	return map[string]interface{}{
+		"next_domain": next,
+		"types":       stringInterfaces(types...),
+		"ttl":         float64(proofTTL),
+	}
+}
+
+func nsec3ParamRaw(salt string, flags int) map[string]interface{} {
+	return map[string]interface{}{
+		"hash_algorithm": float64(dns.SHA1),
+		"flags":          float64(flags),
+		"iterations":     float64(0),
+		"salt":           salt,
+		"ttl":            float64(proofTTL),
+	}
+}
+
+func nsec3Raw(zone, salt string, types ...string) map[string]interface{} {
+	raw := nsec3ParamRaw(salt, 1)
+	raw["next_hashed"] = dns.HashName(zone, dns.SHA1, 0, "")
+	raw["types"] = stringInterfaces(types...)
+	return raw
+}
+
+func stringInterfaces(values ...string) []interface{} {
+	out := make([]interface{}, 0, len(values))
+	for _, value := range values {
+		out = append(out, value)
+	}
+	return out
+}
+
+func testRRSIG(zone string) *types.RRSIGRecord {
+	return &types.RRSIGRecord{
+		TypeCovered: "A",
+		Algorithm:   15,
+		Labels:      3,
+		OrigTTL:     proofTTL,
+		Expiration:  uint32(time.Now().Add(10 * 24 * time.Hour).Unix()),
+		Inception:   uint32(time.Now().Add(-time.Minute).Unix()),
+		KeyTag:      12345,
+		SignerName:  zone,
+		Signature:   "abc",
+		TTL:         proofTTL,
+	}
+}
+
+func rrsigRaw(zone string, sig *types.RRSIGRecord) map[string]interface{} {
+	return map[string]interface{}{
+		"type_covered": sig.TypeCovered,
+		"algorithm":    float64(sig.Algorithm),
+		"labels":       float64(sig.Labels),
+		"original_ttl": float64(sig.OrigTTL),
+		"expiration":   float64(sig.Expiration),
+		"inception":    float64(sig.Inception),
+		"key_tag":      float64(sig.KeyTag),
+		"signer_name":  zone,
+		"signature":    sig.Signature,
+		"ttl":          float64(sig.TTL),
+	}
 }
