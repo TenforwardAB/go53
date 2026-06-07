@@ -454,7 +454,7 @@ mkdir -p "$WORK_DIR" "$BUILD_GOCACHE" "$BUILD_GOTMPDIR"
 
 log "building server and go53ctl into $WORK_DIR"
 GOCACHE="$BUILD_GOCACHE" GOTMPDIR="$BUILD_GOTMPDIR" go build -o "$SERVER_BIN" "$ROOT_DIR/cmd/server"
-GOCACHE="$BUILD_GOCACHE" GOTMPDIR="$BUILD_GOTMPDIR" go build -o "$CTL_BIN" "$ROOT_DIR/tools/go53ctl.go"
+GOCACHE="$BUILD_GOCACHE" GOTMPDIR="$BUILD_GOTMPDIR" go build -o "$CTL_BIN" "$ROOT_DIR/cmd/go53ctl"
 
 if [[ "$PROFILE" == "udp-readonly" ]]; then
 	log "starting node-a bootstrap for UDP read-only profile"
