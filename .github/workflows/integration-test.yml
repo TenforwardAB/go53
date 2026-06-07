@@ -183,15 +183,16 @@ jobs:
             -d "{\"algorithm\":\"hmac-sha256.\",\"secret\":\"${SECRET}\"}" \
             || { echo "TSIG create failed"; exit 1; }
 
+          # GET /api/tsig returns a JSON array of {name, algorithm, secret} objects.
           curl -sf "$API/api/tsig" \
-            | python3 -c "import sys,json; keys=json.load(sys.stdin); assert 'ci-tsig-key.' in keys, f'key missing: {keys}'; print('TSIG key present')" \
+            | python3 -c "import sys,json; keys=json.load(sys.stdin); names=[k['name'] for k in keys]; assert 'ci-tsig-key.' in names, f'key missing: {keys}'; print('TSIG key present')" \
             || { echo "TSIG list failed"; exit 1; }
 
           curl -sf -X DELETE "$API/api/tsig/ci-tsig-key." \
             || { echo "TSIG delete failed"; exit 1; }
 
           curl -sf "$API/api/tsig" \
-            | python3 -c "import sys,json; keys=json.load(sys.stdin); assert 'ci-tsig-key.' not in keys, 'key still present'; print('TSIG key gone')" \
+            | python3 -c "import sys,json; keys=json.load(sys.stdin); names=[k['name'] for k in keys]; assert 'ci-tsig-key.' not in names, 'key still present'; print('TSIG key gone')" \
             || { echo "TSIG post-delete check failed"; exit 1; }
 
       - name: Add record and delete it via admin socket
