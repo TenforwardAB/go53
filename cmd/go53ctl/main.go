@@ -300,7 +300,8 @@ func handleListZone(db *badger.DB, zone string, countOnly bool) {
 }
 
 func dumpAll(db *badger.DB) {
-	fmt.Println("Dumping all zones and all records...\n")
+	fmt.Println("Dumping all zones and all records...")
+	fmt.Println()
 	err := db.View(func(txn *badger.Txn) error {
 		it := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer it.Close()

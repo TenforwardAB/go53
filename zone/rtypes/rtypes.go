@@ -26,6 +26,8 @@
 package rtypes
 
 import (
+	"strings"
+
 	"github.com/miekg/dns"
 	"go53/memory"
 )
@@ -75,4 +77,25 @@ func Get(rrtype uint16) (RRType, bool) {
 
 func GetRegistry() map[uint16]RRType {
 	return registry
+}
+
+// normalizeRecordKey converts an Add name argument to the short-label storage key
+// that Lookup derives via SplitName, so Add and Lookup always agree on the key.
+//
+// Only absolute FQDNs (trailing dot) need normalization: "go53.test." → "@",
+// "www.go53.test." → "www". Multi-label short labels like "_sip._tcp" or
+// "5.4.3.2.in-addr.arpa" (no trailing dot) pass through unchanged, as does "@".
+func normalizeRecordKey(sanitizedZone, name string) string {
+	if strings.HasSuffix(name, ".") {
+		stripped := strings.TrimSuffix(name, sanitizedZone)
+		stripped = strings.TrimSuffix(stripped, ".")
+		if stripped == "" {
+			return "@"
+		}
+		return stripped
+	}
+	if name == "" {
+		return "@"
+	}
+	return name
 }

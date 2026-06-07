@@ -44,10 +44,7 @@ func (NSRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 		return errors.New("memory store not initialized")
 	}
 
-	key := name
-	if key == "" {
-		key = "@"
-	}
+	key := normalizeRecordKey(sanitizedZone, name)
 
 	var current []types.NSRecord
 	_, _, existing, found := memStore.GetRecord(sanitizedZone, string(types.TypeNS), key)

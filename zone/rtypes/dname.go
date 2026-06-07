@@ -42,10 +42,7 @@ func (DNAMERecord) Add(zone, name string, value interface{}, ttl *uint32) error 
 		ttlVal = *ttl
 	}
 
-	key := name
-	if key == "" {
-		key = "@"
-	}
+	key := normalizeRecordKey(sanitizedZone, name)
 	if _, _, _, found := memStore.GetRecord(sanitizedZone, string(types.TypeCNAME), key); found {
 		return errors.New("DNAME cannot coexist with CNAME at the same owner")
 	}

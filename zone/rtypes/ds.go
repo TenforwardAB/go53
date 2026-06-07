@@ -51,10 +51,7 @@ func (DSRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 		ttlVal = uint32(t)
 	}
 
-	key := name
-	if key == "" {
-		key = "@"
-	}
+	key := normalizeRecordKey(sanitizedZone, name)
 
 	var current []types.DSRecord
 	_, _, existing, found := memStore.GetRecord(sanitizedZone, string(types.TypeDS), key)

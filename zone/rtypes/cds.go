@@ -51,10 +51,7 @@ func (CDSRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 		ttlVal = uint32(t)
 	}
 
-	key := name
-	if key == "" {
-		key = "@"
-	}
+	key := normalizeRecordKey(sanitizedZone, name)
 
 	var current []types.CDSRecord
 	_, _, existing, found := memStore.GetRecord(sanitizedZone, string(types.TypeCDS), key)

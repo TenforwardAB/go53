@@ -46,10 +46,7 @@ func (AAAARecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 		return errors.New("memory store not initialized")
 	}
 
-	key := name
-	if key == "" {
-		key = "@"
-	}
+	key := normalizeRecordKey(sanitizedZone, name)
 
 	_, _, val, found := memStore.GetRecord(sanitizedZone, string(types.TypeAAAA), key)
 

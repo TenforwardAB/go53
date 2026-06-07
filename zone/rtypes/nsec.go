@@ -59,10 +59,7 @@ func (NSEC) Add(zone, name string, value interface{}, ttl *uint32) error {
 		return errors.New("memory store not initialized")
 	}
 
-	key := name
-	if key == "" {
-		key = "@"
-	}
+	key := normalizeRecordKey(sanitizedZone, name)
 
 	return memStore.AddRecord(sanitizedZone, string(types.TypeNSEC), key, rec)
 }

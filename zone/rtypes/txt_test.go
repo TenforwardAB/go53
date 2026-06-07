@@ -61,6 +61,32 @@ func TestTXTRecordLifecycle(t *testing.T) {
 	}
 }
 
+// TestTXTRecordApexFQDN verifies that Add with an FQDN zone-apex name ("go53.test.")
+// stores the record under the same key that Lookup derives for the apex, fixing the
+// bug where FQDN-posted TXT records were silently unreachable via DNS.
+func TestTXTRecordApexFQDN(t *testing.T) {
+	zone := "go53.test"
+	text := "v=spf1 mx -all"
+
+	rr, _ := Get(dns.TypeTXT)
+
+	// Add using the FQDN form callers naturally supply (e.g. from a JSON body
+	// that mirrors the zone name).
+	if err := rr.Add(zone, zone+".", map[string]interface{}{"text": text}, nil); err != nil {
+		t.Fatalf("Add FQDN apex TXT: %v", err)
+	}
+
+	// Lookup must resolve the same apex — this was the failing case.
+	results, ok := rr.Lookup(zone + ".")
+	if !ok || len(results) == 0 {
+		t.Fatal("TXT apex via FQDN Add: Lookup returned nothing (normalization bug)")
+	}
+	txt := results[0].(*dns.TXT)
+	if len(txt.Txt) == 0 || txt.Txt[0] != text {
+		t.Errorf("expected %q, got %v", text, txt.Txt)
+	}
+}
+
 func TestTXTRecordAdd_InvalidInputs(t *testing.T) {
 	rr := TXTRecord{}
 
