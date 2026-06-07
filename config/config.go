@@ -20,6 +20,14 @@ type BaseConfig struct {
 	APIPort        string
 	StorageBackend string
 	PostgresDSN    string
+	// AdminSocket is the path to the local admin Unix domain socket. It serves the
+	// full admin API gated by filesystem permissions instead of API tokens, acting as
+	// the break-glass local administration path when the external IdP is unreachable.
+	// Empty disables the socket.
+	AdminSocket string
+	// AdminSocketGroup is the OS group granted access to the admin socket (mode 0660).
+	// When the group does not exist the socket falls back to owner-only access.
+	AdminSocketGroup string
 }
 
 type DevConfig struct {
@@ -92,11 +100,13 @@ func (cm *ConfigManager) Init() {
 	_ = godotenv.Load()
 
 	cm.Base = BaseConfig{
-		DNSPort:        MustEnv("DNS_PORT", DefaultBaseConfig.DNSPort),
-		BindHost:       MustEnv("BIND_HOST", DefaultBaseConfig.BindHost),
-		APIPort:        MustEnv("API_PORT", DefaultBaseConfig.APIPort),
-		StorageBackend: MustEnv("STORAGE_BACKEND", DefaultBaseConfig.StorageBackend),
-		PostgresDSN:    MustEnv("POSTGRES_DSN", DefaultBaseConfig.PostgresDSN),
+		DNSPort:          MustEnv("DNS_PORT", DefaultBaseConfig.DNSPort),
+		BindHost:         MustEnv("BIND_HOST", DefaultBaseConfig.BindHost),
+		APIPort:          MustEnv("API_PORT", DefaultBaseConfig.APIPort),
+		StorageBackend:   MustEnv("STORAGE_BACKEND", DefaultBaseConfig.StorageBackend),
+		PostgresDSN:      MustEnv("POSTGRES_DSN", DefaultBaseConfig.PostgresDSN),
+		AdminSocket:      MustEnv("ADMIN_SOCKET", DefaultBaseConfig.AdminSocket),
+		AdminSocketGroup: MustEnv("ADMIN_SOCKET_GROUP", DefaultBaseConfig.AdminSocketGroup),
 	}
 
 	if err := storage.Init(cm.Base.StorageBackend); err != nil {

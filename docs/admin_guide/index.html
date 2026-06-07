@@ -385,6 +385,16 @@ curl -X POST http://127.0.0.1:8053/api/zones/example.com./records/A \
               <td><code>host=localhost port=5432 user=postgres password=postgres dbname=go53 sslmode=disable</code></td>
               <td>PostgreSQL connection string when a Postgres backend is used.</td>
             </tr>
+            <tr>
+              <td><code>ADMIN_SOCKET</code></td>
+              <td><code>/run/go53/admin.sock</code></td>
+              <td>Path to the local admin Unix socket that serves the full API gated by filesystem permissions instead of API tokens. Set empty to disable.</td>
+            </tr>
+            <tr>
+              <td><code>ADMIN_SOCKET_GROUP</code></td>
+              <td><code>go53_admin</code></td>
+              <td>OS group granted access to the admin socket (mode <code>0660</code>). If the group does not exist the socket falls back to owner-only access.</td>
+            </tr>
           </tbody>
         </table>
       </section>
@@ -703,7 +713,32 @@ curl http://10.0.0.11:8053/api/distributed/merkle/roots</code></pre>
 
       <section id="go53ctl">
         <h2>go53ctl</h2>
-        <p><code>go53ctl</code> is the local administration helper. It has two areas: distributed cluster onboarding and direct Badger inspection for zone storage.</p>
+        <p><code>go53ctl</code> is the local administration helper. It has three areas: local break-glass admin over a Unix socket, distributed cluster onboarding, and direct Badger inspection for zone storage.</p>
+
+        <h3>Local Admin Socket (Break-Glass)</h3>
+        <p>go53 also serves the full admin API over a local Unix domain socket (<code>ADMIN_SOCKET</code>, default <code>/run/go53/admin.sock</code>). Access is controlled by filesystem permissions instead of API tokens: the socket is created with mode <code>0660</code> and group-owned by <code>ADMIN_SOCKET_GROUP</code> (default <code>go53_admin</code>), so <code>root</code> and members of that group can administer the local node even when the external IdP that protects the TCP API is unreachable. The socket handler intentionally bypasses API authentication; the TCP listener is where token auth is enforced.</p>
+        <div class="note">
+          <p>Grant an operator local admin by adding them to the group: <code>sudo usermod -aG go53_admin alice</code>. Under systemd, provision the socket directory with <code>RuntimeDirectory=go53</code> so <code>/run/go53</code> exists with the right ownership.</p>
+        </div>
+        <p>The <code>go53ctl api</code> command is a thin passthrough that calls any admin route over the socket by default. It reads the socket path from <code>--socket</code> or <code>$GO53_ADMIN_SOCKET</code>, falling back to <code>/run/go53/admin.sock</code>. Pass <code>--api URL</code> to target the TCP API instead.</p>
+        <pre><code># Read live config locally, no token required
+go53ctl api GET /api/config
+
+# Change a setting
+go53ctl api PATCH /api/config '{"default_ttl":120}'
+
+# Create and delete a record
+go53ctl api POST /api/zones/example.com./records/A \
+  '{"name":"www.example.com.","ttl":300,"ip":"192.0.2.10"}'
+go53ctl api DELETE /api/zones/example.com./records/A/www.example.com.
+
+# Explicit socket path or TCP fallback
+go53ctl api --socket /run/go53/admin.sock GET /api/config
+go53ctl api --api http://127.0.0.1:8053 GET /api/config</code></pre>
+        <div class="warning">
+          <p>The socket grants unauthenticated, full administrative control of the local node to anyone who can open it. Keep <code>go53_admin</code> membership tight and ensure the socket directory is not world-writable. Cluster onboarding that touches remote peers still uses TCP — the socket administers the local node only.</p>
+        </div>
+
         <h3>Cluster Invite</h3>
         <p><code>go53ctl cluster invite</code> creates an Ed25519-signed JWT invite for a new distributed node. When join flags are omitted, the token acts as a cluster join capability: it contains issuer and existing-cluster data, while the joining node supplies its own reachable endpoints during <code>cluster join</code>. The invite is saved on the issuer through <code>POST /api/distributed/invites</code>, so the running server persists it through its own storage handle.</p>
         <pre><code>go53ctl cluster invite --usage-count 1</code></pre>

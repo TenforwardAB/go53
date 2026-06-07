@@ -28,9 +28,12 @@ import (
 	"strings"
 )
 
+// NewRouter builds the bare admin API router with no authentication. Auth must be
+// applied at the TCP transport layer (see Start), NOT here: the local admin Unix
+// socket reuses this same router and must stay unauthenticated so it can serve as the
+// break-glass administration path when the external IdP is unreachable.
 func NewRouter(cfg config.BaseConfig) http.Handler {
 	r := mux.NewRouter()
-	// r.Use(AuthMiddleware)
 
 	r.HandleFunc("/api/config", handlers.UpdateLiveConfigHandler).Methods("PATCH")
 	r.HandleFunc("/api/config", handlers.GetLiveConfigHandler).Methods("GET")
@@ -75,12 +78,15 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 }
 
 func Start(cfg config.BaseConfig) error {
-	router := NewRouter(cfg)
+	var handler http.Handler = NewRouter(cfg)
+	// Token authentication is enforced only on the TCP listener so the local admin
+	// Unix socket stays unauthenticated. Uncomment once AuthMiddleware is ready:
+	// handler = AuthMiddleware(handler)
 
 	addr := net.JoinHostPort(cfg.BindHost, strings.TrimPrefix(cfg.APIPort, ":"))
 	log.Printf("Starting API server on %s", addr)
 
-	return http.ListenAndServe(addr, router)
+	return http.ListenAndServe(addr, handler)
 }
 
 func disableSecondary(handler http.HandlerFunc) http.HandlerFunc {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -11,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -22,6 +24,48 @@ import (
 )
 
 const jwtAudienceClusterJoin = "go53 cluster join"
+
+// defaultAdminSocketPath mirrors the server's default ADMIN_SOCKET. The local admin
+// socket is the break-glass path: it serves the full API gated by filesystem
+// permissions (group go53_admin) instead of API tokens, so it stays usable when the
+// external IdP is unreachable.
+const defaultAdminSocketPath = "/run/go53/admin.sock"
+
+// apiClient carries every HTTP admin request. By default it dials TCP; useAdminSocket
+// swaps in a transport that dials a Unix socket instead, so the same request helpers
+// work over either transport without rewriting URLs (the socket dialer ignores the
+// URL host).
+var apiClient = http.DefaultClient
+
+// useAdminSocket routes all subsequent admin requests over the given Unix socket. An
+// empty path leaves the default TCP client in place.
+func useAdminSocket(path string) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return
+	}
+	apiClient = socketClient(path)
+}
+
+func socketClient(path string) *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", path)
+			},
+		},
+	}
+}
+
+// defaultAdminSocket resolves the admin socket path from GO53_ADMIN_SOCKET, falling
+// back to the server default.
+func defaultAdminSocket() string {
+	if v := strings.TrimSpace(os.Getenv("GO53_ADMIN_SOCKET")); v != "" {
+		return v
+	}
+	return defaultAdminSocketPath
+}
 
 type repeatedFlag []string
 
@@ -141,6 +185,10 @@ func main() {
 		handleCluster(os.Args[2:])
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "api" {
+		handleAPI(os.Args[2:])
+		return
+	}
 
 	var (
 		dbPath    string
@@ -190,10 +238,15 @@ func printMainUsage(help bool) {
 	fmt.Println(`Usage: go53ctl [COMMAND] [OPTIONS]
 
 Commands:
+  api METHOD PATH      Call any admin API route locally over the Unix socket (break-glass)
   cluster invite       Create a JWT invite token for a new distributed node
   cluster join         Join/configure a distributed node from a JWT invite token`)
 	if help {
 		fmt.Println(`
+Local admin examples (Unix socket, no API token):
+  go53ctl api GET /api/config
+  go53ctl api PATCH /api/config '{"default_ttl":120}'
+
 Cluster examples:
   go53ctl cluster invite
   go53ctl cluster join --token TOKEN
@@ -205,6 +258,10 @@ Zone storage tools:
 		return
 	}
 	fmt.Println(`
+Local admin over Unix socket (break-glass, filesystem-gated):
+  go53ctl api METHOD PATH [JSON_BODY]   Run 'go53ctl api' with no args for details
+  Requires root or membership in the admin socket group (default go53_admin).
+
 Zone storage tools:
   --db PATH            Path to BadgerDB (default: ../data/go53)
   --list-all-zones     List all zones with their record rtypes and counts
@@ -212,6 +269,7 @@ Zone storage tools:
   --count-only         Only show record counts instead of full record data
 
 Examples:
+  go53ctl api GET /api/config
   go53ctl cluster invite
   go53ctl cluster join --token TOKEN --api http://10.0.0.11:8053 --sync-endpoint tls://10.0.0.11:53530
   go53ctl --list-all-zones --count-only`)
@@ -347,6 +405,78 @@ func handleCluster(args []string) {
 		printClusterUsage()
 		os.Exit(1)
 	}
+}
+
+// handleAPI is the local break-glass admin client: a thin passthrough that calls any
+// admin API route over the Unix socket (default) so the full API stays administrable
+// without tokens when the IdP is down. Pass --api to target a TCP endpoint instead.
+func handleAPI(args []string) {
+	fs := flag.NewFlagSet("api", flag.ExitOnError)
+	socket := fs.String("socket", defaultAdminSocket(), "Unix admin socket for local break-glass admin")
+	apiBase := fs.String("api", "", "TCP API base URL (e.g. http://127.0.0.1:8053); overrides --socket")
+	fs.Usage = printAPIUsage
+	_ = fs.Parse(args)
+
+	rest := fs.Args()
+	if len(rest) < 2 {
+		printAPIUsage()
+		os.Exit(1)
+	}
+	method := strings.ToUpper(rest[0])
+	reqPath := rest[1]
+	if !strings.HasPrefix(reqPath, "/") {
+		reqPath = "/" + reqPath
+	}
+	var body io.Reader
+	if len(rest) >= 3 && rest[2] != "" {
+		body = strings.NewReader(rest[2])
+	}
+
+	client := http.DefaultClient
+	base := strings.TrimRight(*apiBase, "/")
+	if *apiBase == "" {
+		// The Unix dialer ignores the URL host, so any placeholder host works.
+		client = socketClient(*socket)
+		base = "http://go53-admin-socket"
+	}
+
+	req, err := http.NewRequest(method, base+reqPath, body)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if len(data) > 0 {
+		fmt.Println(strings.TrimRight(string(data), "\n"))
+	}
+	if resp.StatusCode >= 300 {
+		os.Exit(1)
+	}
+}
+
+func printAPIUsage() {
+	fmt.Println(`Usage:
+  go53ctl api METHOD PATH [JSON_BODY] [flags]
+
+Local break-glass admin over the Unix socket (filesystem-gated, no API token).
+Requires root or membership in the admin socket group (default go53_admin).
+
+Flags:
+  --socket   Unix admin socket path (default $GO53_ADMIN_SOCKET or /run/go53/admin.sock)
+  --api      TCP API base URL (e.g. http://127.0.0.1:8053); overrides --socket
+
+Examples:
+  go53ctl api GET /api/config
+  go53ctl api PATCH /api/config '{"default_ttl":120}'
+  go53ctl api POST /api/zones/example.com./records/A '{"name":"www.example.com.","ttl":300,"ip":"192.0.2.10"}'
+  go53ctl api DELETE /api/zones/example.com./records/A/www.example.com.`)
 }
 
 func printClusterUsage() {
@@ -690,7 +820,7 @@ func fetchLiveConfig(apiEndpoint string) (map[string]any, error) {
 }
 
 func getJSON(url string, out any) error {
-	resp, err := http.Get(url)
+	resp, err := apiClient.Get(url)
 	if err != nil {
 		return err
 	}
@@ -916,7 +1046,7 @@ func requestNoBody(method, url string) error {
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := apiClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -934,7 +1064,7 @@ func requestJSON(method, url string, value any) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := apiClient.Do(req)
 	if err != nil {
 		return err
 	}

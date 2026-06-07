@@ -1,0 +1,221 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run unit tests
+        run: go test ./api/... ./config/... ./distributed/... ./dns/... ./internal/... ./memory/... ./security/... ./zone/...
+
+  integration-test:
+    name: Integration Test (container)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build server and go53ctl
+        run: |
+          go build -o /tmp/go53-server ./cmd/server
+          go build -o /tmp/go53ctl    ./cmd/go53ctl
+
+      - name: Start go53 server
+        run: |
+          mkdir -p /tmp/go53-data /tmp/go53-run
+
+          BADGER_DIR=/tmp/go53-data      \
+          BIND_HOST=127.0.0.1            \
+          DNS_PORT=:5353                 \
+          API_PORT=:8053                 \
+          ADMIN_SOCKET=/tmp/go53-run/admin.sock \
+          ADMIN_SOCKET_GROUP=             \
+          STORAGE_BACKEND=badger         \
+          /tmp/go53-server &
+
+          echo "GO53_PID=$!" >> "$GITHUB_ENV"
+
+          # Wait for API to be ready (up to 15 s).
+          for i in $(seq 1 75); do
+            curl -sf http://127.0.0.1:8053/api/config >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -sf http://127.0.0.1:8053/api/config >/dev/null || { echo "API never came up"; exit 1; }
+
+          # Wait for admin socket.
+          for i in $(seq 1 50); do
+            [ -S /tmp/go53-run/admin.sock ] && break
+            sleep 0.2
+          done
+          [ -S /tmp/go53-run/admin.sock ] || { echo "Admin socket never appeared"; exit 1; }
+
+          echo "Server and admin socket ready."
+
+      - name: Verify initial config (TCP API)
+        run: |
+          MODE=$(curl -sf http://127.0.0.1:8053/api/config | python3 -c "import sys,json; print(json.load(sys.stdin)['mode'])")
+          echo "Initial mode: $MODE"
+          [ "$MODE" = "primary" ] || { echo "Expected mode=primary, got $MODE"; exit 1; }
+
+      - name: Verify initial config (admin socket via go53ctl)
+        run: |
+          MODE=$(GO53_ADMIN_SOCKET=/tmp/go53-run/admin.sock /tmp/go53ctl api GET /api/config \
+                 | python3 -c "import sys,json; print(json.load(sys.stdin)['mode'])")
+          echo "Socket mode: $MODE"
+          [ "$MODE" = "primary" ] || { echo "Expected mode=primary via socket, got $MODE"; exit 1; }
+
+      - name: Patch config via TCP API
+        run: |
+          curl -sf -X PATCH http://127.0.0.1:8053/api/config \
+            -H 'Content-Type: application/json' \
+            -d '{"default_ttl":120}' || { echo "PATCH config failed"; exit 1; }
+
+          TTL=$(curl -sf http://127.0.0.1:8053/api/config \
+                | python3 -c "import sys,json; print(json.load(sys.stdin)['default_ttl'])")
+          echo "default_ttl after PATCH: $TTL"
+          [ "$TTL" = "120" ] || { echo "Expected default_ttl=120, got $TTL"; exit 1; }
+
+      - name: Patch config via admin socket
+        run: |
+          GO53_ADMIN_SOCKET=/tmp/go53-run/admin.sock /tmp/go53ctl api PATCH /api/config \
+            '{"default_ttl":300}' || { echo "PATCH via socket failed"; exit 1; }
+
+          TTL=$(GO53_ADMIN_SOCKET=/tmp/go53-run/admin.sock /tmp/go53ctl api GET /api/config \
+                | python3 -c "import sys,json; print(json.load(sys.stdin)['default_ttl'])")
+          echo "default_ttl after socket PATCH: $TTL"
+          [ "$TTL" = "300" ] || { echo "Expected default_ttl=300, got $TTL"; exit 1; }
+
+      - name: Create test zone (SOA + NS + A + TXT records)
+        run: |
+          # Use a 2-part zone so SplitName(www.go53.test.) → zone=go53.test, host=www.
+          ZONE="go53.test."
+          API="http://127.0.0.1:8053"
+
+          curl -sf -X POST "$API/api/zones/$ZONE/records/SOA" \
+            -H 'Content-Type: application/json' \
+            -d '{"ttl":300,"ns":"ns1.go53.test.","mbox":"hostmaster.go53.test.","refresh":3600,"retry":600,"expire":86400,"minimum":60}' \
+            || { echo "SOA create failed"; exit 1; }
+
+          curl -sf -X POST "$API/api/zones/$ZONE/records/NS" \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"go53.test.","ttl":300,"ns":"ns1.go53.test."}' \
+            || { echo "NS create failed"; exit 1; }
+
+          for host in ns1 www mail; do
+            IP="192.0.2.$((RANDOM % 200 + 10))"
+            curl -sf -X POST "$API/api/zones/$ZONE/records/A" \
+              -H 'Content-Type: application/json' \
+              -d "{\"name\":\"${host}\",\"ttl\":300,\"ip\":\"${IP}\"}" \
+              || { echo "A record for $host failed"; exit 1; }
+            echo "Created A $host -> $IP"
+          done
+
+          curl -sf -X POST "$API/api/zones/$ZONE/records/TXT" \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"go53.test.","ttl":300,"text":"v=spf1 mx -all"}' \
+            || { echo "TXT create failed"; exit 1; }
+
+          echo "Zone $ZONE created."
+
+      - name: Read back records via TCP API
+        run: |
+          ZONE="go53.test."
+          API="http://127.0.0.1:8053"
+
+          curl -sf "$API/api/zones/$ZONE/records/SOA/$ZONE" \
+            | python3 -c "import sys,json; rr=json.load(sys.stdin); print('SOA ns:', rr[0]['Ns'])" \
+            || { echo "SOA read-back failed"; exit 1; }
+
+          curl -sf "$API/api/zones/$ZONE/records/A/www.$ZONE" \
+            | python3 -c "import sys,json; rr=json.load(sys.stdin); print('www A:', rr[0]['A'])" \
+            || { echo "www A read-back failed"; exit 1; }
+
+      - name: Read back records via admin socket (go53ctl)
+        run: |
+          ZONE="go53.test."
+          SOCK=/tmp/go53-run/admin.sock
+
+          GO53_ADMIN_SOCKET=$SOCK /tmp/go53ctl api GET "/api/zones/$ZONE/records/SOA/$ZONE" \
+            | python3 -c "import sys,json; rr=json.load(sys.stdin); print('socket SOA ns:', rr[0]['Ns'])" \
+            || { echo "SOA read via socket failed"; exit 1; }
+
+      - name: Query DNS (UDP)
+        run: |
+          ZONE="go53.test."
+          PORT=5353
+
+          SOA=$(dig @127.0.0.1 -p $PORT "$ZONE" SOA +short)
+          echo "SOA query: $SOA"
+          [ -n "$SOA" ] || { echo "SOA DNS query returned empty"; exit 1; }
+
+          WWW=$(dig @127.0.0.1 -p $PORT "www.$ZONE" A +short)
+          echo "www A query: $WWW"
+          [ -n "$WWW" ] || { echo "www A DNS query returned empty"; exit 1; }
+
+          TXT=$(dig @127.0.0.1 -p $PORT "$ZONE" TXT +short)
+          echo "TXT query: $TXT"
+          [ -n "$TXT" ] || { echo "TXT DNS query returned empty"; exit 1; }
+
+      - name: Create and read a TSIG key
+        run: |
+          API="http://127.0.0.1:8053"
+          SECRET=$(python3 -c "import base64,os; print(base64.b64encode(os.urandom(32)).decode())")
+
+          curl -sf -X POST "$API/api/tsig/ci-tsig-key." \
+            -H 'Content-Type: application/json' \
+            -d "{\"algorithm\":\"hmac-sha256.\",\"secret\":\"${SECRET}\"}" \
+            || { echo "TSIG create failed"; exit 1; }
+
+          curl -sf "$API/api/tsig" \
+            | python3 -c "import sys,json; keys=json.load(sys.stdin); assert 'ci-tsig-key.' in keys, f'key missing: {keys}'; print('TSIG key present')" \
+            || { echo "TSIG list failed"; exit 1; }
+
+          curl -sf -X DELETE "$API/api/tsig/ci-tsig-key." \
+            || { echo "TSIG delete failed"; exit 1; }
+
+          curl -sf "$API/api/tsig" \
+            | python3 -c "import sys,json; keys=json.load(sys.stdin); assert 'ci-tsig-key.' not in keys, 'key still present'; print('TSIG key gone')" \
+            || { echo "TSIG post-delete check failed"; exit 1; }
+
+      - name: Add record and delete it via admin socket
+        run: |
+          ZONE="go53.test."
+          SOCK=/tmp/go53-run/admin.sock
+
+          GO53_ADMIN_SOCKET=$SOCK /tmp/go53ctl api POST "/api/zones/$ZONE/records/A" \
+            '{"name":"temp","ttl":60,"ip":"198.51.100.99"}' \
+            || { echo "socket POST record failed"; exit 1; }
+
+          curl -sf "http://127.0.0.1:8053/api/zones/$ZONE/records/A/temp.$ZONE" \
+            | python3 -c "import sys,json; rr=json.load(sys.stdin); print('temp A:', rr[0]['A'])" \
+            || { echo "temp record not found after socket create"; exit 1; }
+
+          GO53_ADMIN_SOCKET=$SOCK /tmp/go53ctl api DELETE "/api/zones/$ZONE/records/A/temp.$ZONE" \
+            || { echo "socket DELETE record failed"; exit 1; }
+
+          STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+            "http://127.0.0.1:8053/api/zones/$ZONE/records/A/temp.$ZONE")
+          [ "$STATUS" = "404" ] || { echo "temp record still present after socket delete (status $STATUS)"; exit 1; }
+          echo "Record create/delete via socket: OK"
+
+      - name: Stop server
+        if: always()
+        run: |
+          [ -n "${GO53_PID:-}" ] && kill "$GO53_PID" 2>/dev/null || true

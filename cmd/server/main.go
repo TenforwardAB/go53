@@ -89,6 +89,10 @@ func main() {
 		}
 	}()
 
+	// Local break-glass admin: the full API served over a Unix socket gated by
+	// filesystem permissions (group go53_admin), usable when the IdP is unreachable.
+	go api.StartAdminSocket(base)
+
 	log.Println("Starting REST API on", base.APIPort)
 	if err := api.Start(base); err != nil {
 		log.Fatal(err)

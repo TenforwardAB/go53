@@ -257,6 +257,8 @@
             <tr><td><code>STORAGE_BACKEND</code></td><td>string</td><td><code>badger</code></td><td>Selects the storage implementation passed to <code>storage.Init</code>; currently <code>badger</code> is the implemented backend.</td></tr>
             <tr><td><code>POSTGRES_DSN</code></td><td>string</td><td><code>host=localhost port=5432 user=postgres password=postgres dbname=go53 sslmode=disable</code></td><td>Stored in base config for a Postgres backend; current storage initialization does not enable Postgres.</td></tr>
             <tr><td><code>BADGER_DIR</code></td><td>string</td><td><code>/data/go53</code></td><td>Filesystem directory opened by the Badger storage backend.</td></tr>
+            <tr><td><code>ADMIN_SOCKET</code></td><td>string</td><td><code>/run/go53/admin.sock</code></td><td>Path to the local admin Unix socket serving the full API gated by filesystem permissions instead of API tokens (break-glass local admin). Empty disables it.</td></tr>
+            <tr><td><code>ADMIN_SOCKET_GROUP</code></td><td>string</td><td><code>go53_admin</code></td><td>OS group granted access to the admin socket (mode <code>0660</code>). A missing group falls back to owner-only access.</td></tr>
           </tbody>
         </table>
       </section>
