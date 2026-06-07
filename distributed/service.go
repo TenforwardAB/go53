@@ -13,7 +13,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -186,24 +185,45 @@ func (s *Service) PublishDelete(zone, rrtype, name string) error {
 	})
 }
 
-func (s *Service) PublishConfig(partial config.LiveConfig) error {
+// PublishConfig replicates a live-config change to peers. It takes the raw JSON patch
+// (only the keys the admin actually set), so presence is preserved end-to-end and
+// false/empty values propagate. The node-local distributed block is stripped so peers
+// never overwrite their own identity, keys, or sync listener.
+func (s *Service) PublishConfig(raw []byte) error {
 	if s == nil || !readyToPublish() {
 		return nil
 	}
-	partial.Distributed = config.DistributedConfig{}
-	if reflect.DeepEqual(partial, config.LiveConfig{}) {
-		return nil
-	}
-	raw, err := json.Marshal(partial)
+	stripped, hasKeys, err := stripDistributedKey(raw)
 	if err != nil {
 		return err
+	}
+	if !hasKeys {
+		return nil
 	}
 	return s.publish(Event{
 		EntityType: EntityConfig,
 		Name:       "live",
 		Operation:  OperationUpsert,
-		Value:      raw,
+		Value:      stripped,
 	})
+}
+
+// stripDistributedKey removes the node-local "distributed" object from a live-config
+// JSON patch, returning the re-encoded document and whether any keys remain.
+func stripDistributedKey(raw []byte) ([]byte, bool, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, false, err
+	}
+	delete(fields, "distributed")
+	if len(fields) == 0 {
+		return nil, false, nil
+	}
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
 }
 
 func (s *Service) PublishTSIGKey(name string, value any) error {
@@ -845,13 +865,17 @@ func (s *Service) applyConfigEvent(event Event) error {
 	if event.Operation != OperationUpsert {
 		return fmt.Errorf("unsupported config operation %q", event.Operation)
 	}
-	var partial config.LiveConfig
-	if err := json.Unmarshal(event.Value, &partial); err != nil {
+	// Defensively strip the node-local distributed block; a peer must never overwrite
+	// its own identity/keys/listener from a replicated config event. The JSON-overlay
+	// merge preserves presence so false/empty values from the origin are applied.
+	stripped, hasKeys, err := stripDistributedKey(event.Value)
+	if err != nil {
 		return err
 	}
-	partial.Distributed = config.DistributedConfig{}
-	config.AppConfig.MergeUpdateLive(partial)
-	return nil
+	if !hasKeys {
+		return nil
+	}
+	return config.AppConfig.MergeUpdateLiveJSON(stripped)
 }
 
 func (s *Service) applyTSIGEvent(event Event) error {

@@ -8,7 +8,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/asn1"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -488,17 +487,20 @@ func serverTLSConfig() (*tls.Config, error) {
 	}, nil
 }
 
-func clientTLSConfig(peer string) (*tls.Config, error) {
+func clientTLSConfig(_ string) (*tls.Config, error) {
 	cert, err := localTLSCertificate()
 	if err != nil {
 		return nil, err
 	}
-	serverName := tlsServerName(peer)
+	// Trust is established by Ed25519 public-key pinning (peer_public_keys), not by
+	// PKI chain/hostname validation. Standard verification would reject peers reached
+	// by IP literal (the auto-generated certs only carry the node_id as a DNS SAN), so
+	// we disable it and pin the peer key in VerifyConnection instead. The server side
+	// likewise pins the client cert via RequireAnyClientCert + verifyPeerCertificate.
 	return &tls.Config{
-		MinVersion:   tls.VersionTLS13,
-		ServerName:   serverName,
-		Certificates: []tls.Certificate{cert},
-		RootCAs:      peerPublicKeyCertPool(),
+		MinVersion:         tls.VersionTLS13,
+		Certificates:       []tls.Certificate{cert},
+		InsecureSkipVerify: true,
 		VerifyConnection: func(state tls.ConnectionState) error {
 			return verifyPeerPublicKey(state.PeerCertificates)
 		},
@@ -616,45 +618,6 @@ func verifyPeerPublicKey(peerCerts []*x509.Certificate) error {
 		}
 	}
 	return errors.New("peer TLS certificate public key is not trusted")
-}
-
-func peerPublicKeyCertPool() *x509.CertPool {
-	pool := x509.NewCertPool()
-	for nodeID, configured := range liveConfig().Distributed.PeerPublicKeys {
-		pub, err := publicKey(configured)
-		if err != nil {
-			continue
-		}
-		cert, err := peerPinnedCertificate(nodeID, pub)
-		if err != nil {
-			continue
-		}
-		pool.AddCert(cert)
-	}
-	return pool
-}
-
-func peerPinnedCertificate(nodeID string, pub ed25519.PublicKey) (*x509.Certificate, error) {
-	serialBytes := sha256.Sum256([]byte("go53-sync-tls-v1:" + nodeID + ":" + base64.StdEncoding.EncodeToString(pub)))
-	subject := pkix.Name{CommonName: nodeID}
-	rawSubject, err := asn1.Marshal(subject.ToRDNSequence())
-	if err != nil {
-		return nil, err
-	}
-	return &x509.Certificate{
-		RawSubject:            rawSubject,
-		SerialNumber:          new(big.Int).SetBytes(serialBytes[:16]),
-		Subject:               subject,
-		NotBefore:             time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
-		NotAfter:              time.Date(2124, 1, 1, 0, 0, 0, 0, time.UTC),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-		DNSNames:              []string{nodeID},
-		PublicKeyAlgorithm:    x509.Ed25519,
-		PublicKey:             pub,
-	}, nil
 }
 
 func verifyTLSConnNode(conn net.Conn, nodeID string) error {

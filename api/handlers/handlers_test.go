@@ -82,6 +82,25 @@ func TestConfigHandlers(t *testing.T) {
 		t.Fatalf("decoded live config = %#v", decoded)
 	}
 
+	// A present false bool must be applied (a struct-merge would silently drop it).
+	if !config.AppConfig.GetLive().EnableEDNS {
+		t.Fatalf("precondition: expected enable_edns true by default")
+	}
+	offReq := httptest.NewRequest(http.MethodPatch, "/api/config", strings.NewReader(`{"enable_edns":false}`))
+	offRec := httptest.NewRecorder()
+	UpdateLiveConfigHandler(offRec, offReq)
+	if offRec.Code != http.StatusNoContent {
+		t.Fatalf("disable enable_edns status = %d body=%q", offRec.Code, offRec.Body.String())
+	}
+	after := config.AppConfig.GetLive()
+	if after.EnableEDNS {
+		t.Fatalf("expected enable_edns=false after patch")
+	}
+	// Unrelated fields set earlier must be untouched.
+	if after.Mode != "secondary" || after.DefaultTTL != 123 {
+		t.Fatalf("patch clobbered unrelated fields: %#v", after)
+	}
+
 	badReq := httptest.NewRequest(http.MethodPatch, "/api/config", strings.NewReader(`{`))
 	badRec := httptest.NewRecorder()
 	UpdateLiveConfigHandler(badRec, badReq)

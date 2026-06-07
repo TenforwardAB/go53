@@ -67,6 +67,7 @@ type LiveConfig struct {
 	Version        string `json:"version"`         // CHAOS version.bind
 	MaxUDPSize     int    `json:"max_udp_size"`    // e.g. 1232
 	EnableEDNS     bool   `json:"enable_edns"`     // "true"/"false"
+	NSID           string `json:"nsid"`            // EDNS0 NSID (RFC 5001); empty = disabled
 	RateLimitQPS   int    `json:"rate_limit_qps"`  // queries per second
 	AllowAXFR      bool   `json:"allow_axfr"`      // "true"/"false"
 	DefaultNS      string `json:"default_ns"`      // e.g. ns1.example.com
@@ -341,6 +342,43 @@ func (cm *ConfigManager) MergeUpdateLive(partial LiveConfig) {
 	if err := cm.persistLiveConfigUnlocked(toPersist); err != nil {
 		log.Println("MergeUpdateLive: failed to persist:", err)
 	}
+}
+
+// MergeUpdateLiveJSON overlays a partial config JSON document onto the current live
+// config and persists the result. Unlike MergeUpdateLive/MergeStructs (which skip
+// zero-valued source fields), only the JSON keys actually present in raw are changed —
+// so a present false bool or empty string IS applied, while fields absent from the
+// document keep their current values. json.Unmarshal recurses into nested structs,
+// setting only the sub-fields present in the document.
+func (cm *ConfigManager) MergeUpdateLiveJSON(raw []byte) error {
+	cm.mu.Lock()
+	merged := cm.Live
+	// Clone nested maps so an in-place unmarshal cannot mutate the live config before commit.
+	merged.Distributed.PeerPublicKeys = clonePeerPublicKeys(cm.Live.Distributed.PeerPublicKeys)
+	if err := json.Unmarshal(raw, &merged); err != nil {
+		cm.mu.Unlock()
+		return err
+	}
+	cm.Live = merged
+	toPersist := cm.Live
+	cm.mu.Unlock()
+
+	if err := cm.persistLiveConfigUnlocked(toPersist); err != nil {
+		log.Println("MergeUpdateLiveJSON: failed to persist:", err)
+		return err
+	}
+	return nil
+}
+
+func clonePeerPublicKeys(in map[string]string) map[string]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func MustEnv(key, fallback string) string {

@@ -9,6 +9,7 @@ var DefaultLiveConfig = LiveConfig{
 	Version:        "go53 1.0.1",
 	MaxUDPSize:     1232,
 	EnableEDNS:     true,
+	NSID:           "", // empty = NSID disabled, avoids leaking node identity by default
 	RateLimitQPS:   0, // 0 = no rate limiting
 	AllowAXFR:      false,
 	DefaultNS:      "ns1.go53.local.",

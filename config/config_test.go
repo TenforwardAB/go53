@@ -264,3 +264,42 @@ func TestInitUsesDefaults(t *testing.T) {
 		t.Errorf("Expected default DNS port '%s', got '%s'", config.DefaultBaseConfig.DNSPort, base.DNSPort)
 	}
 }
+
+func TestMergeUpdateLiveJSONAppliesFalseAndEmpty(t *testing.T) {
+	setupMockStorage()
+	cm := &config.ConfigManager{}
+	cm.UpdateLive(config.LiveConfig{
+		Mode:       "distributed",
+		EnableEDNS: true,
+		NSID:       "node-a",
+		DefaultTTL: 60,
+	})
+
+	// A struct-merge would drop the false bool and empty string; the JSON overlay must keep them.
+	if err := cm.MergeUpdateLiveJSON([]byte(`{"enable_edns":false,"nsid":""}`)); err != nil {
+		t.Fatalf("MergeUpdateLiveJSON: %v", err)
+	}
+
+	live := cm.GetLive()
+	if live.EnableEDNS {
+		t.Errorf("expected enable_edns=false, got true")
+	}
+	if live.NSID != "" {
+		t.Errorf("expected nsid cleared, got %q", live.NSID)
+	}
+	// Fields absent from the patch must be left unchanged.
+	if live.Mode != "distributed" {
+		t.Errorf("expected mode unchanged 'distributed', got %q", live.Mode)
+	}
+	if live.DefaultTTL != 60 {
+		t.Errorf("expected default_ttl unchanged 60, got %d", live.DefaultTTL)
+	}
+}
+
+func TestMergeUpdateLiveJSONInvalidBody(t *testing.T) {
+	setupMockStorage()
+	cm := &config.ConfigManager{}
+	if err := cm.MergeUpdateLiveJSON([]byte(`{not json`)); err == nil {
+		t.Fatalf("expected error for invalid JSON body")
+	}
+}

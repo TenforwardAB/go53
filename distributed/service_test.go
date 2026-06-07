@@ -124,7 +124,7 @@ func TestPublishMetadataEventsAndInviteLifecycle(t *testing.T) {
 	}
 	svc := newTestService(t, "node-a", priv, nil)
 
-	if err := svc.PublishConfig(config.LiveConfig{DefaultTTL: 600}); err != nil {
+	if err := svc.PublishConfig([]byte(`{"default_ttl":600}`)); err != nil {
 		t.Fatalf("PublishConfig: %v", err)
 	}
 	if err := svc.PublishTSIGKey("xfr-key.", map[string]any{"algorithm": "hmac-sha256.", "secret": "abc"}); err != nil {
@@ -166,6 +166,57 @@ func TestPublishMetadataEventsAndInviteLifecycle(t *testing.T) {
 	}
 	if err := svc.SaveInvite(InviteRecord{TokenID: "bad"}); err == nil {
 		t.Fatalf("SaveInvite accepted zero usage count")
+	}
+}
+
+func TestApplyConfigEventAppliesFalseAndProtectsIdentity(t *testing.T) {
+	priv, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	svc := newTestService(t, "node-a", priv, nil)
+	if !config.AppConfig.GetLive().EnableEDNS {
+		t.Fatalf("precondition: expected enable_edns true by default")
+	}
+
+	// A replicated config event carrying a false bool must turn it off (struct-merge could not).
+	if err := svc.applyConfigEvent(Event{Operation: OperationUpsert, Value: []byte(`{"enable_edns":false}`)}); err != nil {
+		t.Fatalf("applyConfigEvent: %v", err)
+	}
+	if config.AppConfig.GetLive().EnableEDNS {
+		t.Fatalf("expected enable_edns=false after config event")
+	}
+
+	// A config event must never overwrite the node's own distributed identity.
+	if err := svc.applyConfigEvent(Event{Operation: OperationUpsert, Value: []byte(`{"distributed":{"node_id":"evil"}}`)}); err != nil {
+		t.Fatalf("applyConfigEvent (distributed-only): %v", err)
+	}
+	if got := config.AppConfig.GetLive().Distributed.NodeID; got != "node-a" {
+		t.Fatalf("config event clobbered node identity: %q", got)
+	}
+}
+
+func TestStripDistributedKey(t *testing.T) {
+	out, has, err := stripDistributedKey([]byte(`{"enable_edns":false,"distributed":{"node_id":"x"}}`))
+	if err != nil {
+		t.Fatalf("stripDistributedKey: %v", err)
+	}
+	if !has {
+		t.Fatalf("expected remaining keys after stripping distributed")
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(out, &fields); err != nil {
+		t.Fatalf("unmarshal stripped: %v", err)
+	}
+	if _, ok := fields["distributed"]; ok {
+		t.Fatalf("distributed block not stripped: %s", out)
+	}
+	if _, ok := fields["enable_edns"]; !ok {
+		t.Fatalf("non-distributed field dropped: %s", out)
+	}
+
+	if _, has, err := stripDistributedKey([]byte(`{"distributed":{"node_id":"x"}}`)); err != nil || has {
+		t.Fatalf("expected no remaining keys for distributed-only patch (has=%v err=%v)", has, err)
 	}
 }
 

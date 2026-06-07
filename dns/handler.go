@@ -77,6 +77,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		log.Printf("Refusing DNS request with QDCOUNT=%d; only one question is supported", len(r.Question))
 		m.SetRcode(r, dns.RcodeFormatError)
 		m.Authoritative = false
+		dnsutils.ApplyNSID(m, r)
 		_ = w.WriteMsg(m)
 		return
 	}
@@ -231,6 +232,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 
+	dnsutils.ApplyNSID(m, r)
 	_ = w.WriteMsg(m)
 }
 

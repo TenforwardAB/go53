@@ -185,6 +185,7 @@ func writeTransferMessage(w dns.ResponseWriter, req *dns.Msg, answer []dns.RR, t
 	if config.AppConfig.GetLive().EnforceTSIG && tsigKey != "" {
 		msg.SetTsig(tsigKey, dns.HmacSHA256, 300, time.Now().Unix())
 	}
+	ApplyNSID(msg, req)
 	if err := w.WriteMsg(msg); err != nil {
 		log.Printf("Failed to send transfer response: %v", err)
 	}
@@ -204,6 +205,7 @@ func respondWithRcode(w dns.ResponseWriter, req *dns.Msg, rcode int) {
 	m := new(dns.Msg)
 	if req != nil {
 		m.SetRcode(req, rcode)
+		ApplyNSID(m, req)
 	} else {
 		m.MsgHdr.Rcode = rcode
 	}
