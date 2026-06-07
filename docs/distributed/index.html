@@ -1,0 +1,1091 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>go53 Distributed Mode Technical Guide</title>
+  <meta name="description" content="Comprehensive technical guide to go53 distributed mode: architecture, encryption, protocol, and replication.">
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>mermaid.initialize({ startOnLoad: true, theme: 'light', securityLevel: 'loose' });</script>
+  <style>
+    :root {
+      --bg: #f7f6f2;
+      --surface: #ffffff;
+      --text: #1e2428;
+      --muted: #5f6970;
+      --line: #d9ddd7;
+      --accent: #0f766e;
+      --accent-strong: #0b4f49;
+      --code-bg: #172026;
+      --code-text: #e9f1ee;
+      --warn-bg: #fff7df;
+      --warn-border: #e3b341;
+      --info-bg: #e8f3ef;
+      --info-border: #0f766e;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+
+    a {
+      color: var(--accent-strong);
+      text-decoration-thickness: 0.08em;
+      text-underline-offset: 0.18em;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    nav {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow: auto;
+      padding: 32px 24px;
+      border-right: 1px solid var(--line);
+      background: #eef2ee;
+    }
+
+    nav .brand {
+      margin: 0 0 4px;
+      font-size: 1.5rem;
+      font-weight: 800;
+    }
+
+    nav .subtitle {
+      margin: 0 0 24px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    nav ul {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    nav li {
+      margin: 0 0 8px;
+    }
+
+    nav a {
+      display: block;
+      padding: 6px 0;
+      color: var(--text);
+      text-decoration: none;
+      font-size: 0.95rem;
+    }
+
+    nav a:hover {
+      color: var(--accent);
+    }
+
+    main {
+      width: min(1120px, 100%);
+      padding: 44px clamp(20px, 5vw, 72px) 80px;
+    }
+
+    header {
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: clamp(2rem, 5vw, 3.6rem);
+      line-height: 1.02;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 44px 0 14px;
+      font-size: 1.7rem;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 28px 0 10px;
+      font-size: 1.15rem;
+      letter-spacing: 0;
+    }
+
+    p {
+      max-width: 78ch;
+      margin: 0 0 16px;
+    }
+
+    .lead {
+      color: var(--muted);
+      font-size: 1.08rem;
+      max-width: 82ch;
+    }
+
+    section {
+      max-width: 980px;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.92em;
+    }
+
+    p code,
+    li code,
+    td code {
+      padding: 0.08rem 0.26rem;
+      border-radius: 4px;
+      background: #e7ece8;
+    }
+
+    pre {
+      max-width: 100%;
+      margin: 12px 0 24px;
+      padding: 16px;
+      overflow: auto;
+      border-radius: 8px;
+      background: var(--code-bg);
+      color: var(--code-text);
+    }
+
+    pre code {
+      font-size: 0.9rem;
+      white-space: pre;
+    }
+
+    .note {
+      margin: 16px 0 24px;
+      padding: 14px 16px;
+      border-left: 4px solid var(--accent);
+      background: var(--info-bg);
+    }
+
+    .warning {
+      margin: 16px 0 24px;
+      padding: 14px 16px;
+      border-left: 4px solid var(--warn-border);
+      background: var(--warn-bg);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0 28px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+    }
+
+    th,
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      font-size: 0.94rem;
+    }
+
+    th {
+      background: #edf1ed;
+      font-weight: 700;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    ul {
+      margin-top: 8px;
+      padding-left: 1.25rem;
+    }
+
+    li {
+      margin-bottom: 6px;
+    }
+
+    .diagram {
+      margin: 24px 0;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      overflow-x: auto;
+    }
+
+    .mermaid {
+      display: flex;
+      justify-content: center;
+      margin: 12px 0;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 14px;
+      margin: 16px 0 28px;
+    }
+
+    .panel {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+
+    .panel h3 {
+      margin-top: 0;
+    }
+
+    footer {
+      margin-top: 52px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    @media (max-width: 860px) {
+      .layout {
+        display: block;
+      }
+
+      nav {
+        position: static;
+        height: auto;
+        padding: 22px 20px;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      nav ul {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 2px 14px;
+      }
+
+      main {
+        padding-top: 30px;
+      }
+
+      table {
+        display: block;
+        overflow-x: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <nav aria-label="Documentation navigation">
+      <p class="brand">go53</p>
+      <p class="subtitle">Distributed mode</p>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#architecture">Architecture</a></li>
+        <li><a href="#encryption">Encryption & Security</a></li>
+        <li><a href="#protocol">Protocol Details</a></li>
+        <li><a href="#vector-clocks">Vector Clocks</a></li>
+        <li><a href="#merkle-repair">Merkle Repair</a></li>
+        <li><a href="#replication-flow">Event Replication</a></li>
+        <li><a href="#frame-types">Frame Types</a></li>
+        <li><a href="#data-model">Data Model</a></li>
+      </ul>
+    </nav>
+
+    <main>
+      <header>
+        <h1>Distributed Mode Technical Guide</h1>
+        <p class="lead">Comprehensive documentation of go53's multi-node replication system, covering architecture, cryptographic signing, protocol design, vector clocks, and Merkle tree-based integrity repair.</p>
+      </header>
+
+      <section id="overview">
+        <h2>Overview</h2>
+        <p>Distributed mode enables multi-node go53 clusters where all nodes accept mutations locally and replicate state changes to peers through signed events. This design supports eventual consistency with cryptographic integrity guarantees and automated repair of divergent state.</p>
+        <p>Key characteristics:</p>
+        <ul>
+          <li><strong>Multi-writer:</strong> Any node can accept DNS record mutations, TSIG key changes, DNSSEC key updates, and configuration patches without blocking on peer responses.</li>
+          <li><strong>Event-driven:</strong> All state changes are published as signed events that include vector clock information for partial ordering.</li>
+          <li><strong>Cryptographically signed:</strong> Every event and handshake frame is signed with Ed25519 keys, preventing tampering and providing non-repudiation.</li>
+          <li><strong>Persistent replication:</strong> Nodes maintain long-lived TCP or TLS connections to peers, creating a gossip mesh that pushes events immediately.</li>
+          <li><strong>Eventual repair:</strong> Periodic background syncs compare vector clocks and Merkle roots to detect and repair state divergence.</li>
+        </ul>
+        <div class="note">
+          <p><strong>Use case:</strong> Distributed mode is suited for clusters needing low-latency API-driven DNS updates across geographically distributed nodes without primary–secondary write constraints.</p>
+        </div>
+      </section>
+
+      <section id="architecture">
+        <h2>Architecture</h2>
+        <p>A go53 distributed cluster consists of independent nodes, each running with <code>mode=distributed</code>. Nodes form a mesh topology where each node is configured with a set of peer endpoints. In a three-node cluster, for example, each node dials the other two and accepts incoming connections from them, creating redundancy and fault tolerance.</p>
+
+        <h3>Cluster Topology</h3>
+        <p>The diagram below shows a three-node distributed cluster where events flow through multiple paths:</p>
+
+        <div class="diagram">
+          <div class="mermaid">
+            graph TB
+              subgraph Cluster["Distributed Cluster"]
+                direction TB
+                NodeA["Node A<br/>node-a"]
+                NodeB["Node B<br/>node-b"]
+                NodeC["Node C<br/>node-c"]
+              end
+
+              subgraph Clients["Clients"]
+                direction TB
+                DNS1["DNS Clients"]
+                API1["API Clients"]
+              end
+
+              NodeA -->|TLS sync| NodeB
+              NodeB -->|TLS sync| NodeA
+              NodeB -->|TLS sync| NodeC
+              NodeC -->|TLS sync| NodeB
+                NodeA -->|TLS sync| NodeC
+                NodeC -->|TLS sync| NodeA
+
+              DNS1 -->|UDP/TCP<br/>:53| NodeA
+              DNS1 -->|UDP/TCP<br/>:53| NodeB
+              DNS1 -->|UDP/TCP<br/>:53| NodeC
+              API1 -->|HTTP<br/>:8053| NodeA
+              API1 -->|HTTP<br/>:8053| NodeB
+              API1 -->|HTTP<br/>:8053| NodeC
+
+              style Cluster fill:#e8f3ef
+              style DNS1 fill:#fff4dc
+              style API1 fill:#fff4dc
+              style NodeA fill:#d4f1e4
+              style NodeB fill:#d4f1e4
+              style NodeC fill:#d4f1e4
+          </div>
+        </div>
+
+        <p>Each node exposes three independent listeners:</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Listener</th>
+              <th>Port</th>
+              <th>Purpose</th>
+              <th>Clients</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>DNS</td>
+              <td><code>:53</code> (UDP/TCP)</td>
+              <td>Authoritative DNS query handling</td>
+              <td>Recursive resolvers, clients</td>
+            </tr>
+            <tr>
+              <td>API</td>
+              <td><code>:8053</code> (HTTP/HTTPS)</td>
+              <td>Zone management, record operations, discovery</td>
+              <td>Operators, automation, <code>go53ctl</code></td>
+            </tr>
+            <tr>
+              <td>Sync</td>
+              <td><code>:53530</code> (TCP/TLS)</td>
+              <td>Peer-to-peer event replication</td>
+              <td>Other nodes in the cluster</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Node Identity</h3>
+        <p>Each node has a stable identity consisting of:</p>
+        <ul>
+          <li><code>node_id</code>: A string like <code>node-a</code> used in event origins, vector clocks, and discovery.</li>
+          <li><code>Ed25519 key pair</code>: A private key for signing events and HELLO frames, and a public key distributed to peers.</li>
+          <li><code>TLS certificate</code>: Auto-generated from the Ed25519 key for secure peer connections. Public key pinning replaces traditional CA chains.</li>
+        </ul>
+      </section>
+
+      <section id="encryption">
+        <h2>Encryption & Security</h2>
+
+        <h3>Ed25519 Signing</h3>
+        <p>All events and critical handshake messages are signed with Ed25519, a modern elliptic-curve signature scheme offering 128 bits of symmetric security. go53 uses Ed25519 for three purposes:</p>
+        <ol>
+          <li><strong>Event signatures:</strong> Each event carries a base64-encoded Ed25519 signature over the canonical JSON representation of its payload (including EventID, Origin, Seq, Entity, EntityType, Zone, RRType, Name, Operation, Value, Vector, and CreatedAt).</li>
+          <li><strong>HELLO frame proof:</strong> The initial handshake frame includes a signed nonce challenge-response to verify node identity before accepting sync.</li>
+          <li><strong>Automatic TLS certificate:</strong> A self-signed X.509 certificate is generated from each node's Ed25519 key, presenting the public key in the certificate's subject and allowing peers to verify the connection endpoint matches the expected node.</li>
+        </ol>
+
+        <h3>Peer Trust Model</h3>
+        <p>Rather than relying on a certificate authority, distributed mode uses a public key pinning model:</p>
+        <ul>
+          <li>Each node is configured with <code>distributed.peer_public_keys</code>: a map of peer <code>node_id</code> to base64-encoded Ed25519 public key.</li>
+          <li>When establishing a TLS connection, the peer's certificate is verified to match the pinned public key, not a CA signature.</li>
+          <li>This avoids the need for external PKI and ensures that only nodes with the correct Ed25519 private key can join the cluster.</li>
+        </ul>
+
+        <h3>Transport Security</h3>
+        <p>The sync socket can operate in four modes:</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Transport</th>
+              <th>Encryption</th>
+              <th>Auth</th>
+              <th>Use Case</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>tcp</code></td>
+              <td>None</td>
+              <td>Ed25519 signatures only</td>
+              <td>Development, air-gapped networks</td>
+            </tr>
+            <tr>
+              <td><code>tls</code></td>
+              <td>TLS 1.3, public key pinning</td>
+              <td>Ed25519 signatures + TLS cert verification</td>
+              <td>Production, untrusted networks</td>
+            </tr>
+            <tr>
+              <td><code>mtls</code></td>
+              <td>TLS 1.3, mutual auth</td>
+              <td>Client + server certs, both pinned</td>
+              <td>Zero-trust networks, strict enforcement</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="note">
+          <p><strong>Recommended:</strong> Use <code>tls</code> or <code>mtls</code> transport in production. TLS 1.3 provides modern cipher suites and forward secrecy, while Ed25519 signatures provide origin authentication independent of the transport layer.</p>
+        </div>
+
+        <h3>Cryptographic Flow</h3>
+        <p>The diagram below illustrates how encryption and signing flow through a typical replication event:</p>
+
+        <div class="diagram">
+          <div class="mermaid">
+            sequenceDiagram
+              participant App as Client API
+              participant Node as go53 Node
+              participant Store as Storage
+              participant Peer as Peer Node
+
+              App->>Node: PATCH /api/zones/example.com./records/A<br/>(new record)
+              Node->>Store: Persist record
+              Node->>Node: Create Event{EventID, Origin, Seq, ..., Vector}
+              Node->>Node: Sign Event with Ed25519 private key<br/>Signature = Sign(canonical JSON)
+              Node->>Peer: Push EVENT frame (TLS encrypted)
+              Peer->>Peer: Verify Ed25519 signature over Event
+              Peer->>Peer: Apply record if signature valid
+              Peer->>Store: Persist record locally
+              Peer->>Node: Send ACK frame
+          </div>
+        </div>
+      </section>
+
+      <section id="protocol">
+        <h2>Protocol Details</h2>
+
+        <h3>Transport Layer</h3>
+        <p>The sync protocol uses a persistent TCP or TLS socket with a length-prefixed frame format. Each frame is a JSON object prefixed by a 4-byte big-endian integer indicating the frame size in bytes. Frames can reach up to 16 MB.</p>
+
+        <pre><code>┌─────────────┬──────────────────┐
+│ 4-byte size │ JSON frame body  │
+│ (big-endian)│ (UTF-8 encoded)  │
+└─────────────┴──────────────────┘</code></pre>
+
+        <p>This design allows pipelined frames and simple framing without additional delimiters or escape sequences.</p>
+
+        <h3>Connection Lifecycle</h3>
+        <p>Distributed nodes establish sync connections following this sequence:</p>
+
+        <div class="diagram">
+          <div class="mermaid">
+            sequenceDiagram
+              participant Local as Local Node
+              participant Remote as Remote Node
+
+              Local->>Local: Dial tls://remote:53530
+              Local->>Remote: Send HELLO frame<br/>{type: "HELLO", node_id: "local",<br/>nonce: "...", proof: "..."}
+              Remote->>Remote: Verify signature(nonce) matches<br/>local's public key
+              Remote->>Local: Send HELLO frame<br/>(signed response)
+              Local->>Local: Verify remote's proof
+              Note over Local,Remote: Connection established<br/>Ready for EVENT exchanges
+              opt Sync required
+                Local->>Remote: Send VECTOR_REQUEST
+                Remote->>Local: Send VECTOR frame<br/>(current vector clock)
+              end
+              opt Divergence detected
+                Local->>Remote: Send MERKLE_ROOTS_REQUEST
+                Remote->>Local: Send MERKLE_ROOTS frame
+              end
+          </div>
+        </div>
+
+        <h3>Frame Flow During Replication</h3>
+        <p>When a record is created or updated on one node, the event propagates to peers through the following flow:</p>
+
+        <div class="diagram">
+          <div class="mermaid">
+            graph LR
+              A["Local mutation<br/>API request"] --> B["Create Event<br/>with Vector"]
+              B --> C["Sign with<br/>Ed25519"]
+              C --> D["Push EVENT frame<br/>to peer 1"]
+              C --> E["Push EVENT frame<br/>to peer 2"]
+              D --> F["Peer 1 verifies<br/>signature"]
+              E --> G["Peer 2 verifies<br/>signature"]
+              F --> H["Peer 1 applies<br/>to local store"]
+              G --> I["Peer 2 applies<br/>to local store"]
+              H --> J["Send ACK"]
+              I --> K["Send ACK"]
+              J --> L["Replication<br/>complete"]
+              K --> L
+
+              style A fill:#fff4dc
+              style B fill:#e8f3ef
+              style C fill:#e8f3ef
+              style F fill:#d4f1e4
+              style G fill:#d4f1e4
+              style H fill:#d4f1e4
+              style I fill:#d4f1e4
+              style L fill:#e8f3ef
+          </div>
+        </div>
+      </section>
+
+      <section id="vector-clocks">
+        <h2>Vector Clocks</h2>
+
+        <h3>Concept</h3>
+        <p>Vector clocks are a distributed systems primitive that establish a causal partial order over events. In go53, each event carries a map of <code>{node_id: sequence_number}</code> representing the event clock state at the time of creation.</p>
+
+        <p>For example, in a three-node cluster where node-a makes a record change:</p>
+
+        <pre><code>{
+  "event_id": "abc123...",
+  "origin": "node-a",
+  "seq": 5,
+  "vector": {
+    "node-a": 5,
+    "node-b": 3,
+    "node-c": 4
+  },
+  "entity": "zone:example.com,rrtype:A,name:www.example.com.",
+  "operation": "UPSERT",
+  ...
+}</code></pre>
+
+        <p>This vector tells us that:</p>
+        <ul>
+          <li>This is the 5th event originating from node-a.</li>
+          <li>At the time this event was created, node-a had seen up to seq 3 from node-b and seq 4 from node-c.</li>
+          <li>The vector defines a happens-before relationship: any event observed by this node before creating the event will have a vector ≤ this one component-wise.</li>
+        </ul>
+
+        <h3>Causal Ordering</h3>
+        <p>Vector clocks enable conflict resolution without explicit coordination:</p>
+        <ul>
+          <li><strong>Same entity, different values:</strong> The event with the higher vector (in component-wise comparison) is considered "later" and wins. If neither is ≥ the other, both are concurrent and application-level conflict resolution may apply.</li>
+          <li><strong>Detecting missing events:</strong> If a peer's vector shows <code>node-b: 5</code> and the local node only has up to <code>node-b: 3</code>, the sync protocol knows events 4–5 from node-b are missing and requests them.</li>
+        </ul>
+
+        <h3>Sync Protocol</h3>
+        <p>Nodes periodically (default 30 seconds) perform a background sync:</p>
+
+        <div class="diagram">
+          <div class="mermaid">
+            sequenceDiagram
+              participant Local as Local Node
+              participant Remote as Remote Node
+
+              Local->>Remote: VECTOR_REQUEST
+              Remote->>Remote: Gather current vector<br/>per origin node
+              Remote->>Local: VECTOR frame<br/>{"vector": {"node-a": 10, ...}}
+
+              Local->>Local: Compare vectors
+              Local->>Local: Detect missing events
+
+              alt Missing events exist
+                Local->>Remote: EVENTS_REQUEST<br/>(origin, after_seq)
+                Remote->>Remote: Fetch events<br/>after sequence
+                Remote->>Local: EVENTS frame
+                Local->>Local: Apply events to store
+              end
+
+              Note over Local,Remote: Vector sync<br/>ensures eventual<br/>consistency
+          </div>
+        </div>
+      </section>
+
+      <section id="merkle-repair">
+        <h2>Merkle Tree Repair</h2>
+
+        <h3>Motivation</h3>
+        <p>While vector clocks and event replication provide eventual consistency, bugs, network partitions, or storage corruption can cause two nodes to diverge silently. Merkle trees provide a compact, cryptographic mechanism to detect these divergences without comparing entire datasets.</p>
+
+        <h3>Tree Structure</h3>
+        <p>For each zone, go53 builds a Merkle tree with two layers:</p>
+
+        <ul>
+          <li><strong>Leaves:</strong> One leaf per entity (a zone, RRtype, and name combination). Each leaf is a SHA-256 hash of the entity's JSON representation (including the RRset value).</li>
+          <li><strong>Branches:</strong> Leaves are grouped by a 2-character prefix (derived from the entity key), and each prefix gets a branch hash computed as SHA-256 of the sorted leaf hashes in that branch.</li>
+          <li><strong>Root:</strong> The root hash is computed as SHA-256 of all branch hashes, providing a single fingerprint of zone state.</li>
+        </ul>
+
+        <p>The diagram below illustrates the tree for a zone with a few records:</p>
+
+        <div class="diagram">
+          <div class="mermaid">
+            graph BT
+              subgraph Zone["Zone: example.com"]
+                Leaf1["Leaf: A www<br/>Hash: h1"]
+                Leaf2["Leaf: A mail<br/>Hash: h2"]
+                Leaf3["Leaf: MX zone<br/>Hash: h3"]
+              end
+
+              Branch1["Branch: 7a-7f<br/>Hash: branch_hash_1"]
+              Branch2["Branch: 6d-73<br/>Hash: branch_hash_2"]
+
+              Root["Root<br/>Hash: root_hash"]
+
+              Leaf1 --> Branch1
+              Leaf2 --> Branch1
+              Leaf3 --> Branch2
+              Branch1 --> Root
+              Branch2 --> Root
+
+              style Leaf1 fill:#d4f1e4
+              style Leaf2 fill:#d4f1e4
+              style Leaf3 fill:#d4f1e4
+              style Branch1 fill:#c0e8db
+              style Branch2 fill:#c0e8db
+              style Root fill:#0b4f49,color:#ffffff
+          </div>
+        </div>
+
+        <h3>Repair Protocol</h3>
+        <p>Periodically, after vector clock sync, nodes compare Merkle roots for each zone:</p>
+
+        <ol>
+          <li><strong>Request roots:</strong> Local node asks peer for zone Merkle roots.</li>
+          <li><strong>Compare roots:</strong> If a root differs, the zone is out of sync.</li>
+          <li><strong>Request branches:</strong> Local node requests all branch hashes for the mismatched zone.</li>
+          <li><strong>Compare branches:</strong> Find which branch prefixes differ.</li>
+          <li><strong>Request leaves:</strong> Request leaf hashes for differing prefixes.</li>
+          <li><strong>Compare and repair:</strong> For differing leaf hashes, request the full entity values from peer and apply the latest (according to vector clock).</li>
+        </ol>
+
+        <p>This is more efficient than comparing all zone records directly, as it only sends necessary details after narrowing down to specific prefixes and entities.</p>
+
+        <div class="diagram">
+          <div class="mermaid">
+            sequenceDiagram
+              participant Local as Local Node
+              participant Remote as Remote Node
+
+              Local->>Remote: MERKLE_ROOTS_REQUEST
+              Remote->>Local: MERKLE_ROOTS<br/>{"roots": {"example.com": root_hash}}
+
+              alt Roots differ
+                Local->>Remote: MERKLE_BRANCHES_REQUEST<br/>(zone, prefixes to check)
+                Remote->>Local: MERKLE_BRANCHES<br/>all branch hashes
+                Local->>Local: Compare branch hashes
+                Local->>Remote: MERKLE_LEAVES_REQUEST<br/>(zone, differing_prefixes)
+                Remote->>Local: MERKLE_LEAVES<br/>leaf hashes for branches
+                Local->>Local: Compare leaf hashes
+                alt Leaf differs
+                  Local->>Remote: Request full event<br/>for entity
+                  Remote->>Local: Send event data
+                  Local->>Local: Apply event to store
+                end
+              else Roots match
+                Note over Local,Remote: Zone in sync
+              end
+          </div>
+        </div>
+
+        <h3>Cryptographic Integrity</h3>
+        <p>Because each entity value is hashed as part of the leaf computation, and leaves feed into branches and the root, any undetected corruption is extremely unlikely to go unnoticed. Additionally, all event data that updates entity values is itself signed with Ed25519, providing a secondary integrity check.</p>
+      </section>
+
+      <section id="replication-flow">
+        <h2>Event Replication Flow</h2>
+
+        <h3>Example: Creating a DNS Record</h3>
+        <p>This section walks through the complete flow when an operator uses the API to create a record on one node in a three-node cluster:</p>
+
+        <div class="diagram">
+          <div class="mermaid">
+            sequenceDiagram
+              participant User as Operator
+              participant NodeA as Node A (Primary)
+              participant NodeB as Node B
+              participant NodeC as Node C
+
+              User->>NodeA: curl -X POST /api/zones/ex.com/records/A<br/>{"name": "www", ...}
+
+              NodeA->>NodeA: 1. Validate request
+              NodeA->>NodeA: 2. Generate EventID (UUID)
+              NodeA->>NodeA: 3. Increment local Seq<br/>(e.g., seq=42)
+
+              NodeA->>NodeA: 4. Build Vector<br/>{"node-a": 42, "node-b": 39, "node-c": 41}
+
+              NodeA->>NodeA: 5. Create Event JSON<br/>{event_id, origin: "node-a",<br/>seq: 42, entity, operation,<br/>value, vector, created_at}
+
+              NodeA->>NodeA: 6. Sign with Ed25519 key
+
+              NodeA->>NodeA: 7. Persist Event to storage
+              NodeA->>NodeA: 8. Apply record to memory
+
+              NodeA->>User: 200 OK (record created)
+
+              par Peer replication
+                NodeA->>NodeB: EVENT frame (TLS-wrapped JSON)
+                NodeA->>NodeC: EVENT frame (TLS-wrapped JSON)
+              end
+
+              NodeB->>NodeB: 1. Decode JSON
+              NodeB->>NodeB: 2. Verify Ed25519 signature
+              NodeB->>NodeB: 3. Check vector (not in future)
+
+              NodeB->>NodeB: 4. Persist Event to storage
+              NodeB->>NodeB: 5. Apply record to memory
+              NodeB->>NodeA: ACK frame
+
+              NodeC->>NodeC: 1. Decode JSON
+              NodeC->>NodeC: 2. Verify Ed25519 signature
+              NodeC->>NodeC: 3. Check vector (not in future)
+
+              NodeC->>NodeC: 4. Persist Event to storage
+              NodeC->>NodeC: 5. Apply record to memory
+              NodeC->>NodeA: ACK frame
+
+              Note over NodeA,NodeC: All three nodes now<br/>have consistent state
+          </div>
+        </div>
+
+        <h3>Conflict Resolution</h3>
+        <p>If two operators simultaneously create or update the same record on different nodes, the events will have different vectors and origins. Each node will eventually receive both events. The conflict resolution rule is simple:</p>
+
+        <ul>
+          <li><strong>Compare vectors:</strong> For the same entity, compute which event's vector is later (component-wise ≥).</li>
+          <li><strong>If one is strictly later:</strong> Apply that event. This implements "last write wins" semantics with causal awareness.</li>
+          <li><strong>If concurrent (neither ≥):</strong> Nodes will converge on a consistent outcome through deterministic conflict resolution (e.g., alphabetically by origin node_id, or by comparing the event payloads themselves).</li>
+        </ul>
+
+        <div class="note">
+          <p>go53's conflict resolution is deterministic: given the same set of concurrent events, all nodes arrive at the same conclusion without further coordination. This ensures strong eventual consistency.</p>
+        </div>
+      </section>
+
+      <section id="frame-types">
+        <h2>Frame Types</h2>
+
+        <p>The sync protocol defines distinct frame types for different communication patterns. All frames are JSON-encoded and length-prefixed.</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Frame Type</th>
+              <th>Direction</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>HELLO</code></td>
+              <td>Bidirectional</td>
+              <td>Handshake with nonce, signature proof, and node identity. Verifies peer Ed25519 key.</td>
+            </tr>
+            <tr>
+              <td><code>EVENT</code></td>
+              <td>Unidirectional (push)</td>
+              <td>Replicates a single signed event (zone record, TSIG key, DNSSEC key, config).</td>
+            </tr>
+            <tr>
+              <td><code>ACK</code></td>
+              <td>Response to EVENT</td>
+              <td>Acknowledges receipt and processing of an event.</td>
+            </tr>
+            <tr>
+              <td><code>VECTOR_REQUEST</code></td>
+              <td>Unidirectional (request)</td>
+              <td>Asks peer for its current vector clock state.</td>
+            </tr>
+            <tr>
+              <td><code>VECTOR</code></td>
+              <td>Response to VECTOR_REQUEST</td>
+              <td>Returns the peer's vector clock: <code>{"vector": {"node-a": 42, ...}}</code>.</td>
+            </tr>
+            <tr>
+              <td><code>EVENTS_REQUEST</code></td>
+              <td>Unidirectional (request)</td>
+              <td>Requests events from a specific origin after a sequence number.</td>
+            </tr>
+            <tr>
+              <td><code>EVENTS</code></td>
+              <td>Response to EVENTS_REQUEST</td>
+              <td>Returns an array of events matching the request criteria.</td>
+            </tr>
+            <tr>
+              <td><code>MERKLE_ROOTS_REQUEST</code></td>
+              <td>Unidirectional (request)</td>
+              <td>Requests Merkle root hashes for all zones.</td>
+            </tr>
+            <tr>
+              <td><code>MERKLE_ROOTS</code></td>
+              <td>Response to MERKLE_ROOTS_REQUEST</td>
+              <td>Returns <code>{"merkle_roots": {"zone": root_hash, ...}}</code>.</td>
+            </tr>
+            <tr>
+              <td><code>MERKLE_BRANCHES_REQUEST</code></td>
+              <td>Unidirectional (request)</td>
+              <td>Requests branch hashes for a zone and optional prefix filters.</td>
+            </tr>
+            <tr>
+              <td><code>MERKLE_BRANCHES</code></td>
+              <td>Response to MERKLE_BRANCHES_REQUEST</td>
+              <td>Returns branch hashes: <code>{"merkle_branches": {"prefix": {hash, leaf_count}, ...}}</code>.</td>
+            </tr>
+            <tr>
+              <td><code>MERKLE_LEAVES_REQUEST</code></td>
+              <td>Unidirectional (request)</td>
+              <td>Requests leaf hashes for specific branch prefixes in a zone.</td>
+            </tr>
+            <tr>
+              <td><code>MERKLE_LEAVES</code></td>
+              <td>Response to MERKLE_LEAVES_REQUEST</td>
+              <td>Returns leaf hashes: <code>{"merkle_leaves": {"entity": leaf_hash, ...}}</code>.</td>
+            </tr>
+            <tr>
+              <td><code>MERKLE_REPAIR_REQUEST</code></td>
+              <td>Unidirectional (request)</td>
+              <td>Requests full event data for entities that differ in Merkle leaves.</td>
+            </tr>
+            <tr>
+              <td><code>ERROR</code></td>
+              <td>Response (any)</td>
+              <td>Signals a processing error; includes an <code>error</code> string field.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>HELLO Frame Structure</h3>
+        <p>The HELLO frame is the first message sent on a sync connection. It establishes node identity and proves possession of the Ed25519 private key:</p>
+
+        <pre><code>{
+  "type": "HELLO",
+  "node_id": "node-a",
+  "nonce": "base64_encoded_random_bytes",
+  "proof": "base64_ed25519_signature_of_nonce"
+}</code></pre>
+
+        <p>The receiver verifies the <code>proof</code> against the <code>nonce</code> using the pinned public key for the <code>node_id</code>. If verification fails, the connection is closed.</p>
+
+        <h3>EVENT Frame Structure</h3>
+        <p>The EVENT frame carries a replicated state change:</p>
+
+        <pre><code>{
+  "type": "EVENT",
+  "event": {
+    "event_id": "550e8400-e29b-41d4-a716-446655440000",
+    "origin": "node-a",
+    "seq": 42,
+    "entity": "zone:example.com,rrtype:A,name:www.example.com",
+    "entity_type": "zone_record",
+    "zone": "example.com.",
+    "rrtype": "A",
+    "name": "www.example.com.",
+    "operation": "UPSERT",
+    "value": {"ttl": 300, "ip": "192.0.2.1"},
+    "vector": {"node-a": 42, "node-b": 39, "node-c": 41},
+    "created_at": 1717686400000,
+    "signature": "base64_ed25519_signature"
+  }
+}
+</code></pre>
+
+        <p>Peers must:</p>
+        <ol>
+          <li>Verify the event's Ed25519 <code>signature</code> using the origin node's public key.</li>
+          <li>Check that the vector does not claim a future state (no component > local knowledge).</li>
+          <li>Apply the operation (UPSERT or DELETE) to storage and memory.</li>
+          <li>Send an ACK frame.</li>
+        </ol>
+      </section>
+
+      <section id="data-model">
+        <h2>Data Model</h2>
+
+        <h3>Entities</h3>
+        <p>Distributed mode replicates four types of entities, each identified uniquely:</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Entity Type</th>
+              <th>Entity Key Components</th>
+              <th>Operations</th>
+              <th>Replicated</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Zone Record</td>
+              <td><code>zone:rrtype:name</code><br/>e.g., <code>zone:example.com,rrtype:A,name:www.example.com</code></td>
+              <td>UPSERT, DELETE</td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td>TSIG Key</td>
+              <td><code>tsig_key:keyname</code><br/>e.g., <code>tsig_key:update.example.com</code></td>
+              <td>UPSERT, DELETE</td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td>DNSSEC Key</td>
+              <td><code>dnssec_key:zone:keyid</code><br/>e.g., <code>dnssec_key:example.com,keyid:12345</code></td>
+              <td>UPSERT, DELETE</td>
+              <td>Yes</td>
+            </tr>
+            <tr>
+              <td>Config</td>
+              <td><code>config</code></td>
+              <td>UPSERT</td>
+              <td>Yes (selective)</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Event Structure</h3>
+        <p>Each replicated event has the following fields:</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Field</th>
+              <th>Type</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>event_id</code></td>
+              <td>UUID string</td>
+              <td>Globally unique event identifier (v4 random).</td>
+            </tr>
+            <tr>
+              <td><code>origin</code></td>
+              <td>String</td>
+              <td>Node ID of the event originator (e.g., "node-a").</td>
+            </tr>
+            <tr>
+              <td><code>seq</code></td>
+              <td>uint64</td>
+              <td>Sequence number for this origin (incremented per event).</td>
+            </tr>
+            <tr>
+              <td><code>entity</code></td>
+              <td>String</td>
+              <td>Unique identifier for the data being changed.</td>
+            </tr>
+            <tr>
+              <td><code>entity_type</code></td>
+              <td>String</td>
+              <td>Type of entity: "zone_record", "tsig_key", "dnssec_key", or "config".</td>
+            </tr>
+            <tr>
+              <td><code>zone</code></td>
+              <td>String</td>
+              <td>Zone name (for zone records, DNSSEC keys; empty for global config/TSIG keys).</td>
+            </tr>
+            <tr>
+              <td><code>rrtype</code></td>
+              <td>String</td>
+              <td>RR type in uppercase (for zone records; empty for others).</td>
+            </tr>
+            <tr>
+              <td><code>name</code></td>
+              <td>String</td>
+              <td>Owner name (for zone records; key name for TSIG keys).</td>
+            </tr>
+            <tr>
+              <td><code>operation</code></td>
+              <td>String</td>
+              <td>"UPSERT" (create or update) or "DELETE".</td>
+            </tr>
+            <tr>
+              <td><code>value</code></td>
+              <td>JSON object</td>
+              <td>The data being replicated (RRset, key config, etc.). Null or empty for DELETE.</td>
+            </tr>
+            <tr>
+              <td><code>vector</code></td>
+              <td>Map&lt;string, uint64&gt;</td>
+              <td>Vector clock at event creation: {node_id: sequence_number, ...}.</td>
+            </tr>
+            <tr>
+              <td><code>created_at</code></td>
+              <td>Unix timestamp (ms)</td>
+              <td>When the event was created.</td>
+            </tr>
+            <tr>
+              <td><code>signature</code></td>
+              <td>Base64 string</td>
+              <td>Ed25519 signature over canonical JSON of all fields except <code>signature</code>.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Vector Clock Storage</h3>
+        <p>Each node maintains a persistent <code>EntityClock</code> record for every observed origin:</p>
+
+        <pre><code>{
+  "origin": "node-b",
+  "seq": 47,
+  "vector": {"node-a": 50, "node-b": 47, "node-c": 45}
+}</code></pre>
+
+        <p>This is used to:</p>
+        <ul>
+          <li>Determine the next expected sequence number from each peer (for detecting missing events).</li>
+          <li>Build the vector clock for new local events (incorporating knowledge of all peers' progress).</li>
+          <li>Detect causality violations or out-of-order event delivery.</li>
+        </ul>
+
+        <h3>Config Replication</h3>
+        <p>Live configuration changes (e.g., adjusting DNSSEC TTL, enabling EDNS) replicate as config events. However, node-local settings are excluded:</p>
+
+        <ul>
+          <li><strong>Replicated:</strong> DNSSEC options, TSIG behavior, resolver timeouts, storage settings.</li>
+          <li><strong>Not replicated:</strong> <code>distributed.node_id</code>, <code>distributed.private_key</code>, <code>distributed.peers</code>, <code>distributed.peer_public_keys</code>, <code>distributed.sync_bind_host</code>, <code>distributed.sync_port</code>.</li>
+        </ul>
+
+        <p>This ensures each node retains its identity and peer configuration independently, preventing accidental overwrite by a peer's config event.</p>
+      </section>
+
+      <footer>
+        <p><strong>Related links:</strong></p>
+        <ul style="margin-top: 8px; padding-left: 1.25rem;">
+          <li><a href="../admin_guide/">Administrator Guide</a> — Setup, bootstrap, and operational procedures.</li>
+          <li><a href="../config/">Config Reference</a> — All environment and live configuration parameters.</li>
+          <li><a href="../internal/storage.md">Storage Notes</a> — Persistence behavior and BadgerDB layout.</li>
+        </ul>
+        <p style="margin-top: 20px; font-size: 0.92rem; color: var(--muted);">Copyright 2025 go53 Project — Fast, secure, API-driven authoritative DNS</p>
+      </footer>
+    </main>
+  </div>
+</body>
+</html>
