@@ -500,7 +500,8 @@ func clientTLSConfig(_ string) (*tls.Config, error) {
 	return &tls.Config{
 		MinVersion:         tls.VersionTLS13,
 		Certificates:       []tls.Certificate{cert},
-		InsecureSkipVerify: true,
+		InsecureSkipVerify: true, 	// NOSONAR Peer auth via Ed25519/public-key pinning in VerifyConnection;
+									// CA chain intentionally bypassed for IP-SAN-less internal peers.
 		VerifyConnection: func(state tls.ConnectionState) error {
 			return verifyPeerPublicKey(state.PeerCertificates)
 		},
