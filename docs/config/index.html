@@ -289,6 +289,8 @@
             <tr><td><code>allow_axfr</code></td><td>bool</td><td><code>false</code></td><td>Allows AXFR/IXFR response handling when client allowlist and TSIG policy also pass.</td></tr>
             <tr><td><code>default_ns</code></td><td>string</td><td><code>ns1.go53.local.</code></td><td>Default nameserver value used by helper logic that needs an NS name when zone data does not provide one.</td></tr>
             <tr><td><code>enforce_tsig</code></td><td>bool</td><td><code>false</code></td><td>Requires valid TSIG on DNS requests in TSIG validation paths and on AXFR/IXFR when enabled.</td></tr>
+            <tr><td><code>any_query_policy</code></td><td>string</td><td><code>hinfo</code></td><td>Authoritative ANY-query policy. <code>hinfo</code> returns a minimal RFC 8482-style HINFO answer; <code>refuse</code> returns REFUSED.</td></tr>
+            <tr><td><code>unknown_zone_policy</code></td><td>string</td><td><code>refused</code></td><td>Response policy for names outside all loaded authoritative zones. Default is non-authoritative REFUSED.</td></tr>
           </tbody>
         </table>
       </section>

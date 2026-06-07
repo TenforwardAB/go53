@@ -66,20 +66,22 @@ type DistributedConfig struct {
 }
 
 type LiveConfig struct {
-	LogLevel       string `json:"log_level"`       // debug/info/warn
-	Mode           string `json:"mode"`            // primary/secondary/distributed
-	AllowTransfer  string `json:"allow_transfer"`  // comma-separated IPs
-	AllowRecursion bool   `json:"allow_recursion"` // "true"/"false"
-	DNSSECEnabled  bool   `json:"dnssec_enabled"`  // "true"/"false"
-	DefaultTTL     int    `json:"default_ttl"`     // seconds
-	Version        string `json:"version"`         // CHAOS version.bind
-	MaxUDPSize     int    `json:"max_udp_size"`    // e.g. 1232
-	EnableEDNS     bool   `json:"enable_edns"`     // "true"/"false"
-	NSID           string `json:"nsid"`            // EDNS0 NSID (RFC 5001); empty = disabled
-	RateLimitQPS   int    `json:"rate_limit_qps"`  // queries per second
-	AllowAXFR      bool   `json:"allow_axfr"`      // "true"/"false"
-	DefaultNS      string `json:"default_ns"`      // e.g. ns1.example.com
-	EnforceTSIG    bool   `json:"enforce_tsig"`
+	LogLevel          string `json:"log_level"`       // debug/info/warn
+	Mode              string `json:"mode"`            // primary/secondary/distributed
+	AllowTransfer     string `json:"allow_transfer"`  // comma-separated IPs
+	AllowRecursion    bool   `json:"allow_recursion"` // "true"/"false"
+	DNSSECEnabled     bool   `json:"dnssec_enabled"`  // "true"/"false"
+	DefaultTTL        int    `json:"default_ttl"`     // seconds
+	Version           string `json:"version"`         // CHAOS version.bind
+	MaxUDPSize        int    `json:"max_udp_size"`    // e.g. 1232
+	EnableEDNS        bool   `json:"enable_edns"`     // "true"/"false"
+	NSID              string `json:"nsid"`            // EDNS0 NSID (RFC 5001); empty = disabled
+	RateLimitQPS      int    `json:"rate_limit_qps"`  // queries per second
+	AllowAXFR         bool   `json:"allow_axfr"`      // "true"/"false"
+	DefaultNS         string `json:"default_ns"`      // e.g. ns1.example.com
+	EnforceTSIG       bool   `json:"enforce_tsig"`
+	AnyQueryPolicy    string `json:"any_query_policy"`    // hinfo/refuse
+	UnknownZonePolicy string `json:"unknown_zone_policy"` // refused
 
 	Primary     PrimaryConfig         `json:"primary"`
 	Secondary   SecondaryConfig       `json:"secondary"`

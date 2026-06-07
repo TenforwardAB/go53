@@ -8,6 +8,7 @@ import (
 
 	"go53/config"
 	"go53/storage"
+	"go53/types"
 )
 
 func TestEncodeDecodeZoneData(t *testing.T) {
@@ -131,6 +132,27 @@ func TestZoneOwnerFQDNAndMissingZone(t *testing.T) {
 	}
 }
 
+func TestAuthoritativeNamePartsUsesLongestMatchingZone(t *testing.T) {
+	store, err := NewZoneStore(setupMemoryStoreBackend(t))
+	if err != nil {
+		t.Fatalf("NewZoneStore: %v", err)
+	}
+	if err := store.AddRecord("example.co.uk.", "SOA", "@", map[string]any{"ns": "ns1.example.co.uk.", "mbox": "hostmaster.example.co.uk.", "serial": float64(1), "refresh": float64(3600), "retry": float64(600), "expire": float64(86400), "minimum": float64(300), "ttl": float64(300)}); err != nil {
+		t.Fatalf("AddRecord example.co.uk.: %v", err)
+	}
+	if err := store.AddRecord("co.uk.", "SOA", "@", map[string]any{"ns": "ns1.co.uk.", "mbox": "hostmaster.co.uk.", "serial": float64(1), "refresh": float64(3600), "retry": float64(600), "expire": float64(86400), "minimum": float64(300), "ttl": float64(300)}); err != nil {
+		t.Fatalf("AddRecord co.uk.: %v", err)
+	}
+
+	zoneName, host, ok := store.AuthoritativeNameParts("www.example.co.uk.")
+	if !ok {
+		t.Fatalf("AuthoritativeNameParts returned false")
+	}
+	if zoneName != "example.co.uk." || host != "www" {
+		t.Fatalf("AuthoritativeNameParts = %q %q, want example.co.uk. www", zoneName, host)
+	}
+}
+
 func TestSignZoneTransferRRsetsNoopWhenDNSSECDisabled(t *testing.T) {
 	store, err := NewZoneStore(setupMemoryStoreBackend(t))
 	if err != nil {
@@ -149,6 +171,38 @@ func TestSignZoneTransferRRsetsNoopWhenDNSSECDisabled(t *testing.T) {
 	}
 }
 
+func TestAddRecordRejectsCNAMECoexistence(t *testing.T) {
+	store, zone := newMemoryTestStore(t)
+
+	if err := store.AddRecord(zone, "CNAME", "alias", types.CNAMERecord{Target: "target.example.test.", TTL: 300}); err != nil {
+		t.Fatalf("Add CNAME: %v", err)
+	}
+	if err := store.AddRecord(zone, "A", "alias", []types.ARecord{{IP: "192.0.2.10", TTL: 300}}); err == nil {
+		t.Fatalf("Add A at CNAME owner succeeded")
+	}
+
+	if err := store.AddRecord(zone, "A", "www", []types.ARecord{{IP: "192.0.2.11", TTL: 300}}); err != nil {
+		t.Fatalf("Add A: %v", err)
+	}
+	if err := store.AddRecord(zone, "CNAME", "www", types.CNAMERecord{Target: "target.example.test.", TTL: 300}); err == nil {
+		t.Fatalf("Add CNAME at A owner succeeded")
+	}
+}
+
+func TestAddRecordRejectsMixedRRSetTTL(t *testing.T) {
+	store, zone := newMemoryTestStore(t)
+
+	if err := store.AddRecord(zone, "A", "www", []types.ARecord{{IP: "192.0.2.10", TTL: 300}}); err != nil {
+		t.Fatalf("Add first A: %v", err)
+	}
+	if err := store.AddRecord(zone, "A", "www", []types.ARecord{{IP: "192.0.2.11", TTL: 600}}); err == nil {
+		t.Fatalf("Add mixed TTL A succeeded")
+	}
+	if err := store.AddRecord(zone, "A", "www", []types.ARecord{{IP: "192.0.2.12", TTL: 300}}); err != nil {
+		t.Fatalf("Add same TTL A: %v", err)
+	}
+}
+
 func setupMemoryStoreBackend(t *testing.T) *storage.MockStorage {
 	t.Helper()
 	backend := &storage.MockStorage{}
@@ -160,4 +214,13 @@ func setupMemoryStoreBackend(t *testing.T) *storage.MockStorage {
 	config.AppConfig.Live = config.DefaultLiveConfig
 	config.AppConfig.Live.DNSSECEnabled = false
 	return backend
+}
+
+func newMemoryTestStore(t *testing.T) (*InMemoryZoneStore, string) {
+	t.Helper()
+	store, err := NewZoneStore(setupMemoryStoreBackend(t))
+	if err != nil {
+		t.Fatalf("NewZoneStore: %v", err)
+	}
+	return store, "example.test."
 }

@@ -8,10 +8,31 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
+var splitNameResolver = struct {
+	sync.RWMutex
+	fn func(string) (string, string, bool)
+}{}
+
+func SetSplitNameResolver(fn func(string) (string, string, bool)) {
+	splitNameResolver.Lock()
+	splitNameResolver.fn = fn
+	splitNameResolver.Unlock()
+}
+
 func SplitName(name string) (zone, host string, ok bool) {
+	splitNameResolver.RLock()
+	resolver := splitNameResolver.fn
+	splitNameResolver.RUnlock()
+	if resolver != nil {
+		if zone, host, ok := resolver(name); ok {
+			return strings.TrimSuffix(zone, "."), host, true
+		}
+	}
+
 	name = strings.TrimSuffix(name, ".")
 	parts := strings.Split(name, ".")
 	if len(parts) < 2 {

@@ -10,6 +10,7 @@ import (
 	"go53/zone"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 )
 
@@ -72,6 +73,21 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 	m := new(dns.Msg)
 	m.SetReply(r)
+	m.RecursionAvailable = false
+
+	if r.Opcode != dns.OpcodeQuery {
+		m.SetRcode(r, dns.RcodeNotImplemented)
+		m.Authoritative = false
+		writeResponse(w, r, m)
+		return
+	}
+
+	if opt != nil && opt.Version() != 0 {
+		m.SetRcode(r, dns.RcodeBadVers)
+		m.Authoritative = false
+		writeResponse(w, r, m)
+		return
+	}
 
 	if len(r.Question) != 1 {
 		log.Printf("Refusing DNS request with QDCOUNT=%d; only one question is supported", len(r.Question))
@@ -107,6 +123,25 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			}
 		}
 
+		if q.Qclass != dns.ClassINET {
+			m.SetRcode(r, dns.RcodeNotImplemented)
+			m.Authoritative = false
+			answered = true
+		}
+
+		if answered {
+			continue
+		}
+
+		if _, ok := zone.AuthoritativeZoneForName(q.Name); !ok {
+			applyUnknownZonePolicy(m, r, live)
+			answered = true
+		}
+
+		if answered {
+			continue
+		}
+
 		if delegation, ns, ok := zone.DelegationFor(q.Name); ok && shouldReturnReferral(q, delegation) {
 			m.Authoritative = false
 			m.Ns = append(m.Ns, ns...)
@@ -124,6 +159,10 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		}
 
 		switch q.Qtype {
+		case dns.TypeANY:
+			applyANYPolicy(m, q, live)
+			answered = true
+
 		case dns.TypeDNSKEY:
 			zoneApex, _ := internal.SanitizeFQDN(q.Name) //TODO: manage error
 			if rec, ok := zone.LookupRecord(dns.TypeDNSKEY, zoneApex); ok {
@@ -144,14 +183,14 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			if !live.AllowAXFR {
 				log.Println("AXFR/IXFR disabled by configuration")
 				m.SetRcode(r, dns.RcodeRefused)
-				_ = w.WriteMsg(m)
+				writeResponse(w, r, m)
 				return
 			}
 
 			if !transferClientAllowed(w.RemoteAddr().String(), live.AllowTransfer) {
 				log.Printf("AXFR/IXFR refused for unauthorized client %s", w.RemoteAddr().String())
 				m.SetRcode(r, dns.RcodeRefused)
-				_ = w.WriteMsg(m)
+				writeResponse(w, r, m)
 				return
 			}
 
@@ -165,13 +204,13 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				if _, ok := security.GetTSIGKey(tsig.Hdr.Name); !ok {
 					log.Printf("TSIG key not recognized: %s — rejecting", tsig.Hdr.Name)
 					m.SetRcode(r, dns.RcodeRefused)
-					_ = w.WriteMsg(m)
+					writeResponse(w, r, m)
 					return
 				}
 				if w.TsigStatus() != nil {
 					log.Printf("TSIG validation failed: %v", w.TsigStatus())
 					m.SetRcode(r, dns.RcodeRefused)
-					_ = w.WriteMsg(m)
+					writeResponse(w, r, m)
 					return
 				}
 				log.Printf("TSIG validated for AXFR/IXFR. Key: %s", tsig.Hdr.Name)
@@ -180,7 +219,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 				// TSIG required but missing
 				log.Println("AXFR/IXFR request is not TSIG-signed — rejecting due to EnforceTSIG")
 				m.SetRcode(r, dns.RcodeRefused)
-				_ = w.WriteMsg(m)
+				writeResponse(w, r, m)
 				return
 
 			case tsig == nil && !enforceTSIG:
@@ -233,7 +272,91 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	dnsutils.ApplyNSID(m, r)
-	_ = w.WriteMsg(m)
+	writeResponse(w, r, m)
+}
+
+func writeResponse(w dns.ResponseWriter, req *dns.Msg, resp *dns.Msg) {
+	finalizeResponse(req, resp, responseIsTCP(w))
+	_ = w.WriteMsg(resp)
+}
+
+func finalizeResponse(req *dns.Msg, resp *dns.Msg, tcp bool) {
+	if req == nil || resp == nil {
+		return
+	}
+	resp.RecursionAvailable = false
+	live := config.AppConfig.GetLive()
+	reqOpt := req.IsEdns0()
+	if live.EnableEDNS && reqOpt != nil && resp.IsEdns0() == nil {
+		opt := new(dns.OPT)
+		opt.Hdr.Name = "."
+		opt.Hdr.Rrtype = dns.TypeOPT
+		size := reqOpt.UDPSize()
+		if live.MaxUDPSize > 0 && (size == 0 || size > uint16(live.MaxUDPSize)) {
+			size = uint16(live.MaxUDPSize)
+		}
+		if size == 0 {
+			size = 512
+		}
+		opt.SetUDPSize(size)
+		if reqOpt.Do() {
+			opt.SetDo()
+		}
+		resp.Extra = append(resp.Extra, opt)
+	}
+	if opt := resp.IsEdns0(); opt != nil && live.MaxUDPSize > 0 && opt.UDPSize() > uint16(live.MaxUDPSize) {
+		opt.SetUDPSize(uint16(live.MaxUDPSize))
+	}
+	if tcp {
+		return
+	}
+	maxSize := 512
+	if opt := resp.IsEdns0(); opt != nil {
+		maxSize = int(opt.UDPSize())
+	}
+	if live.MaxUDPSize > 0 && maxSize > live.MaxUDPSize {
+		maxSize = live.MaxUDPSize
+	}
+	if maxSize > 0 {
+		resp.Truncate(maxSize)
+	}
+}
+
+func responseIsTCP(w dns.ResponseWriter) bool {
+	switch w.RemoteAddr().(type) {
+	case *net.TCPAddr:
+		return true
+	default:
+		return false
+	}
+}
+
+func applyUnknownZonePolicy(resp *dns.Msg, req *dns.Msg, live config.LiveConfig) {
+	if strings.EqualFold(live.UnknownZonePolicy, "nxdomain") {
+		resp.SetRcode(req, dns.RcodeNameError)
+		resp.Authoritative = false
+		return
+	}
+	resp.SetRcode(req, dns.RcodeRefused)
+	resp.Authoritative = false
+}
+
+func applyANYPolicy(resp *dns.Msg, q dns.Question, live config.LiveConfig) {
+	if strings.EqualFold(live.AnyQueryPolicy, "refuse") {
+		resp.Rcode = dns.RcodeRefused
+		resp.Authoritative = false
+		return
+	}
+	resp.Answer = append(resp.Answer, &dns.HINFO{
+		Hdr: dns.RR_Header{
+			Name:   q.Name,
+			Rrtype: dns.TypeHINFO,
+			Class:  dns.ClassINET,
+			Ttl:    0,
+		},
+		Cpu: "RFC8482",
+		Os:  "ANY-" + strconv.Itoa(int(dns.TypeANY)),
+	})
 }
 
 func appendRRSIGs(section []dns.RR) []dns.RR {
@@ -553,12 +676,8 @@ func synthesizeWildcard(qname string, wildcardRRSet []dns.RR, wantsDNSSEC bool) 
 }
 
 func lookupApexSOA(name string) ([]dns.RR, bool) {
-	zoneName, _, ok := internal.SplitName(name)
+	apex, ok := zone.AuthoritativeZoneForName(name)
 	if !ok {
-		return nil, false
-	}
-	apex, err := internal.SanitizeFQDN(zoneName)
-	if err != nil {
 		return nil, false
 	}
 	return zone.LookupRecord(dns.TypeSOA, apex)

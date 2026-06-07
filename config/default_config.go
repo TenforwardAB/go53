@@ -1,20 +1,22 @@
 package config
 
 var DefaultLiveConfig = LiveConfig{
-	LogLevel:       "info",
-	Mode:           "primary",
-	AllowTransfer:  "127.0.0.1",
-	AllowRecursion: false,
-	DefaultTTL:     3600,
-	Version:        "go53 1.0.1",
-	MaxUDPSize:     1232,
-	EnableEDNS:     true,
-	NSID:           "", // empty = NSID disabled, avoids leaking node identity by default
-	RateLimitQPS:   0, // 0 = no rate limiting
-	AllowAXFR:      false,
-	DefaultNS:      "ns1.go53.local.",
-	EnforceTSIG:    false,
-	DNSSECEnabled:  true,
+	LogLevel:          "info",
+	Mode:              "primary",
+	AllowTransfer:     "127.0.0.1",
+	AllowRecursion:    false,
+	DefaultTTL:        3600,
+	Version:           "go53 1.0.1",
+	MaxUDPSize:        1232,
+	EnableEDNS:        true,
+	NSID:              "", // empty = NSID disabled, avoids leaking node identity by default
+	RateLimitQPS:      0,  // 0 = no rate limiting
+	AllowAXFR:         false,
+	DefaultNS:         "ns1.go53.local.",
+	EnforceTSIG:       false,
+	DNSSECEnabled:     true,
+	AnyQueryPolicy:    "hinfo",
+	UnknownZonePolicy: "refused",
 
 	Primary: PrimaryConfig{
 		NotifyDebounceMs: 2000,

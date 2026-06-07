@@ -46,6 +46,29 @@ func TestZoneFacadeRecordLifecycle(t *testing.T) {
 	}
 }
 
+func TestZoneFacadeLookupUsesLongestAuthoritativeZone(t *testing.T) {
+	setupZoneFacadeTestStore(t)
+
+	if err := AddRecord(dns.TypeSOA, "example.co.uk.", "@", map[string]interface{}{"ns": "ns1.example.co.uk.", "mbox": "hostmaster.example.co.uk.", "serial": float64(1), "refresh": float64(3600), "retry": float64(600), "expire": float64(86400), "minimum": float64(300)}, nil); err != nil {
+		t.Fatalf("AddRecord SOA: %v", err)
+	}
+	if err := AddRecord(dns.TypeA, "example.co.uk.", "www", map[string]interface{}{"ip": "192.0.2.53"}, nil); err != nil {
+		t.Fatalf("AddRecord A: %v", err)
+	}
+
+	records, ok := LookupRecord(dns.TypeA, "www.example.co.uk.")
+	if !ok {
+		t.Fatalf("LookupRecord did not find public suffix-style zone record")
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	a, ok := records[0].(*dns.A)
+	if !ok || a.A.String() != "192.0.2.53" {
+		t.Fatalf("record = %#v, want A 192.0.2.53", records[0])
+	}
+}
+
 func TestZoneFacadeDeleteZone(t *testing.T) {
 	setupZoneFacadeTestStore(t)
 

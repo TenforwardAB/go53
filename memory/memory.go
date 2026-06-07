@@ -103,6 +103,10 @@ func (z *InMemoryZoneStore) AddRecord(zone, rtype, name string, record any) erro
 	dnssecPrimary := config.AppConfig.GetLive().DNSSECEnabled && config.AppConfig.GetLive().Mode != "secondary"
 
 	z.mu.Lock()
+	if err := z.validateRRSetMutationLocked(zone, rtype, name, record); err != nil {
+		z.mu.Unlock()
+		return err
+	}
 	zones := z.cache["zones"]
 	if _, ok := zones[zone]; !ok {
 		zones[zone] = make(map[string]map[string]any)
@@ -198,12 +202,180 @@ func (z *InMemoryZoneStore) GetRecord(zone, rtype, name string) (string, string,
 	z.mu.RLock()
 	defer z.mu.RUnlock()
 	zones := z.cache["zones"]
-	recType, ok := zones[zone][rtype]
+	zoneMap, ok := zones[zone]
+	if !ok {
+		for candidate, records := range zones {
+			if strings.EqualFold(candidate, zone) {
+				zone = candidate
+				zoneMap = records
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok {
+		return "", "", nil, false
+	}
+
+	recType, ok := zoneMap[rtype]
 	if !ok {
 		return "", "", nil, false
 	}
 	rec, exists := recType[name]
+	if !exists {
+		for candidate, value := range recType {
+			if strings.EqualFold(candidate, name) {
+				name = candidate
+				rec = value
+				exists = true
+				break
+			}
+		}
+	}
 	return zone, rtype, rec, exists
+}
+
+func (z *InMemoryZoneStore) validateRRSetMutationLocked(zone, rtype, name string, record any) error {
+	if z.cache == nil || z.cache["zones"] == nil {
+		return nil
+	}
+	zoneMap := z.cache["zones"][zone]
+	if zoneMap == nil {
+		return nil
+	}
+	if err := validateCNAMECoexistence(zoneMap, rtype, name); err != nil {
+		return err
+	}
+	if existing, ok := zoneMap[rtype][name]; ok {
+		if existingTTL, ok := firstRecordTTL(existing); ok {
+			if newTTL, ok := firstRecordTTL(record); ok && newTTL != existingTTL {
+				return fmt.Errorf("RRset TTL mismatch for %s %s: existing %d, new %d", name, rtype, existingTTL, newTTL)
+			}
+		}
+	}
+	return nil
+}
+
+func validateCNAMECoexistence(zoneMap map[string]map[string]any, rtype, name string) error {
+	if dnssecMetaType(rtype) {
+		return nil
+	}
+	if rtype == string(types.TypeCNAME) {
+		for existingType, names := range zoneMap {
+			if existingType == string(types.TypeCNAME) || dnssecMetaType(existingType) {
+				continue
+			}
+			if _, ok := names[name]; ok {
+				return fmt.Errorf("CNAME cannot coexist with %s at %s", existingType, name)
+			}
+		}
+		return nil
+	}
+	if names := zoneMap[string(types.TypeCNAME)]; names != nil {
+		if _, ok := names[name]; ok {
+			return fmt.Errorf("%s cannot coexist with CNAME at %s", rtype, name)
+		}
+	}
+	return nil
+}
+
+func dnssecMetaType(rtype string) bool {
+	switch rtype {
+	case string(types.TypeRRSIG), string(types.TypeNSEC), string(types.TypeNSEC3), "NSEC3PARAM":
+		return true
+	default:
+		return false
+	}
+}
+
+func firstRecordTTL(record any) (uint32, bool) {
+	switch v := record.(type) {
+	case []types.ARecord:
+		if len(v) > 0 {
+			return v[0].TTL, true
+		}
+	case []types.AAAARecord:
+		if len(v) > 0 {
+			return v[0].TTL, true
+		}
+	case []types.MXRecord:
+		if len(v) > 0 {
+			return v[0].TTL, true
+		}
+	case []types.NSRecord:
+		if len(v) > 0 {
+			return v[0].TTL, true
+		}
+	case []types.TXTRecord:
+		if len(v) > 0 {
+			return v[0].TTL, true
+		}
+	case []types.SRVRecord:
+		if len(v) > 0 {
+			return v[0].TTL, true
+		}
+	case []types.PTRRecord:
+		if len(v) > 0 {
+			return v[0].TTL, true
+		}
+	case []types.DSRecord:
+		if len(v) > 0 {
+			return v[0].TTL, true
+		}
+	case []types.CDSRecord:
+		if len(v) > 0 {
+			return v[0].TTL, true
+		}
+	case []types.DNSKEYRecord:
+		if len(v) > 0 {
+			return v[0].TTL, true
+		}
+	case []types.CDNSKEYRecord:
+		if len(v) > 0 {
+			return v[0].TTL, true
+		}
+	case types.SOARecord:
+		return v.TTL, true
+	case types.CNAMERecord:
+		return v.TTL, true
+	case types.DNAMERecord:
+		return v.TTL, true
+	case types.NSECRecord:
+		return v.TTL, true
+	case types.NSEC3Record:
+		return v.TTL, true
+	case types.NSEC3ParamRecord:
+		return v.TTL, true
+	case types.RRSIGRecord:
+		return v.TTL, true
+	case map[string]interface{}:
+		return ttlFromMap(v)
+	case []map[string]interface{}:
+		if len(v) > 0 {
+			return ttlFromMap(v[0])
+		}
+	case []interface{}:
+		for _, item := range v {
+			if ttl, ok := firstRecordTTL(item); ok {
+				return ttl, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func ttlFromMap(m map[string]interface{}) (uint32, bool) {
+	switch v := m["ttl"].(type) {
+	case float64:
+		return uint32(v), true
+	case int:
+		return uint32(v), true
+	case uint32:
+		return v, true
+	case uint64:
+		return uint32(v), true
+	}
+	return 0, false
 }
 
 func (z *InMemoryZoneStore) ZoneRecordsSnapshot(zone string) map[string]map[string]any {
@@ -236,6 +408,45 @@ func (z *InMemoryZoneStore) ZoneNamesSnapshot() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func (z *InMemoryZoneStore) AuthoritativeNameParts(name string) (string, string, bool) {
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+	return z.authoritativeNamePartsLocked(name)
+}
+
+func (z *InMemoryZoneStore) authoritativeNamePartsLocked(name string) (string, string, bool) {
+	if z.cache == nil || z.cache["zones"] == nil {
+		return "", "", false
+	}
+
+	qname := dns.Fqdn(name)
+	qLower := strings.ToLower(qname)
+	bestZone := ""
+	bestZoneLower := ""
+	for zoneName := range z.cache["zones"] {
+		zoneFQDN := dns.Fqdn(zoneName)
+		zoneLower := strings.ToLower(zoneFQDN)
+		if qLower == zoneLower || strings.HasSuffix(qLower, "."+zoneLower) {
+			if len(zoneLower) > len(bestZoneLower) {
+				bestZone = zoneFQDN
+				bestZoneLower = zoneLower
+			}
+		}
+	}
+	if bestZone == "" {
+		return "", "", false
+	}
+	if qLower == bestZoneLower {
+		return bestZone, "@", true
+	}
+
+	host := qname[:len(qname)-len(bestZone)-1]
+	if host == "" {
+		host = "@"
+	}
+	return bestZone, host, true
 }
 
 func (z *InMemoryZoneStore) GetZone(zone string) ([]dns.RR, error) {

@@ -11,6 +11,7 @@ import (
 	"go53/internal"
 	"go53/types"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/miekg/dns"
@@ -98,7 +99,7 @@ func SignRRSet(rrs []dns.RR, key crypto.Signer, keyTag uint16, signerName string
 		TypeCovered: hdr.Rrtype,
 		Algorithm:   algorithm,
 
-		Labels:     uint8(dns.CountLabel(hdr.Name)),
+		Labels:     rrsigLabelCount(hdr.Name),
 		OrigTtl:    hdr.Ttl,
 		Expiration: uint32(now.Add(policy.Validity - jitter).Unix()),
 		Inception:  uint32(now.Add(-policy.InceptionSkew).Unix()),
@@ -113,6 +114,14 @@ func SignRRSet(rrs []dns.RR, key crypto.Signer, keyTag uint16, signerName string
 	slog.Crazy("[SignRRSet] signed RRSet %+v for the RR %s", rrsig, rrs)
 
 	return rrsig, nil
+}
+
+func rrsigLabelCount(name string) uint8 {
+	labels := dns.CountLabel(name)
+	if strings.HasPrefix(dns.Fqdn(name), "*.") && labels > 0 {
+		labels--
+	}
+	return uint8(labels)
 }
 
 func RRSIGFresh(owner string, sig *types.RRSIGRecord, covered uint16, now time.Time) bool {

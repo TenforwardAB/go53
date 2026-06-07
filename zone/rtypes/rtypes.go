@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/miekg/dns"
+	"go53/internal"
 	"go53/memory"
 )
 
@@ -60,6 +61,11 @@ var registry = make(map[uint16]RRType)
 //   - store: a pointer to a memory.InMemoryZoneStore instance, created and loaded by the caller.
 func InitMemoryStore(store *memory.InMemoryZoneStore) {
 	memStore = store
+	if store == nil {
+		internal.SetSplitNameResolver(nil)
+		return
+	}
+	internal.SetSplitNameResolver(store.AuthoritativeNameParts)
 }
 
 func GetMemStore() *memory.InMemoryZoneStore {

@@ -174,6 +174,95 @@ func TestHandleRequestPositiveAAndNXDOMAIN(t *testing.T) {
 	}
 }
 
+func TestHandleRequestUnknownZoneRefused(t *testing.T) {
+	setupDNSHandlerTestStore(t)
+
+	req := new(mdns.Msg)
+	req.SetQuestion("www.unknown.test.", mdns.TypeA)
+	w := &captureResponseWriter{}
+	handleRequest(w, req)
+
+	if w.msg == nil {
+		t.Fatalf("expected response")
+	}
+	if w.msg.Rcode != mdns.RcodeRefused {
+		t.Fatalf("rcode = %s, want REFUSED", mdns.RcodeToString[w.msg.Rcode])
+	}
+	if w.msg.Authoritative {
+		t.Fatalf("unknown-zone response must not be authoritative")
+	}
+}
+
+func TestHandleRequestANYUsesMinimalPolicy(t *testing.T) {
+	setupDNSHandlerTestStore(t)
+	ttl := uint32(300)
+	if err := zone.AddRecord(mdns.TypeSOA, "any.test.", "@", map[string]interface{}{"ns": "ns1.any.test.", "mbox": "hostmaster.any.test.", "refresh": float64(3600), "retry": float64(600), "expire": float64(86400), "minimum": float64(300)}, &ttl); err != nil {
+		t.Fatalf("add SOA: %v", err)
+	}
+	if err := zone.AddRecord(mdns.TypeA, "any.test.", "www", map[string]interface{}{"ip": "192.0.2.82"}, &ttl); err != nil {
+		t.Fatalf("add A: %v", err)
+	}
+
+	req := new(mdns.Msg)
+	req.SetQuestion("www.any.test.", mdns.TypeANY)
+	w := &captureResponseWriter{}
+	handleRequest(w, req)
+
+	if w.msg == nil || w.msg.Rcode != mdns.RcodeSuccess {
+		t.Fatalf("ANY response = %#v", w.msg)
+	}
+	if len(w.msg.Answer) != 1 || w.msg.Answer[0].Header().Rrtype != mdns.TypeHINFO {
+		t.Fatalf("ANY answer = %#v, want minimal HINFO", w.msg.Answer)
+	}
+}
+
+func TestHandleRequestEDNSBadVersion(t *testing.T) {
+	resetDNSHandlerTestConfig()
+	req := new(mdns.Msg)
+	req.SetQuestion("example.test.", mdns.TypeA)
+	req.SetEdns0(1232, false)
+	req.IsEdns0().SetVersion(1)
+
+	w := &captureResponseWriter{}
+	handleRequest(w, req)
+
+	if w.msg == nil {
+		t.Fatalf("expected response")
+	}
+	if w.msg.Rcode != mdns.RcodeBadVers {
+		t.Fatalf("rcode = %s, want BADVERS", mdns.RcodeToString[w.msg.Rcode])
+	}
+	if opt := w.msg.IsEdns0(); opt == nil || opt.Version() != 0 {
+		t.Fatalf("response OPT = %#v, want EDNS version 0", opt)
+	}
+}
+
+func TestFinalizeResponseCapsUDPSizeAndTruncates(t *testing.T) {
+	resetDNSHandlerTestConfig()
+	config.AppConfig.Live.MaxUDPSize = 512
+
+	req := new(mdns.Msg)
+	req.SetQuestion("big.test.", mdns.TypeTXT)
+	req.SetEdns0(4096, false)
+	resp := new(mdns.Msg)
+	resp.SetReply(req)
+	for i := 0; i < 40; i++ {
+		resp.Answer = append(resp.Answer, &mdns.TXT{
+			Hdr: mdns.RR_Header{Name: "big.test.", Rrtype: mdns.TypeTXT, Class: mdns.ClassINET, Ttl: 300},
+			Txt: []string{"abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"},
+		})
+	}
+
+	finalizeResponse(req, resp, false)
+
+	if opt := resp.IsEdns0(); opt == nil || opt.UDPSize() != 512 {
+		t.Fatalf("response OPT = %#v, want UDP size 512", opt)
+	}
+	if !resp.Truncated {
+		t.Fatalf("expected TC bit after UDP truncation")
+	}
+}
+
 func TestHandleRequestDNSKEYAndReferralWithGlue(t *testing.T) {
 	setupDNSHandlerTestStore(t)
 	ttl := uint32(300)

@@ -43,6 +43,31 @@ func TestSignRRSetUsesSignaturePolicy(t *testing.T) {
 	}
 }
 
+func TestSignRRSetWildcardLabelsExcludeWildcardOwner(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr := &dns.A{
+		Hdr: dns.RR_Header{Name: "*.wild.example.test.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 3600},
+		A:   []byte{192, 0, 2, 1},
+	}
+	sig, err := SignRRSet([]dns.RR{rr}, priv, 12345, "example.test.", dns.ED25519)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if sig.Labels != 3 {
+		t.Fatalf("wildcard RRSIG labels = %d, want 3", sig.Labels)
+	}
+}
+
+func TestRRSIGLabelCountNonWildcard(t *testing.T) {
+	if got := rrsigLabelCount("www.example.test."); got != 3 {
+		t.Fatalf("rrsigLabelCount = %d, want 3", got)
+	}
+}
+
 func TestRRSIGFreshRefreshBeforeExpiration(t *testing.T) {
 	config.AppConfig.Live.DNSSEC = config.DNSSECSignaturePolicy{
 		ValiditySeconds:       7200,

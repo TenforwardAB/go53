@@ -20,6 +20,8 @@ package zone
 import (
 	"fmt"
 	"github.com/miekg/dns"
+	"strings"
+
 	"go53/zone/rtypes"
 	"go53/zonereader"
 )
@@ -103,6 +105,27 @@ func DeleteZone(zone string) error {
 		return fmt.Errorf("memory store is not initialized")
 	}
 	return mem.DeleteZone(zone)
+}
+
+func AuthoritativeZoneForName(name string) (string, bool) {
+	mem := rtypes.GetMemStore()
+	if mem == nil {
+		return "", false
+	}
+	qname := strings.ToLower(dns.Fqdn(name))
+	var best string
+	for _, zoneName := range mem.ZoneNamesSnapshot() {
+		z := strings.ToLower(dns.Fqdn(zoneName))
+		if qname == z || strings.HasSuffix(qname, "."+z) {
+			if len(z) > len(best) {
+				best = z
+			}
+		}
+	}
+	if best == "" {
+		return "", false
+	}
+	return best, true
 }
 
 func EnsureSignedRRSet(rrs []dns.RR) ([]dns.RR, error) {
