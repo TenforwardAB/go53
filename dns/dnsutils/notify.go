@@ -259,8 +259,8 @@ func checkSOA(zone string) bool {
 }
 
 // handleNotify updates the state for a zone upon receiving a NOTIFY.
-// It ensures at least 10 seconds have passed since the last fetch and that no
-// fetch is currently pending. If eligible, the zone is queued for background fetching.
+// It respects secondary.min_fetch_interval_sec between fetches for the same zone and
+// ensures no fetch is currently pending. If eligible, the zone is queued for background fetching.
 //
 // Parameters:
 //   - zone: The zone name received in the NOTIFY message.
@@ -270,7 +270,8 @@ func handleNotify(zone string) {
 		state = &zoneState{}
 		zoneStates[zone] = state
 	}
-	if state.pending || time.Since(state.lastFetch) < 10*time.Second {
+	minInterval := time.Duration(config.AppConfig.GetLive().Secondary.MinFetchIntervalSec) * time.Second
+	if state.pending || (minInterval > 0 && time.Since(state.lastFetch) < minInterval) {
 		return
 	}
 	state.pending = true

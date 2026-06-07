@@ -237,6 +237,48 @@ func TestHandleNotify_TriggersHandleNotify(t *testing.T) {
 	}
 }
 
+func TestHandleNotifyUsesConfiguredMinFetchInterval(t *testing.T) {
+	testZone := "interval.test."
+	clearFetchQueue()
+	zoneStates = make(map[string]*zoneState)
+	config.AppConfig = &config.ConfigManager{}
+	config.AppConfig.Live = config.DefaultLiveConfig
+	config.AppConfig.Live.Secondary.MinFetchIntervalSec = 0
+
+	handleNotify(testZone)
+	readQueuedZone(t, testZone)
+	zoneStates[testZone].pending = false
+	zoneStates[testZone].lastFetch = time.Now()
+	handleNotify(testZone)
+	readQueuedZone(t, testZone)
+
+	clearFetchQueue()
+	zoneStates = make(map[string]*zoneState)
+	config.AppConfig.Live.Secondary.MinFetchIntervalSec = 30
+	handleNotify(testZone)
+	readQueuedZone(t, testZone)
+	zoneStates[testZone].pending = false
+	zoneStates[testZone].lastFetch = time.Now()
+	handleNotify(testZone)
+	select {
+	case zone := <-fetchQueue:
+		t.Fatalf("unexpected queued zone during min interval: %s", zone)
+	default:
+	}
+}
+
+func readQueuedZone(t *testing.T, want string) {
+	t.Helper()
+	select {
+	case got := <-fetchQueue:
+		if got != want {
+			t.Fatalf("queued zone = %q, want %q", got, want)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("zone %q was not queued for fetch", want)
+	}
+}
+
 func TestCheckSOA_MissingPrimary(t *testing.T) {
 	config.AppConfig = &config.ConfigManager{
 		Live: config.LiveConfig{

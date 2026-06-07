@@ -244,8 +244,9 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		}
 
 		if !answered {
-			if rec, ok := lookupWildcard(q.Qtype, q.Name, wantsDNSSEC); ok {
+			if rec, authority, ok := lookupWildcard(q.Qtype, q.Name, wantsDNSSEC); ok {
 				m.Answer = append(m.Answer, rec...)
+				m.Ns = append(m.Ns, authority...)
 				answered = true
 			}
 		}
@@ -442,8 +443,9 @@ func resolveAnswerChain(qname string, qtype uint16, wantsDNSSEC bool) answerChai
 			return result
 		}
 
-		if rec, ok := lookupWildcard(qtype, current, wantsDNSSEC); ok {
+		if rec, authority, ok := lookupWildcard(qtype, current, wantsDNSSEC); ok {
 			result.Answer = append(result.Answer, rec...)
+			result.Authority = append(result.Authority, authority...)
 			return result
 		}
 
@@ -628,24 +630,31 @@ func inBailiwickGlue(target, delegation string) bool {
 	return target == delegation || strings.HasSuffix(target, "."+delegation)
 }
 
-func lookupWildcard(rrtype uint16, qname string, wantsDNSSEC bool) ([]dns.RR, bool) {
+func lookupWildcard(rrtype uint16, qname string, wantsDNSSEC bool) ([]dns.RR, []dns.RR, bool) {
 	if nameExists(qname) {
-		return nil, false
+		return nil, nil, false
 	}
 	wildcard, ok := zone.WildcardName(qname)
 	if !ok {
-		return nil, false
+		return nil, nil, false
 	}
 
 	if rec, ok := zone.LookupRecord(rrtype, wildcard); ok {
-		return synthesizeWildcard(qname, rec, wantsDNSSEC), true
+		return synthesizeWildcard(qname, rec, wantsDNSSEC), wildcardDenialAuthority(qname, rrtype, wantsDNSSEC), true
 	}
 	if rrtype != dns.TypeCNAME {
 		if rec, ok := zone.LookupRecord(dns.TypeCNAME, wildcard); ok {
-			return synthesizeWildcard(qname, rec, wantsDNSSEC), true
+			return synthesizeWildcard(qname, rec, wantsDNSSEC), wildcardDenialAuthority(qname, rrtype, wantsDNSSEC), true
 		}
 	}
-	return nil, false
+	return nil, nil, false
+}
+
+func wildcardDenialAuthority(qname string, rrtype uint16, wantsDNSSEC bool) []dns.RR {
+	if !wantsDNSSEC {
+		return nil
+	}
+	return denialRecords(qname, rrtype, false)
 }
 
 func synthesizeWildcard(qname string, wildcardRRSet []dns.RR, wantsDNSSEC bool) []dns.RR {

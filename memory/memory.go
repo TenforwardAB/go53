@@ -1393,6 +1393,9 @@ func (z *InMemoryZoneStore) nsecDenialProofsLocked(zone, name string, qtype uint
 		if rr, ok := z.nsecExactLocked(zone, closest); ok {
 			add(rr)
 		}
+		if rr, ok := z.nsecProofLocked(zone, nextCloser); ok {
+			add(rr)
+		}
 		if rr, ok := z.nsecExactLocked(zone, wildcard); ok {
 			add(rr)
 		}
@@ -1439,6 +1442,7 @@ func (z *InMemoryZoneStore) nsec3DenialProofsLocked(zone, name string, qtype uin
 		}
 	case !exact && hasClosest && z.ownerExistsLocked(zone, wildcard):
 		add(z.nsec3MatchingLocked(zone, closest, params))
+		add(z.nsec3CoveringLocked(zone, nextCloser, params, false))
 		add(z.nsec3MatchingLocked(zone, wildcard, params))
 	default:
 		add(z.nsec3MatchingLocked(zone, qname, params))

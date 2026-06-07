@@ -15,10 +15,8 @@ API_PORT="${API_PORT:-18153}"
 ZONE="${ZONE:-bind-dnssec.test.}"
 CONTAINER_NAME="${CONTAINER_NAME:-go53-bind-dnssec-$$}"
 PULL_IMAGE="${PULL_IMAGE:-missing}"
-# Strict flags are opt-in because they currently expose known public DNSSEC
-# validation gaps while the baseline BIND interop checks are expected to pass.
-STRICT_WILDCARD_DELV="${STRICT_WILDCARD_DELV:-0}"
-STRICT_NEGATIVE_DELV="${STRICT_NEGATIVE_DELV:-0}"
+STRICT_WILDCARD_DELV="${STRICT_WILDCARD_DELV:-1}"
+STRICT_NEGATIVE_DELV="${STRICT_NEGATIVE_DELV:-1}"
 
 SERVER_PID=""
 CURRENT_BADGER_DIR="$TMP_ROOT/badger"

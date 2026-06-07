@@ -444,11 +444,14 @@ func TestWildcardSynthesisAndApexSOAHelpers(t *testing.T) {
 		t.Fatalf("Add SOA: %v", err)
 	}
 
-	wildcardRRSet, ok := lookupWildcard(mdns.TypeA, "missing.wild.example.test.", false)
+	wildcardRRSet, authority, ok := lookupWildcard(mdns.TypeA, "missing.wild.example.test.", false)
 	if !ok || len(wildcardRRSet) != 1 || wildcardRRSet[0].Header().Name != "missing.wild.example.test." {
 		wildcardName, wildcardOK := zone.WildcardName("missing.wild.example.test.")
 		lookup, lookupOK := zone.LookupRecord(mdns.TypeA, wildcardName)
 		t.Fatalf("lookupWildcard = %#v ok=%v wildcard=%q wildcardOK=%v lookup=%#v lookupOK=%v", wildcardRRSet, ok, wildcardName, wildcardOK, lookup, lookupOK)
+	}
+	if len(authority) != 0 {
+		t.Fatalf("lookupWildcard without DNSSEC returned authority = %#v", authority)
 	}
 	synthesized := synthesizeWildcard("other.wild.example.test.", wildcardRRSet, false)
 	if len(synthesized) != 1 || synthesized[0].Header().Name != "other.wild.example.test." {

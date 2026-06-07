@@ -34,6 +34,7 @@ func TestDNSSECDenialProofsAndOwnerHelpers(t *testing.T) {
 	requireDenialProofs(t, store, "NXDOMAIN", owner(zone, "missing"), dns.TypeA, true)
 	requireDenialProofs(t, store, "no-data", owner(zone, "www"), dns.TypeMX, false)
 	requireDenialProofs(t, store, "wildcard", owner(zone, "missing.wild"), dns.TypeA, false)
+	requireWildcardNODATAProofSet(t, store, zone)
 }
 
 func TestDNSSECChainRebuildAndRawConverters(t *testing.T) {
@@ -172,6 +173,14 @@ func requireDenialProofs(t *testing.T, store *InMemoryZoneStore, label, name str
 	t.Helper()
 	if proofs := store.DenialProofs(name, rrtype, nxdomain); len(proofs) == 0 {
 		t.Fatalf("%s denial proofs empty", label)
+	}
+}
+
+func requireWildcardNODATAProofSet(t *testing.T, store *InMemoryZoneStore, zone string) {
+	t.Helper()
+	proofs := store.DenialProofs(owner(zone, "missing.wild"), dns.TypeDS, false)
+	if len(proofs) < 3 {
+		t.Fatalf("wildcard NODATA proofs = %d, want closest, next-closer, and wildcard proofs: %#v", len(proofs), proofs)
 	}
 }
 
