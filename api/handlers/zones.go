@@ -55,7 +55,7 @@ func AddRecordHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := afterRecordUpsert(zoneName, rrtypeStr, rrtype, req.name); err != nil {
+	if err := afterRecordUpsert(zoneName, rrtypeStr, rrtype, req.name, req.value); err != nil {
 		http.Error(w, "record stored but distributed event failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -189,17 +189,17 @@ func badRecordRequest(message string) *addRecordError {
 	return &addRecordError{message: message, status: http.StatusBadRequest}
 }
 
-func afterRecordUpsert(zoneName, rrtypeStr string, rrtype uint16, name string) error {
+func afterRecordUpsert(zoneName, rrtypeStr string, rrtype uint16, name string, payload map[string]interface{}) error {
 	if rrtype != dns.TypeSOA {
 		updateSOAAfterRecordChange(zoneName)
 	}
-	if err := publishDistributedUpsert(zoneName, rrtypeStr, name); err != nil {
+	if err := publishDistributedUpsert(zoneName, rrtypeStr, name, payload); err != nil {
 		return err
 	}
 	if rrtype == dns.TypeSOA {
 		return nil
 	}
-	return publishDistributedUpsert(zoneName, "SOA", "@")
+	return publishDistributedUpsert(zoneName, "SOA", "@", map[string]interface{}{})
 }
 
 func updateSOAAfterRecordChange(zoneName string) {
@@ -278,7 +278,7 @@ func DeleteRecordHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if rrtype != dns.TypeSOA {
-		if err := publishDistributedUpsert(zoneName, "SOA", "@"); err != nil {
+		if err := publishDistributedUpsert(zoneName, "SOA", "@", map[string]interface{}{}); err != nil {
 			http.Error(w, "record deleted but distributed SOA event failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -305,7 +305,7 @@ func GetZonesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func publishDistributedUpsert(zoneName, rrtypeStr, name string) error {
+func publishDistributedUpsert(zoneName, rrtypeStr, name string, payload map[string]interface{}) error {
 	if distributed.Default == nil || !distributed.Enabled() {
 		return nil
 	}
@@ -314,6 +314,10 @@ func publishDistributedUpsert(zoneName, rrtypeStr, name string) error {
 		return fmt.Errorf("memory store is not initialized")
 	}
 	recordName := canonicalRecordName(zoneName, rrtypeStr, name)
+	if strings.EqualFold(rrtypeStr, "RRSIG") {
+		covered, _ := payload["type_covered"].(string)
+		recordName = strings.ToUpper(strings.TrimSpace(covered))
+	}
 	zoneKey, typeKey, value, ok := mem.GetRecord(zoneName, strings.ToUpper(rrtypeStr), recordName)
 	if !ok && recordName != name {
 		zoneKey, typeKey, value, ok = mem.GetRecord(zoneName, strings.ToUpper(rrtypeStr), name)
