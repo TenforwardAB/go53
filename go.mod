@@ -11,7 +11,6 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/lib/pq v1.10.9
 	github.com/miekg/dns v1.1.66
-	github.com/o1egl/paseto v1.0.0
 )
 
 require (

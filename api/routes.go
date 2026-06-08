@@ -35,6 +35,10 @@ import (
 func NewRouter(cfg config.BaseConfig) http.Handler {
 	r := mux.NewRouter()
 
+	r.HandleFunc("/openapi.yaml", handlers.OpenAPIHandler).Methods("GET")
+	r.HandleFunc("/swagger", handlers.SwaggerUIHandler).Methods("GET")
+	r.HandleFunc("/swagger/", handlers.SwaggerUIHandler).Methods("GET")
+
 	r.HandleFunc("/api/config", handlers.UpdateLiveConfigHandler).Methods("PATCH")
 	r.HandleFunc("/api/config", handlers.GetLiveConfigHandler).Methods("GET")
 	r.HandleFunc("/.well-known/go53-node.json", handlers.GetWellKnownNodeHandler).Methods("GET")
@@ -89,10 +93,7 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 }
 
 func Start(cfg config.BaseConfig) error {
-	var handler http.Handler = NewRouter(cfg)
-	// Token authentication is enforced only on the TCP listener so the local admin
-	// Unix socket stays unauthenticated. Uncomment once AuthMiddleware is ready:
-	// handler = AuthMiddleware(handler)
+	var handler http.Handler = AuthMiddleware(NewRouter(cfg))
 
 	addr := net.JoinHostPort(cfg.BindHost, strings.TrimPrefix(cfg.APIPort, ":"))
 	log.Printf("Starting API server on %s", addr)

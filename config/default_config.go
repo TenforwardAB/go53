@@ -54,6 +54,14 @@ var DefaultLiveConfig = LiveConfig{
 		PushTimeoutMs:   2000,
 		ResyncIntervalS: 30,
 	},
+
+	Auth: AuthConfig{
+		Mode:         "none",
+		XAuthKey:     "",
+		OIDCIssuer:   "",
+		OIDCAudience: "",
+		OIDCJWKSURL:  "",
+	},
 }
 
 var DefaultBaseConfig = BaseConfig{

@@ -18,31 +18,25 @@
 package api
 
 import (
-	"context"
 	"net/http"
 	"strings"
 
-	"go53/auth"
+	"go53/config"
 )
 
 func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		if !strings.HasPrefix(authHeader, "Bearer ") {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		if IsLocalAdmin(r.Context()) {
+			next.ServeHTTP(w, r)
 			return
 		}
-		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
-		payload, _, err := auth.VerifyToken(tokenStr)
-		if err != nil {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
+		switch strings.ToLower(strings.TrimSpace(config.AppConfig.GetLive().Auth.Mode)) {
+		case "", "none":
+			next.ServeHTTP(w, r)
+		case "x-auth-key", "oidc":
+			http.Error(w, "authentication mode is not implemented", http.StatusNotImplemented)
+		default:
+			http.Error(w, "invalid authentication mode", http.StatusInternalServerError)
 		}
-		ctx := context.WithValue(r.Context(), "user", map[string]any{
-			"sub":    payload.Subject,
-			"roles":  payload.Roles,
-			"scopes": payload.Scopes,
-		})
-		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

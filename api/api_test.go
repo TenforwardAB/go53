@@ -57,9 +57,8 @@ func testBaseConfig() config.BaseConfig {
 }
 
 // newTCPServer spins up an httptest.Server backed by NewRouter. This simulates the
-// TCP API path (currently without auth middleware, which mirrors the live state of the
-// codebase). When auth is wired in it goes in Start(), not NewRouter(), so these tests
-// will continue to work against the unauthenticated router directly.
+// TCP API path through NewRouter directly. AuthMiddleware is applied by Start(), not
+// NewRouter(), so these tests exercise the bare router used by the local admin socket.
 func newTCPServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(api.NewRouter(testBaseConfig()))
@@ -312,6 +311,9 @@ func TestRouterAllManagementRoutes(t *testing.T) {
 	initDistributedForRouterTest(t)
 	router := api.NewRouter(testBaseConfig())
 
+	expectRoute(t, router, http.MethodGet, "/openapi.yaml", "", http.StatusOK)
+	expectRoute(t, router, http.MethodGet, "/swagger", "", http.StatusOK)
+	expectRoute(t, router, http.MethodGet, "/swagger/", "", http.StatusOK)
 	expectRoute(t, router, http.MethodGet, "/api/config", "", http.StatusOK)
 	expectRoute(t, router, http.MethodPatch, "/api/config", `{"primary":{"notify_debounce_ms":60000},"allow_transfer":""}`, http.StatusNoContent)
 	expectRoute(t, router, http.MethodGet, "/.well-known/go53-node.json", "", http.StatusOK)
@@ -412,6 +414,56 @@ func TestRouterPagination(t *testing.T) {
 	}
 	if typePage.Limit != 1 || typePage.Offset != 1 || typePage.Total != 2 || len(typePage.Items) != 1 {
 		t.Fatalf("type pagination = %#v", typePage)
+	}
+}
+
+func TestAuthMiddlewareNoneAllowsRequest(t *testing.T) {
+	setupAPITest(t)
+	config.AppConfig.Live.Auth.Mode = "none"
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/probe", nil)
+	api.AuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("AuthMiddleware none status = %d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAuthMiddlewareFutureModesFailClosed(t *testing.T) {
+	for _, mode := range []string{"x-auth-key", "oidc"} {
+		t.Run(mode, func(t *testing.T) {
+			setupAPITest(t)
+			config.AppConfig.Live.Auth.Mode = mode
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/probe", nil)
+			api.AuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				t.Fatal("handler should not be reached")
+			})).ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusNotImplemented {
+				t.Fatalf("AuthMiddleware %s status = %d body=%q", mode, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestAuthMiddlewareLocalAdminBypassesAuthMode(t *testing.T) {
+	setupAPITest(t)
+	config.AppConfig.Live.Auth.Mode = "oidc"
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/probe", nil)
+	handler := api.WrapLocalAdminTag(api.AuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})))
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("local admin AuthMiddleware status = %d body=%q", rec.Code, rec.Body.String())
 	}
 }
 

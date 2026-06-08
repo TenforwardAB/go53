@@ -38,8 +38,8 @@ const adminSocketMode os.FileMode = 0o660
 // localAdminContextKey marks requests that arrived over the trusted local admin
 // Unix socket. Such requests are gated by filesystem permissions rather than by API
 // token auth, so they are the break-glass administration path used when the external
-// IdP is unreachable. A future AuthMiddleware on the TCP listener can consult
-// IsLocalAdmin to skip token checks (the socket handler is already unauthenticated).
+// IdP is unreachable. AuthMiddleware can consult IsLocalAdmin to skip token checks,
+// but the socket handler is already served without that middleware.
 type localAdminContextKey struct{}
 
 // IsLocalAdmin reports whether the request arrived over the trusted admin socket.

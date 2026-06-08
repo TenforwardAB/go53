@@ -67,6 +67,14 @@ type DistributedConfig struct {
 	ResyncIntervalS int               `json:"resync_interval_s"`
 }
 
+type AuthConfig struct {
+	Mode         string `json:"mode"`          // none/x-auth-key/oidc
+	XAuthKey     string `json:"x_auth_key"`    // base62, minimum 32 characters when enabled
+	OIDCIssuer   string `json:"oidc_issuer"`   // future OIDC issuer URL
+	OIDCAudience string `json:"oidc_audience"` // future OIDC audience/client id
+	OIDCJWKSURL  string `json:"oidc_jwks_url"` // future JWKS endpoint override
+}
+
 type LiveConfig struct {
 	LogLevel          string `json:"log_level"`       // debug/info/warn
 	Mode              string `json:"mode"`            // primary/secondary/distributed
@@ -89,6 +97,7 @@ type LiveConfig struct {
 	Secondary   SecondaryConfig       `json:"secondary"`
 	DNSSEC      DNSSECSignaturePolicy `json:"dnssec"`
 	Distributed DistributedConfig     `json:"distributed"`
+	Auth        AuthConfig            `json:"auth"`
 }
 
 type ConfigManager struct {
