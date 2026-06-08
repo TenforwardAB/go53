@@ -433,6 +433,9 @@ func ProcessFetchQueue() {
 					state.lastFetch = time.Now()
 				}
 				stateMu.Unlock()
+				if catalog, ok := catalogZoneName(); ok && zone == catalog {
+					enqueueCatalogMembers()
+				}
 			}
 		}(izone)
 	}
@@ -454,6 +457,12 @@ func refreshZoneUnion() []string {
 		if f, err := internal.SanitizeFQDN(z); err == nil && f != "" {
 			set[f] = struct{}{}
 		}
+	}
+	if catalog, ok := catalogZoneName(); ok {
+		set[catalog] = struct{}{}
+	}
+	for _, z := range catalogMembers() {
+		set[z] = struct{}{}
 	}
 	if store := rtypes.GetMemStore(); store != nil {
 		for _, z := range store.ZoneNamesSnapshot() {

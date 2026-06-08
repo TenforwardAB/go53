@@ -435,6 +435,8 @@ curl -X PATCH http://127.0.0.1:8053/api/config \
             <tr><td><code>secondary.fetch_debounce_ms</code></td><td><code>3000</code></td><td>Delay used to coalesce secondary transfer fetches.</td></tr>
             <tr><td><code>secondary.min_fetch_interval_sec</code></td><td><code>10</code></td><td>Minimum interval between secondary fetches for the same zone.</td></tr>
             <tr><td><code>secondary.max_parallel_fetches</code></td><td><code>5</code></td><td>Maximum concurrent secondary transfer fetches.</td></tr>
+            <tr><td><code>secondary.catalog_enabled</code></td><td><code>false</code></td><td>Maintains and follows an RFC 9432 catalog zone for dynamic secondary member-zone discovery.</td></tr>
+            <tr><td><code>secondary.catalog_zone</code></td><td><code>_catalog.go53.</code></td><td>Catalog zone name used as the secondary bootstrap catalog and primary-side member list.</td></tr>
             <tr><td><code>distributed.node_id</code></td><td><code>""</code></td><td>Stable unique node name used in event origins, vectors, TLS identity, and peer trust maps.</td></tr>
             <tr><td><code>distributed.peers</code></td><td><code>""</code></td><td>Comma-separated peer endpoints. Use <code>tls://host:port</code> or <code>mtls://host:port</code> for encrypted socket replication.</td></tr>
             <tr><td><code>distributed.transport</code></td><td><code>http</code></td><td>Replication transport: <code>http</code>, <code>tcp</code>, <code>tls</code>, or <code>mtls</code>. Production distributed clusters should use <code>tls</code> or <code>mtls</code>.</td></tr>

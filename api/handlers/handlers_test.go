@@ -15,6 +15,7 @@ import (
 	"go53/memory"
 	"go53/security"
 	"go53/storage"
+	"go53/types"
 	"go53/zone/rtypes"
 )
 
@@ -189,6 +190,39 @@ func TestZoneHandlersBasicResponses(t *testing.T) {
 	AddRecordHandler(badRec, badReq)
 	if badRec.Code != http.StatusBadRequest {
 		t.Fatalf("unknown RR type status = %d", badRec.Code)
+	}
+}
+
+func TestAddRecordUpdatesCatalogZone(t *testing.T) {
+	setupHandlerTestStore(t)
+	config.AppConfig.Live.Mode = "primary"
+	config.AppConfig.Live.Secondary.CatalogEnabled = true
+	config.AppConfig.Live.Secondary.CatalogZone = "_catalog.go53."
+	distributed.Default = nil
+	t.Cleanup(func() { distributed.Default = nil })
+
+	addReq := httptest.NewRequest(http.MethodPost, "/api/zones/member.test./records/SOA", strings.NewReader(`{"ttl":300,"ns":"ns1.member.test.","mbox":"hostmaster.member.test.","refresh":3600,"retry":600,"expire":86400,"minimum":300}`))
+	addReq = mux.SetURLVars(addReq, map[string]string{"zone": "member.test.", "rrtype": "SOA"})
+	addRec := httptest.NewRecorder()
+	AddRecordHandler(addRec, addReq)
+	if addRec.Code != http.StatusCreated {
+		t.Fatalf("AddRecordHandler status = %d body=%q", addRec.Code, addRec.Body.String())
+	}
+
+	store := rtypes.GetMemStore()
+	ptrs := store.ZoneRecordsSnapshot("_catalog.go53.")["PTR"]
+	found := false
+	for _, raw := range ptrs {
+		if records, ok := raw.([]types.PTRRecord); ok {
+			for _, rec := range records {
+				if rec.Ptr == "member.test." {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("catalog member PTR for member.test. not found: %#v", ptrs)
 	}
 }
 

@@ -79,7 +79,7 @@ func SanitizeFQDN(fqdn string) (string, error) {
 		return "@", nil
 	}
 
-	var validFQDN = regexp.MustCompile(`(?i)^[a-z0-9-\.]+$`)
+	var validFQDN = regexp.MustCompile(`(?i)^[a-z0-9-_\.]+$`)
 	fqdn = strings.TrimSpace(fqdn)
 
 	if fqdn == "" {

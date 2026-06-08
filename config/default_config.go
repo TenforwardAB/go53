@@ -31,6 +31,8 @@ var DefaultLiveConfig = LiveConfig{
 		Zones:               []string{},
 		RefreshIntervalSec:  3600, // hourly self-heal, BIND-like
 		RefreshJitterSec:    60,
+		CatalogEnabled:      false,
+		CatalogZone:         "_catalog.go53.",
 	},
 
 	DNSSEC: DNSSECSignaturePolicy{

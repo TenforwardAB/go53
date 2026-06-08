@@ -59,6 +59,10 @@ func AddRecordHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "record stored but distributed event failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if err := dnsutils.EnsureCatalogMember(zoneName); err != nil {
+		http.Error(w, "record stored but catalog update failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	w.WriteHeader(http.StatusCreated)
 }

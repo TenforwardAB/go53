@@ -43,6 +43,8 @@ type SecondaryConfig struct {
 	Zones               []string `json:"zones"`                  // bootstrap zone list for cold-start secondaries
 	RefreshIntervalSec  int      `json:"refresh_interval_sec"`   // periodic sweep cadence; 0 disables periodic refresh
 	RefreshJitterSec    int      `json:"refresh_jitter_sec"`     // max random per-zone delay each sweep
+	CatalogEnabled      bool     `json:"catalog_enabled"`        // maintain/follow RFC 9432 catalog zone
+	CatalogZone         string   `json:"catalog_zone"`           // bootstrap catalog zone name
 }
 
 type DNSSECSignaturePolicy struct {

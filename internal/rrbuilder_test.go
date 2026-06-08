@@ -33,7 +33,10 @@ func TestUtilHelpers(t *testing.T) {
 	if got, err := SanitizeFQDN("@"); err != nil || got != "@" {
 		t.Fatalf("SanitizeFQDN @ = %q err=%v", got, err)
 	}
-	if _, err := SanitizeFQDN("bad_name"); err == nil {
+	if got, err := SanitizeFQDN("_catalog.go53."); err != nil || got != "_catalog.go53." {
+		t.Fatalf("SanitizeFQDN _catalog = %q err=%v", got, err)
+	}
+	if _, err := SanitizeFQDN("bad$name"); err == nil {
 		t.Fatalf("SanitizeFQDN accepted invalid name")
 	}
 
