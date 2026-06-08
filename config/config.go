@@ -30,9 +30,6 @@ type BaseConfig struct {
 	AdminSocketGroup string
 }
 
-type DevConfig struct {
-	DualMode bool `json:"dual_mode"` // true/false if you want to use server as both Primary/Replictor and Secondary
-}
 type PrimaryConfig struct {
 	NotifyDebounceMs int    `json:"notify_debounce_ms"` // delay before sending NOTIFY
 	Ip               string `json:"ip"`                 //ip of primary DNS
@@ -40,9 +37,12 @@ type PrimaryConfig struct {
 }
 
 type SecondaryConfig struct {
-	FetchDebounceMs     int `json:"fetch_debounce_ms"`      // delay before starting AXFR/IXFR
-	MinFetchIntervalSec int `json:"min_fetch_interval_sec"` // rate limit per zone
-	MaxParallelFetches  int `json:"max_parallel_fetches"`   // limit concurrent zone fetches
+	FetchDebounceMs     int      `json:"fetch_debounce_ms"`      // delay before starting AXFR/IXFR
+	MinFetchIntervalSec int      `json:"min_fetch_interval_sec"` // rate limit per zone
+	MaxParallelFetches  int      `json:"max_parallel_fetches"`   // limit concurrent zone fetches
+	Zones               []string `json:"zones"`                  // bootstrap zone list for cold-start secondaries
+	RefreshIntervalSec  int      `json:"refresh_interval_sec"`   // periodic sweep cadence; 0 disables periodic refresh
+	RefreshJitterSec    int      `json:"refresh_jitter_sec"`     // max random per-zone delay each sweep
 }
 
 type DNSSECSignaturePolicy struct {
@@ -85,7 +85,6 @@ type LiveConfig struct {
 
 	Primary     PrimaryConfig         `json:"primary"`
 	Secondary   SecondaryConfig       `json:"secondary"`
-	Dev         DevConfig             `json:"dev"`
 	DNSSEC      DNSSECSignaturePolicy `json:"dnssec"`
 	Distributed DistributedConfig     `json:"distributed"`
 }

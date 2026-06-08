@@ -79,8 +79,11 @@ func main() {
 	rtypes.InitMemoryStore(store)
 	distributed.Init(store)
 
+	ctx := context.Background()
 	go dnsutils.ProcessFetchQueue()
-	distributed.Start(context.Background())
+	// Secondary-mode startup + periodic AXFR refresh. No-op in primary/distributed mode.
+	dnsutils.StartSecondaryRefresh(ctx)
+	distributed.Start(ctx)
 
 	go func() {
 		log.Println("Starting DNS server on", base.DNSPort)

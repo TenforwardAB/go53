@@ -1,6 +1,7 @@
 package dnsutils
 
 import (
+	"context"
 	"go53/config"
 	"sync"
 	"testing"
@@ -267,6 +268,33 @@ func TestHandleNotifyUsesConfiguredMinFetchInterval(t *testing.T) {
 	}
 }
 
+func TestEnqueueFetchFullQueueClearsPending(t *testing.T) {
+	testZone := "full-queue.test."
+	clearFetchQueue()
+	stateMu.Lock()
+	zoneStates = make(map[string]*zoneState)
+	stateMu.Unlock()
+	config.AppConfig = &config.ConfigManager{}
+	config.AppConfig.Live = config.DefaultLiveConfig
+	config.AppConfig.Live.Secondary.MinFetchIntervalSec = 0
+
+	for i := 0; i < cap(fetchQueue); i++ {
+		fetchQueue <- "queued.test."
+	}
+	if enqueueFetch(testZone) {
+		t.Fatalf("enqueueFetch succeeded with a full queue")
+	}
+
+	stateMu.Lock()
+	state := zoneStates[testZone]
+	pending := state != nil && state.pending
+	stateMu.Unlock()
+	if pending {
+		t.Fatalf("zone remained pending after full queue rejection")
+	}
+	clearFetchQueue()
+}
+
 func readQueuedZone(t *testing.T, want string) {
 	t.Helper()
 	select {
@@ -320,7 +348,9 @@ func TestFetchZone_InvalidAXFR(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	fetchZone(zoneName)
+	if fetchZone(zoneName) {
+		t.Fatalf("fetchZone succeeded for refused AXFR")
+	}
 
 }
 
@@ -336,13 +366,171 @@ func TestSendNotify_InvalidTarget(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 }
 
+// collectQueued drains up to want zone names from fetchQueue within the timeout and
+// returns them as a set. It does not require ProcessFetchQueue to be running.
+func collectQueued(want int, timeout time.Duration) map[string]bool {
+	got := make(map[string]bool)
+	deadline := time.After(timeout)
+	for len(got) < want {
+		select {
+		case z := <-fetchQueue:
+			got[z] = true
+		case <-deadline:
+			return got
+		}
+	}
+	return got
+}
+
+func TestStartSecondaryRefresh_StartupSweepEnqueuesConfiguredZones(t *testing.T) {
+	clearFetchQueue()
+	stateMu.Lock()
+	zoneStates = make(map[string]*zoneState)
+	stateMu.Unlock()
+
+	config.AppConfig = &config.ConfigManager{}
+	config.AppConfig.Live = config.DefaultLiveConfig
+	config.AppConfig.Live.Mode = "secondary"
+	config.AppConfig.Live.Primary.Ip = "127.0.0.1"
+	config.AppConfig.Live.Secondary.MinFetchIntervalSec = 0
+	config.AppConfig.Live.Secondary.RefreshIntervalSec = 0 // disable ticker; test the one-shot sweep
+	config.AppConfig.Live.Secondary.Zones = []string{"a.test.", "b.test."}
+
+	StartSecondaryRefresh(context.Background())
+
+	got := collectQueued(2, time.Second)
+	if !got["a.test."] || !got["b.test."] {
+		t.Fatalf("startup sweep enqueued %v, want a.test. and b.test.", got)
+	}
+}
+
+func TestStartSecondaryRefresh_DisabledInPrimaryMode(t *testing.T) {
+	clearFetchQueue()
+	stateMu.Lock()
+	zoneStates = make(map[string]*zoneState)
+	stateMu.Unlock()
+
+	config.AppConfig = &config.ConfigManager{}
+	config.AppConfig.Live = config.DefaultLiveConfig
+	config.AppConfig.Live.Mode = "primary" // gating must suppress the sweep
+	config.AppConfig.Live.Primary.Ip = "127.0.0.1"
+	config.AppConfig.Live.Secondary.Zones = []string{"a.test."}
+
+	StartSecondaryRefresh(context.Background())
+
+	select {
+	case z := <-fetchQueue:
+		t.Fatalf("primary mode must not enqueue, got %q", z)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func TestStartSecondaryRefresh_DisabledWhenPrimaryIpEmpty(t *testing.T) {
+	clearFetchQueue()
+	stateMu.Lock()
+	zoneStates = make(map[string]*zoneState)
+	stateMu.Unlock()
+
+	config.AppConfig = &config.ConfigManager{}
+	config.AppConfig.Live = config.DefaultLiveConfig
+	config.AppConfig.Live.Mode = "secondary"
+	config.AppConfig.Live.Primary.Ip = "" // no upstream configured
+	config.AppConfig.Live.Secondary.Zones = []string{"a.test."}
+
+	StartSecondaryRefresh(context.Background())
+
+	select {
+	case z := <-fetchQueue:
+		t.Fatalf("empty Primary.Ip must not enqueue, got %q", z)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func TestRunRefreshTicker_PeriodicEnqueue(t *testing.T) {
+	clearFetchQueue()
+	stateMu.Lock()
+	zoneStates = make(map[string]*zoneState)
+	stateMu.Unlock()
+
+	config.AppConfig = &config.ConfigManager{}
+	config.AppConfig.Live = config.DefaultLiveConfig
+	config.AppConfig.Live.Mode = "secondary"
+	config.AppConfig.Live.Primary.Ip = "127.0.0.1"
+	config.AppConfig.Live.Secondary.MinFetchIntervalSec = 0
+	config.AppConfig.Live.Secondary.RefreshIntervalSec = 1
+	config.AppConfig.Live.Secondary.RefreshJitterSec = 0
+	config.AppConfig.Live.Secondary.Zones = []string{"t.test."}
+
+	// Drain enqueued zones and clear the pending flag so each tick can re-enqueue
+	// (ProcessFetchQueue is not running in this test).
+	var mu sync.Mutex
+	count := 0
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case z := <-fetchQueue:
+				mu.Lock()
+				count++
+				mu.Unlock()
+				stateMu.Lock()
+				if s, ok := zoneStates[z]; ok {
+					s.pending = false
+				}
+				stateMu.Unlock()
+			case <-stop:
+				return
+			}
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go runRefreshTicker(ctx)
+	time.Sleep(2500 * time.Millisecond) // ~2 ticks at 1s
+	cancel()
+	close(stop)
+
+	mu.Lock()
+	got := count
+	mu.Unlock()
+	if got < 2 {
+		t.Fatalf("periodic ticker enqueued %d times in ~2.5s at 1s interval, want >= 2", got)
+	}
+}
+
+func TestSweepOnceJitterHonorsCanceledContext(t *testing.T) {
+	clearFetchQueue()
+	stateMu.Lock()
+	zoneStates = make(map[string]*zoneState)
+	stateMu.Unlock()
+
+	config.AppConfig = &config.ConfigManager{}
+	config.AppConfig.Live = config.DefaultLiveConfig
+	config.AppConfig.Live.Mode = "secondary"
+	config.AppConfig.Live.Primary.Ip = "127.0.0.1"
+	config.AppConfig.Live.Secondary.MinFetchIntervalSec = 0
+	config.AppConfig.Live.Secondary.RefreshJitterSec = 1
+	config.AppConfig.Live.Secondary.Zones = []string{"jitter.test."}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	sweepOnce(ctx, config.AppConfig.GetLive())
+	cancel()
+
+	select {
+	case z := <-fetchQueue:
+		t.Fatalf("canceled jitter callback enqueued %q", z)
+	case <-time.After(1200 * time.Millisecond):
+	}
+}
+
 func TestProcessFetchQueue_Trigger(t *testing.T) {
 	called := make(chan string, 1)
 
 	// Override fetchZone temporarily
 	originalFetchZone := fetchZoneFunc
-	fetchZoneFunc = func(zoneName string) {
+	fetchZoneFunc = func(zoneName string) bool {
 		called <- zoneName
+		return true
 	}
 	defer func() { fetchZoneFunc = originalFetchZone }()
 
