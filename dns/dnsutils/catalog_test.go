@@ -83,6 +83,36 @@ func TestRefreshZoneUnionIncludesCatalogAndMembers(t *testing.T) {
 	}
 }
 
+func TestPruneRemovedCatalogMembersDeletesOnlyRemovedMembers(t *testing.T) {
+	setupCatalogTestStore(t, "secondary")
+	addTestSOA(t, "old.example.")
+	addTestSOA(t, "keep.example.")
+
+	pruneRemovedCatalogMembers(
+		[]string{"old.example.", "keep.example."},
+		[]string{"keep.example."},
+	)
+
+	if _, ok := zone.LookupRecord(dns.TypeSOA, "old.example."); ok {
+		t.Fatalf("old catalog member still exists")
+	}
+	if _, ok := zone.LookupRecord(dns.TypeSOA, "keep.example."); !ok {
+		t.Fatalf("kept catalog member was deleted")
+	}
+}
+
+func TestPruneRemovedCatalogMembersKeepsConfiguredZones(t *testing.T) {
+	setupCatalogTestStore(t, "secondary")
+	config.AppConfig.Live.Secondary.Zones = []string{"manual.example."}
+	addTestSOA(t, "manual.example.")
+
+	pruneRemovedCatalogMembers([]string{"manual.example."}, nil)
+
+	if _, ok := zone.LookupRecord(dns.TypeSOA, "manual.example."); !ok {
+		t.Fatalf("configured zone was deleted")
+	}
+}
+
 func addTestSOA(t *testing.T, name string) {
 	t.Helper()
 	if err := zone.AddRecord(dns.TypeSOA, name, name, map[string]interface{}{

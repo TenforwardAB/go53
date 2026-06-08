@@ -386,10 +386,19 @@ func fetchZone(zoneName string) bool {
 	log.Printf("[fetchZone] AXFR returned %d records", len(records))
 	log.Printf("[fetchZone] AXFR returned the records: %+v", records)
 
+	var oldCatalogMembers, newCatalogMembers []string
+	if catalog, ok := catalogZoneName(); ok && fqdn == catalog {
+		oldCatalogMembers = catalogMembers()
+		newCatalogMembers = catalogMembersFromRecords(records, catalog)
+	}
+
 	err = ImportRecords("", zoneName, records)
 	if err != nil {
 		log.Println("[fetchZone] error importing AXFR records: ", err)
 		return false
+	}
+	if oldCatalogMembers != nil {
+		pruneRemovedCatalogMembers(oldCatalogMembers, newCatalogMembers)
 	}
 
 	log.Printf("[fetchZone] got %d records for %s", len(records), zoneName)

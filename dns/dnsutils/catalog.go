@@ -157,6 +157,67 @@ func catalogMembers() []string {
 	return out
 }
 
+func catalogMembersFromRecords(records []dns.RR, catalog string) []string {
+	hasVersion := false
+	out := make([]string, 0)
+	suffix := ".zones." + strings.ToLower(catalog)
+	for _, rr := range records {
+		switch r := rr.(type) {
+		case *dns.TXT:
+			if strings.EqualFold(r.Hdr.Name, "version."+catalog) {
+				for _, s := range r.Txt {
+					if s == catalogVersion {
+						hasVersion = true
+						break
+					}
+				}
+			}
+		case *dns.PTR:
+			if !strings.HasSuffix(strings.ToLower(r.Hdr.Name), suffix) {
+				continue
+			}
+			if member, err := internal.SanitizeFQDN(r.Ptr); err == nil && member != "" && member != catalog {
+				out = append(out, member)
+			}
+		}
+	}
+	if !hasVersion {
+		return nil
+	}
+	return out
+}
+
+func pruneRemovedCatalogMembers(oldMembers, newMembers []string) {
+	keep := make(map[string]struct{}, len(newMembers)+len(config.AppConfig.GetLive().Secondary.Zones)+1)
+	for _, z := range newMembers {
+		if f, err := internal.SanitizeFQDN(z); err == nil && f != "" {
+			keep[f] = struct{}{}
+		}
+	}
+	for _, z := range config.AppConfig.GetLive().Secondary.Zones {
+		if f, err := internal.SanitizeFQDN(z); err == nil && f != "" {
+			keep[f] = struct{}{}
+		}
+	}
+	if catalog, ok := catalogZoneName(); ok {
+		keep[catalog] = struct{}{}
+	}
+	for _, z := range oldMembers {
+		member, err := internal.SanitizeFQDN(z)
+		if err != nil || member == "" {
+			continue
+		}
+		if _, ok := keep[member]; ok {
+			continue
+		}
+		if err := zone.DeleteZone(member); err != nil {
+			log.Printf("[catalog] failed to delete removed member %s: %v", member, err)
+			continue
+		}
+		log.Printf("[catalog] deleted removed member %s", member)
+	}
+}
+
 func ptrRecords(owner string) []dns.RR {
 	rrs, _ := zone.LookupRecord(dns.TypePTR, owner)
 	return rrs

@@ -117,6 +117,23 @@ wait_for_record() {
 	fail "did not observe $rrtype $name on $SERVER_ADDR:$port; last output: $output"
 }
 
+wait_for_absent_record() {
+	local port="$1"
+	local name="$2"
+	local rrtype="$3"
+	local container="${4:-$BIND_PRIMARY_CONTAINER}"
+	local deadline=$((SECONDS + 45))
+	local output
+	while ((SECONDS < deadline)); do
+		output="$(bind_exec "$container" dig @"$SERVER_ADDR" -p "$port" "$name" "$rrtype" +time=1 +tries=1 +noall +answer 2>/dev/null || true)"
+		if [[ -z "$output" ]]; then
+			return 0
+		fi
+		sleep 0.5
+	done
+	fail "still observed $rrtype $name on $SERVER_ADDR:$port; last output: $output"
+}
+
 soa_serial() {
 	local port="$1"
 	local zone="$2"
@@ -397,6 +414,12 @@ main() {
 	wait_for_record "$GO53_SECONDARY_DNS_PORT" "$MEMBER_A_ZONE" SOA "$MEMBER_A_SERIAL"
 	echo "[B] ok: go53 discovered new member $MEMBER_B_ZONE from refreshed BIND catalog"
 
+	write_catalog_zone 3 "$MEMBER_B_ZONE"
+	reload_bind
+	wait_for_absent_record "$GO53_SECONDARY_DNS_PORT" "www.$MEMBER_A_ZONE" A
+	wait_for_record "$GO53_SECONDARY_DNS_PORT" "www.$MEMBER_B_ZONE" A "192\\.0\\.2\\.102"
+	echo "[C] ok: go53 deleted removed catalog member $MEMBER_A_ZONE"
+
 	stop_go53
 
 	echo "== go53 catalog primary -> BIND secondary =="
@@ -408,7 +431,7 @@ main() {
 	wait_for_record "$BIND_SECONDARY_PORT" "$CATALOG_ZONE" SOA "$CATALOG_SERIAL" "$BIND_SECONDARY_CONTAINER"
 	wait_for_record "$BIND_SECONDARY_PORT" "www.$MEMBER_A_ZONE" A "192\\.0\\.2\\.111" "$BIND_SECONDARY_CONTAINER"
 	wait_for_record "$BIND_SECONDARY_PORT" "txt.$MEMBER_A_ZONE" TXT "go53 catalog primary member" "$BIND_SECONDARY_CONTAINER"
-	echo "[C] ok: BIND fetched go53 catalog $CATALOG_ZONE and member $MEMBER_A_ZONE"
+	echo "[D] ok: BIND fetched go53 catalog $CATALOG_ZONE and member $MEMBER_A_ZONE"
 
 	echo "BIND/go53 catalog interop checks passed"
 }
