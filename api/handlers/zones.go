@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -29,6 +31,20 @@ type addRecordRequest struct {
 type addRecordError struct {
 	message string
 	status  int
+}
+
+type recordListItem struct {
+	Zone    string `json:"zone"`
+	Type    string `json:"type"`
+	Name    string `json:"name"`
+	Records any    `json:"records"`
+}
+
+type pageResult struct {
+	Items  any `json:"items"`
+	Limit  int `json:"limit"`
+	Offset int `json:"offset"`
+	Total  int `json:"total"`
 }
 
 // POST /api/zones/{zone}/records/{rrtype}
@@ -67,12 +83,53 @@ func AddRecordHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
+func UpdateRecordHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	zoneName := vars["zone"]
+	rrtypeStr := vars["rrtype"]
+	name := vars["name"]
+
+	rrtype, err := internal.RRTypeStringToUint16(rrtypeStr)
+	if err != nil {
+		http.Error(w, "Unknown RR type", http.StatusBadRequest)
+		return
+	}
+	payload, reqErr := decodeRecordPayload(r.Body)
+	if reqErr != nil {
+		http.Error(w, reqErr.message, reqErr.status)
+		return
+	}
+	payload["name"] = name
+	req, reqErr := newAddRecordRequestFromPayload(zoneName, rrtype, payload)
+	if reqErr != nil {
+		http.Error(w, reqErr.message, reqErr.status)
+		return
+	}
+
+	if err := zone.DeleteRecord(rrtype, name, nil); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := zone.AddRecord(rrtype, zoneName, req.name, req.value, req.ttlPtr); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := afterRecordUpsert(zoneName, rrtypeStr, rrtype, req.name, req.value); err != nil {
+		http.Error(w, "record updated but distributed event failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func newAddRecordRequest(body io.Reader, zoneName string, rrtype uint16) (addRecordRequest, *addRecordError) {
 	payload, err := decodeRecordPayload(body)
 	if err != nil {
 		return addRecordRequest{}, err
 	}
+	return newAddRecordRequestFromPayload(zoneName, rrtype, payload)
+}
 
+func newAddRecordRequestFromPayload(zoneName string, rrtype uint16, payload map[string]interface{}) (addRecordRequest, *addRecordError) {
 	req, err := recordRequestFromPayload(zoneName, rrtype, payload)
 	if err != nil {
 		return addRecordRequest{}, err
@@ -216,6 +273,44 @@ func updateSOAAfterRecordChange(zoneName string) {
 	}
 }
 
+func ListZoneRecordsHandler(w http.ResponseWriter, r *http.Request) {
+	writeZoneRecords(w, r, "")
+}
+
+func ListZoneRecordsByTypeHandler(w http.ResponseWriter, r *http.Request) {
+	rrtypeStr := mux.Vars(r)["rrtype"]
+	if _, err := internal.RRTypeStringToUint16(rrtypeStr); err != nil {
+		http.Error(w, "Unknown RR type", http.StatusBadRequest)
+		return
+	}
+	writeZoneRecords(w, r, strings.ToUpper(rrtypeStr))
+}
+
+func writeZoneRecords(w http.ResponseWriter, r *http.Request, onlyType string) {
+	zoneName, err := internal.SanitizeFQDN(mux.Vars(r)["zone"])
+	if err != nil {
+		http.Error(w, "invalid zone", http.StatusBadRequest)
+		return
+	}
+	store := rtypes.GetMemStore()
+	if store == nil {
+		http.Error(w, "memory store is not initialized", http.StatusInternalServerError)
+		return
+	}
+	if !zoneExists(store.ZoneNamesSnapshot(), zoneName) {
+		http.Error(w, "zone not found", http.StatusNotFound)
+		return
+	}
+	items := flattenZoneRecords(zoneName, store.ZoneRecordsSnapshot(zoneName), onlyType)
+	limit, offset := pageParams(r)
+	writeJSON(w, pageResult{
+		Items:  pageSlice(items, limit, offset),
+		Limit:  limit,
+		Offset: offset,
+		Total:  len(items),
+	})
+}
+
 // GET /api/zones/{zone}/records/{rrtype}/{name}
 func GetRecordHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
@@ -293,20 +388,134 @@ func DeleteRecordHandler(w http.ResponseWriter, r *http.Request) {
 
 // GET
 func GetZonesHandler(w http.ResponseWriter, r *http.Request) {
-	userRaw := r.Context().Value("user")
-	payload, ok := userRaw.(map[string]interface{})
-	if !ok {
-		http.Error(w, "unauthorized or missing user context", http.StatusUnauthorized)
+	store := rtypes.GetMemStore()
+	if store == nil {
+		http.Error(w, "memory store is not initialized", http.StatusInternalServerError)
 		return
 	}
-
-	err := json.NewEncoder(w).Encode(map[string]any{
-		"message": "Authorized",
-		"user":    payload,
+	zones := store.ZoneNamesSnapshot()
+	limit, offset := pageParams(r)
+	writeJSON(w, pageResult{
+		Items:  pageSlice(zones, limit, offset),
+		Limit:  limit,
+		Offset: offset,
+		Total:  len(zones),
 	})
+}
+
+func DeleteZoneHandler(w http.ResponseWriter, r *http.Request) {
+	zoneName, err := internal.SanitizeFQDN(mux.Vars(r)["zone"])
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		http.Error(w, "invalid zone", http.StatusBadRequest)
+		return
 	}
+	if err := zone.DeleteZone(zoneName); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func TriggerSecondaryFetchHandler(w http.ResponseWriter, r *http.Request) {
+	if config.AppConfig.GetLive().Mode != "secondary" {
+		http.Error(w, "secondary fetch is only available in secondary mode", http.StatusConflict)
+		return
+	}
+	zoneName, err := internal.SanitizeFQDN(mux.Vars(r)["zone"])
+	if err != nil {
+		http.Error(w, "invalid zone", http.StatusBadRequest)
+		return
+	}
+	if !dnsutils.EnqueueZoneFetch(zoneName) {
+		http.Error(w, "fetch already pending, rate-limited, or queue full", http.StatusTooManyRequests)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]string{"zone": zoneName, "status": "queued"})
+}
+
+func TriggerNotifyHandler(w http.ResponseWriter, r *http.Request) {
+	zoneName, err := internal.SanitizeFQDN(mux.Vars(r)["zone"])
+	if err != nil {
+		http.Error(w, "invalid zone", http.StatusBadRequest)
+		return
+	}
+	dnsutils.ScheduleNotify(zoneName)
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]string{"zone": zoneName, "status": "scheduled"})
+}
+
+func GetCatalogStatusHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, dnsutils.CatalogStatus())
+}
+
+func GetCatalogMembersHandler(w http.ResponseWriter, r *http.Request) {
+	members := dnsutils.CatalogMembers()
+	limit, offset := pageParams(r)
+	writeJSON(w, pageResult{
+		Items:  pageSlice(members, limit, offset),
+		Limit:  limit,
+		Offset: offset,
+		Total:  len(members),
+	})
+}
+
+func ExportZoneHandler(w http.ResponseWriter, r *http.Request) {
+	zoneName, err := internal.SanitizeFQDN(mux.Vars(r)["zone"])
+	if err != nil {
+		http.Error(w, "invalid zone", http.StatusBadRequest)
+		return
+	}
+	rrs, ok := zone.LookupRecord(dns.TypeAXFR, zoneName)
+	if !ok {
+		http.Error(w, "zone not found", http.StatusNotFound)
+		return
+	}
+	if len(rrs) > 1 && rrs[0].String() == rrs[len(rrs)-1].String() {
+		rrs = rrs[:len(rrs)-1]
+	}
+	w.Header().Set("Content-Type", "text/dns; charset=utf-8")
+	for _, rr := range rrs {
+		_, _ = io.WriteString(w, rr.String()+"\n")
+	}
+}
+
+func ImportZoneHandler(w http.ResponseWriter, r *http.Request) {
+	zoneName, err := internal.SanitizeFQDN(mux.Vars(r)["zone"])
+	if err != nil {
+		http.Error(w, "invalid zone", http.StatusBadRequest)
+		return
+	}
+	parser := dns.NewZoneParser(http.MaxBytesReader(w, r.Body, 10<<20), zoneName, "")
+	records := []dns.RR{}
+	hasSOA := false
+	for rr, ok := parser.Next(); ok; rr, ok = parser.Next() {
+		if rr.Header().Rrtype == dns.TypeSOA {
+			hasSOA = true
+		}
+		records = append(records, rr)
+	}
+	if err := parser.Err(); err != nil {
+		http.Error(w, "invalid zone file: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !hasSOA {
+		http.Error(w, "zone file must contain an SOA record", http.StatusBadRequest)
+		return
+	}
+	if err := dnsutils.ImportRecords("", zoneName, records); err != nil {
+		http.Error(w, "zone import failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := dnsutils.EnsureCatalogMember(zoneName); err != nil {
+		http.Error(w, "zone imported but catalog update failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if config.AppConfig.GetLive().Mode != "secondary" {
+		go dnsutils.ScheduleNotify(zoneName)
+	}
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]any{"zone": zoneName, "records": len(records)})
 }
 
 func publishDistributedUpsert(zoneName, rrtypeStr, name string, payload map[string]interface{}) error {
@@ -337,6 +546,85 @@ func publishDistributedDelete(zoneName, rrtypeStr, name string) error {
 		return nil
 	}
 	return distributed.Default.PublishDelete(zoneName, strings.ToUpper(rrtypeStr), canonicalRecordName(zoneName, rrtypeStr, name))
+}
+
+func pageParams(r *http.Request) (int, int) {
+	limit := intQuery(r, "limit", 100)
+	offset := intQuery(r, "offset", 0)
+	if limit < 1 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
+}
+
+func intQuery(r *http.Request, key string, fallback int) int {
+	raw := strings.TrimSpace(r.URL.Query().Get(key))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return value
+}
+
+func pageSlice[T any](items []T, limit, offset int) []T {
+	if offset >= len(items) {
+		return []T{}
+	}
+	end := offset + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[offset:end]
+}
+
+func flattenZoneRecords(zoneName string, snapshot map[string]map[string]any, onlyType string) []recordListItem {
+	types := make([]string, 0, len(snapshot))
+	for rrtype := range snapshot {
+		if onlyType == "" || strings.EqualFold(rrtype, onlyType) {
+			types = append(types, rrtype)
+		}
+	}
+	sort.Strings(types)
+	items := []recordListItem{}
+	for _, rrtype := range types {
+		names := make([]string, 0, len(snapshot[rrtype]))
+		for name := range snapshot[rrtype] {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			items = append(items, recordListItem{
+				Zone:    zoneName,
+				Type:    rrtype,
+				Name:    name,
+				Records: snapshot[rrtype][name],
+			})
+		}
+	}
+	return items
+}
+
+func zoneExists(zones []string, zoneName string) bool {
+	for _, z := range zones {
+		if strings.EqualFold(z, zoneName) {
+			return true
+		}
+	}
+	return false
+}
+
+func writeJSON(w http.ResponseWriter, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(value)
 }
 
 func canonicalRecordName(zoneName, rrtypeStr, name string) string {

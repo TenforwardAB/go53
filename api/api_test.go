@@ -307,6 +307,169 @@ func TestTCPAPI_TSIGLifecycle(t *testing.T) {
 	}
 }
 
+func TestRouterAllManagementRoutes(t *testing.T) {
+	setupAPITest(t)
+	initDistributedForRouterTest(t)
+	router := api.NewRouter(testBaseConfig())
+
+	expectRoute(t, router, http.MethodGet, "/api/config", "", http.StatusOK)
+	expectRoute(t, router, http.MethodPatch, "/api/config", `{"primary":{"notify_debounce_ms":60000},"allow_transfer":""}`, http.StatusNoContent)
+	expectRoute(t, router, http.MethodGet, "/.well-known/go53-node.json", "", http.StatusOK)
+
+	expectRoute(t, router, http.MethodGet, "/api/zones", "", http.StatusOK)
+	expectRoute(t, router, http.MethodPost, "/api/zones/route.test./records/SOA", `{"ttl":300,"ns":"ns1.route.test.","mbox":"hostmaster.route.test.","refresh":3600,"retry":600,"expire":86400,"minimum":300}`, http.StatusCreated)
+	expectRoute(t, router, http.MethodPost, "/api/zones/route.test./records/A", `{"name":"www","ttl":300,"ip":"192.0.2.10"}`, http.StatusCreated)
+	expectRoute(t, router, http.MethodGet, "/api/zones/route.test./records", "", http.StatusOK)
+	expectRoute(t, router, http.MethodGet, "/api/zones/route.test./records/A", "", http.StatusOK)
+	expectRoute(t, router, http.MethodPatch, "/api/zones/route.test./records/A/www.route.test.", `{"ttl":300,"ip":"192.0.2.11"}`, http.StatusNoContent)
+	expectRoute(t, router, http.MethodGet, "/api/zones/route.test./records/A/www.route.test.", "", http.StatusOK)
+	expectRoute(t, router, http.MethodGet, "/api/zones/route.test./export", "", http.StatusOK)
+	expectRoute(t, router, http.MethodPost, "/api/zones/imported.test./import", "imported.test. 300 IN SOA ns1.imported.test. hostmaster.imported.test. 1 3600 600 86400 300\nimported.test. 300 IN NS ns1.imported.test.\nns1.imported.test. 300 IN A 192.0.2.53\n", http.StatusCreated)
+	expectRoute(t, router, http.MethodGet, "/api/catalog", "", http.StatusOK)
+	expectRoute(t, router, http.MethodGet, "/api/catalog/members", "", http.StatusOK)
+	expectRoute(t, router, http.MethodPost, "/api/notify/route.test.", "", http.StatusAccepted)
+
+	expectRoute(t, router, http.MethodGet, "/api/tsig", "", http.StatusOK)
+	expectRoute(t, router, http.MethodPost, "/api/tsig/route-key.", `{"algorithm":"hmac-sha256.","secret":"cm91dGU="}`, http.StatusCreated)
+	expectRoute(t, router, http.MethodDelete, "/api/tsig/route-key.", "", http.StatusNoContent)
+
+	expectRoute(t, router, http.MethodGet, "/api/dnskeys", "", http.StatusOK)
+	keyID := createRolloverKeyViaRouter(t, router)
+	expectRoute(t, router, http.MethodGet, "/api/dnskeys/route.test", "", http.StatusOK)
+	expectRoute(t, router, http.MethodPatch, "/api/dnskeys/"+keyID+"/lifecycle", `{"state":"active"}`, http.StatusOK)
+	expectRoute(t, router, http.MethodGet, "/api/ds/route.test.", "", http.StatusOK)
+	expectRoute(t, router, http.MethodGet, "/api/cds/route.test.", "", http.StatusOK)
+	expectRoute(t, router, http.MethodGet, "/api/cdnskey/route.test.", "", http.StatusOK)
+	expectRoute(t, router, http.MethodPost, "/api/dnskeys/"+keyID+"/retire?remove_after_days=1", "", http.StatusOK)
+	expectRoute(t, router, http.MethodPost, "/api/dnskeys/"+keyID+"/revoke?remove_after_days=1", "", http.StatusOK)
+	expectRoute(t, router, http.MethodDelete, "/api/dnskeys/"+keyID, "", http.StatusNoContent)
+
+	expectRoute(t, router, http.MethodGet, "/api/distributed/status", "", http.StatusOK)
+	expectRoute(t, router, http.MethodPost, "/api/distributed/keypair", "", http.StatusOK)
+	expectRoute(t, router, http.MethodGet, "/api/distributed/vector", "", http.StatusOK)
+	expectRoute(t, router, http.MethodGet, "/api/distributed/events", "", http.StatusOK)
+	expectRoute(t, router, http.MethodPost, "/api/distributed/events?resync=true", `{`, http.StatusBadRequest)
+	expectRoute(t, router, http.MethodGet, "/api/distributed/merkle/roots", "", http.StatusOK)
+	expectRoute(t, router, http.MethodGet, "/api/distributed/merkle/branches?zone=route.test.", "", http.StatusOK)
+	expectRoute(t, router, http.MethodPost, "/api/distributed/merkle/leaves", `{"zone":"route.test.","prefixes":[]}`, http.StatusOK)
+	expectRoute(t, router, http.MethodPost, "/api/distributed/merkle/repair-events", `{"entities":[]}`, http.StatusOK)
+	expectRoute(t, router, http.MethodPost, "/api/distributed/invites", `{"jti":"route-invite","usage_count":1}`, http.StatusNoContent)
+	expectRoute(t, router, http.MethodPost, "/api/distributed/invites/route-invite/consume", "", http.StatusOK)
+
+	expectRoute(t, router, http.MethodDelete, "/api/zones/imported.test.", "", http.StatusNoContent)
+
+	config.AppConfig.Live.Mode = "secondary"
+	expectRoute(t, router, http.MethodPost, "/api/secondary/fetch/route.test.", "", http.StatusAccepted)
+}
+
+func TestRouterPagination(t *testing.T) {
+	setupAPITest(t)
+	router := api.NewRouter(testBaseConfig())
+	for _, zone := range []string{"alpha.test.", "beta.test.", "gamma.test."} {
+		expectRoute(t, router, http.MethodPost, "/api/zones/"+zone+"/records/SOA", fmt.Sprintf(`{"ttl":300,"ns":"ns1.%s","mbox":"hostmaster.%s","refresh":3600,"retry":600,"expire":86400,"minimum":300}`, zone, zone), http.StatusCreated)
+	}
+	expectRoute(t, router, http.MethodPost, "/api/zones/beta.test./records/A", `{"name":"a","ttl":300,"ip":"192.0.2.1"}`, http.StatusCreated)
+	expectRoute(t, router, http.MethodPost, "/api/zones/beta.test./records/A", `{"name":"b","ttl":300,"ip":"192.0.2.2"}`, http.StatusCreated)
+	expectRoute(t, router, http.MethodPost, "/api/zones/beta.test./records/TXT", `{"name":"txt","ttl":300,"text":"hello"}`, http.StatusCreated)
+
+	zonesRec := routeRequest(router, http.MethodGet, "/api/zones?limit=2&offset=1", "")
+	var zonesPage struct {
+		Items  []string `json:"items"`
+		Limit  int      `json:"limit"`
+		Offset int      `json:"offset"`
+		Total  int      `json:"total"`
+	}
+	if err := json.NewDecoder(zonesRec.Body).Decode(&zonesPage); err != nil {
+		t.Fatalf("decode zones page: %v", err)
+	}
+	if zonesPage.Limit != 2 || zonesPage.Offset != 1 || zonesPage.Total != 3 || len(zonesPage.Items) != 2 {
+		t.Fatalf("zones pagination = %#v", zonesPage)
+	}
+
+	recordsRec := routeRequest(router, http.MethodGet, "/api/zones/beta.test./records?limit=2&offset=1", "")
+	var recordsPage struct {
+		Items  []map[string]any `json:"items"`
+		Limit  int              `json:"limit"`
+		Offset int              `json:"offset"`
+		Total  int              `json:"total"`
+	}
+	if err := json.NewDecoder(recordsRec.Body).Decode(&recordsPage); err != nil {
+		t.Fatalf("decode records page: %v", err)
+	}
+	if recordsPage.Limit != 2 || recordsPage.Offset != 1 || recordsPage.Total != 4 || len(recordsPage.Items) != 2 {
+		t.Fatalf("records pagination = %#v", recordsPage)
+	}
+
+	typeRec := routeRequest(router, http.MethodGet, "/api/zones/beta.test./records/A?limit=1&offset=1", "")
+	var typePage struct {
+		Items  []map[string]any `json:"items"`
+		Limit  int              `json:"limit"`
+		Offset int              `json:"offset"`
+		Total  int              `json:"total"`
+	}
+	if err := json.NewDecoder(typeRec.Body).Decode(&typePage); err != nil {
+		t.Fatalf("decode type page: %v", err)
+	}
+	if typePage.Limit != 1 || typePage.Offset != 1 || typePage.Total != 2 || len(typePage.Items) != 1 {
+		t.Fatalf("type pagination = %#v", typePage)
+	}
+}
+
+func initDistributedForRouterTest(t *testing.T) {
+	t.Helper()
+	privateKey, publicKey, err := distributed.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	config.AppConfig.Live.Mode = "distributed"
+	config.AppConfig.Live.Version = "test-version"
+	config.AppConfig.Live.Distributed.NodeID = "node-a"
+	config.AppConfig.Live.Distributed.PrivateKey = privateKey
+	config.AppConfig.Live.Distributed.PeerPublicKeys = map[string]string{"node-a": publicKey}
+	config.AppConfig.Live.Distributed.SyncBindHost = "127.0.0.1"
+	config.AppConfig.Live.Distributed.SyncPort = ":53530"
+	distributed.Init(rtypes.GetMemStore())
+	t.Cleanup(func() { distributed.Default = nil })
+}
+
+func routeRequest(router http.Handler, method, path, body string) *httptest.ResponseRecorder {
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	req := httptest.NewRequest(method, path, reader)
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec
+}
+
+func expectRoute(t *testing.T, router http.Handler, method, path, body string, want int) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := routeRequest(router, method, path, body)
+	if rec.Code != want {
+		t.Fatalf("%s %s = %d, want %d; body=%q", method, path, rec.Code, want, rec.Body.String())
+	}
+	return rec
+}
+
+func createRolloverKeyViaRouter(t *testing.T, router http.Handler) string {
+	t.Helper()
+	rec := expectRoute(t, router, http.MethodPost, "/api/dnskeys/rollover", `{"zone":"route.test.","role":"ksk","algorithm":"ED25519"}`, http.StatusCreated)
+	var created struct {
+		KeyID string `json:"keyid"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode rollover key: %v", err)
+	}
+	if created.KeyID == "" {
+		t.Fatal("rollover keyid is empty")
+	}
+	return created.KeyID
+}
+
 // --- Admin socket tests -------------------------------------------------------
 
 func TestSocketAPI_GetConfig(t *testing.T) {

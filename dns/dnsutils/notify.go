@@ -315,6 +315,10 @@ func enqueueFetch(zone string) bool {
 	}
 }
 
+func EnqueueZoneFetch(zone string) bool {
+	return enqueueFetch(zone)
+}
+
 // handleNotify is the NOTIFY fast-path entry point. It delegates to enqueueFetch so
 // the rate-limit and pending guard are identical across all producers.
 //

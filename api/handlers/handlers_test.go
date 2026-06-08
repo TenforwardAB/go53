@@ -180,8 +180,8 @@ func TestZoneHandlersBasicResponses(t *testing.T) {
 	zonesReq := httptest.NewRequest(http.MethodGet, "/api/zones", nil)
 	zonesRec := httptest.NewRecorder()
 	GetZonesHandler(zonesRec, zonesReq)
-	if zonesRec.Code != http.StatusUnauthorized {
-		t.Fatalf("GetZonesHandler missing user status = %d", zonesRec.Code)
+	if zonesRec.Code != http.StatusOK {
+		t.Fatalf("GetZonesHandler status = %d body=%q", zonesRec.Code, zonesRec.Body.String())
 	}
 
 	badReq := httptest.NewRequest(http.MethodPost, "/api/zones/example.test./records/NOPE", strings.NewReader(`{}`))
@@ -190,6 +190,61 @@ func TestZoneHandlersBasicResponses(t *testing.T) {
 	AddRecordHandler(badRec, badReq)
 	if badRec.Code != http.StatusBadRequest {
 		t.Fatalf("unknown RR type status = %d", badRec.Code)
+	}
+}
+
+func TestZoneManagementHandlers(t *testing.T) {
+	setupHandlerTestStore(t)
+	distributed.Default = nil
+	t.Cleanup(func() { distributed.Default = nil })
+
+	addTestRecord(t, "manage.test.", "SOA", `{"ttl":300,"ns":"ns1.manage.test.","mbox":"hostmaster.manage.test.","refresh":3600,"retry":600,"expire":86400,"minimum":300}`)
+	addTestRecord(t, "manage.test.", "A", `{"name":"www","ip":"192.0.2.5","ttl":120}`)
+
+	listReq := mux.SetURLVars(httptest.NewRequest(http.MethodGet, "/api/zones/manage.test./records?limit=1", nil), map[string]string{"zone": "manage.test."})
+	listRec := httptest.NewRecorder()
+	ListZoneRecordsHandler(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("ListZoneRecordsHandler status = %d body=%q", listRec.Code, listRec.Body.String())
+	}
+
+	typeReq := mux.SetURLVars(httptest.NewRequest(http.MethodGet, "/api/zones/manage.test./records/A", nil), map[string]string{"zone": "manage.test.", "rrtype": "A"})
+	typeRec := httptest.NewRecorder()
+	ListZoneRecordsByTypeHandler(typeRec, typeReq)
+	if typeRec.Code != http.StatusOK || !strings.Contains(typeRec.Body.String(), `"type":"A"`) {
+		t.Fatalf("ListZoneRecordsByTypeHandler status = %d body=%q", typeRec.Code, typeRec.Body.String())
+	}
+
+	updateReq := mux.SetURLVars(httptest.NewRequest(http.MethodPatch, "/api/zones/manage.test./records/A/www.manage.test.", strings.NewReader(`{"ip":"192.0.2.6","ttl":120}`)), map[string]string{"zone": "manage.test.", "rrtype": "A", "name": "www.manage.test."})
+	updateRec := httptest.NewRecorder()
+	UpdateRecordHandler(updateRec, updateReq)
+	if updateRec.Code != http.StatusNoContent {
+		t.Fatalf("UpdateRecordHandler status = %d body=%q", updateRec.Code, updateRec.Body.String())
+	}
+
+	exportReq := mux.SetURLVars(httptest.NewRequest(http.MethodGet, "/api/zones/manage.test./export", nil), map[string]string{"zone": "manage.test."})
+	exportRec := httptest.NewRecorder()
+	ExportZoneHandler(exportRec, exportReq)
+	if exportRec.Code != http.StatusOK || !strings.Contains(exportRec.Body.String(), "SOA") {
+		t.Fatalf("ExportZoneHandler status = %d body=%q", exportRec.Code, exportRec.Body.String())
+	}
+
+	deleteReq := mux.SetURLVars(httptest.NewRequest(http.MethodDelete, "/api/zones/manage.test.", nil), map[string]string{"zone": "manage.test."})
+	deleteRec := httptest.NewRecorder()
+	DeleteZoneHandler(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("DeleteZoneHandler status = %d body=%q", deleteRec.Code, deleteRec.Body.String())
+	}
+}
+
+func addTestRecord(t *testing.T, zoneName, rrtype, body string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/zones/"+zoneName+"/records/"+rrtype, strings.NewReader(body))
+	req = mux.SetURLVars(req, map[string]string{"zone": zoneName, "rrtype": rrtype})
+	rec := httptest.NewRecorder()
+	AddRecordHandler(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("AddRecordHandler %s status = %d body=%q", rrtype, rec.Code, rec.Body.String())
 	}
 }
 

@@ -157,6 +157,30 @@ func catalogMembers() []string {
 	return out
 }
 
+func CatalogStatus() map[string]any {
+	catalog, ok := catalogZoneName()
+	members := []string{}
+	if ok {
+		members = catalogMembers()
+	}
+	return map[string]any{
+		"enabled": config.AppConfig.GetLive().Secondary.CatalogEnabled,
+		"zone":    catalog,
+		"valid":   ok,
+		"members": members,
+		"count":   len(members),
+		"version": catalogVersion,
+	}
+}
+
+func CatalogMembers() []string {
+	members := catalogMembers()
+	if members == nil {
+		return []string{}
+	}
+	return members
+}
+
 func catalogMembersFromRecords(records []dns.RR, catalog string) []string {
 	hasVersion := false
 	out := make([]string, 0)

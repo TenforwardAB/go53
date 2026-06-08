@@ -41,9 +41,20 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 
 	r.HandleFunc("/api/zones", handlers.GetZonesHandler).Methods("GET")
 
+	r.HandleFunc("/api/zones/{zone}", disableSecondary(handlers.DeleteZoneHandler)).Methods("DELETE")
+	r.HandleFunc("/api/zones/{zone}/records", handlers.ListZoneRecordsHandler).Methods("GET")
+	r.HandleFunc("/api/zones/{zone}/records/{rrtype}", handlers.ListZoneRecordsByTypeHandler).Methods("GET")
 	r.HandleFunc("/api/zones/{zone}/records/{rrtype}", disableSecondary(handlers.AddRecordHandler)).Methods("POST")
+	r.HandleFunc("/api/zones/{zone}/records/{rrtype}/{name}", disableSecondary(handlers.UpdateRecordHandler)).Methods("PATCH")
 	r.HandleFunc("/api/zones/{zone}/records/{rrtype}/{name}", disableSecondary(handlers.GetRecordHandler)).Methods("GET")
 	r.HandleFunc("/api/zones/{zone}/records/{rrtype}/{name}", disableSecondary(handlers.DeleteRecordHandler)).Methods("DELETE")
+	r.HandleFunc("/api/zones/{zone}/export", handlers.ExportZoneHandler).Methods("GET")
+	r.HandleFunc("/api/zones/{zone}/import", disableSecondary(handlers.ImportZoneHandler)).Methods("POST")
+
+	r.HandleFunc("/api/secondary/fetch/{zone}", handlers.TriggerSecondaryFetchHandler).Methods("POST")
+	r.HandleFunc("/api/notify/{zone}", disableSecondary(handlers.TriggerNotifyHandler)).Methods("POST")
+	r.HandleFunc("/api/catalog", handlers.GetCatalogStatusHandler).Methods("GET")
+	r.HandleFunc("/api/catalog/members", handlers.GetCatalogMembersHandler).Methods("GET")
 
 	r.HandleFunc("/api/tsig", handlers.ListTSIGKeysHandler).Methods("GET")
 	r.HandleFunc("/api/tsig/{name}", handlers.AddTSIGKeyHandler).Methods("POST")
