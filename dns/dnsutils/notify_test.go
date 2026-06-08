@@ -1,6 +1,7 @@
 package dnsutils
 
 import (
+	"context"
 	"go53/config"
 	"sync"
 	"testing"
@@ -334,6 +335,138 @@ func TestSendNotify_InvalidTarget(t *testing.T) {
 	SendNotify("invalid.com.")
 
 	time.Sleep(200 * time.Millisecond)
+}
+
+// collectQueued drains up to want zone names from fetchQueue within the timeout and
+// returns them as a set. It does not require ProcessFetchQueue to be running.
+func collectQueued(want int, timeout time.Duration) map[string]bool {
+	got := make(map[string]bool)
+	deadline := time.After(timeout)
+	for len(got) < want {
+		select {
+		case z := <-fetchQueue:
+			got[z] = true
+		case <-deadline:
+			return got
+		}
+	}
+	return got
+}
+
+func TestStartSecondaryRefresh_StartupSweepEnqueuesConfiguredZones(t *testing.T) {
+	clearFetchQueue()
+	stateMu.Lock()
+	zoneStates = make(map[string]*zoneState)
+	stateMu.Unlock()
+
+	config.AppConfig = &config.ConfigManager{}
+	config.AppConfig.Live = config.DefaultLiveConfig
+	config.AppConfig.Live.Mode = "secondary"
+	config.AppConfig.Live.Primary.Ip = "127.0.0.1"
+	config.AppConfig.Live.Secondary.MinFetchIntervalSec = 0
+	config.AppConfig.Live.Secondary.RefreshIntervalSec = 0 // disable ticker; test the one-shot sweep
+	config.AppConfig.Live.Secondary.Zones = []string{"a.test.", "b.test."}
+
+	StartSecondaryRefresh(context.Background())
+
+	got := collectQueued(2, time.Second)
+	if !got["a.test."] || !got["b.test."] {
+		t.Fatalf("startup sweep enqueued %v, want a.test. and b.test.", got)
+	}
+}
+
+func TestStartSecondaryRefresh_DisabledInPrimaryMode(t *testing.T) {
+	clearFetchQueue()
+	stateMu.Lock()
+	zoneStates = make(map[string]*zoneState)
+	stateMu.Unlock()
+
+	config.AppConfig = &config.ConfigManager{}
+	config.AppConfig.Live = config.DefaultLiveConfig
+	config.AppConfig.Live.Mode = "primary" // gating must suppress the sweep
+	config.AppConfig.Live.Primary.Ip = "127.0.0.1"
+	config.AppConfig.Live.Secondary.Zones = []string{"a.test."}
+
+	StartSecondaryRefresh(context.Background())
+
+	select {
+	case z := <-fetchQueue:
+		t.Fatalf("primary mode must not enqueue, got %q", z)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func TestStartSecondaryRefresh_DisabledWhenPrimaryIpEmpty(t *testing.T) {
+	clearFetchQueue()
+	stateMu.Lock()
+	zoneStates = make(map[string]*zoneState)
+	stateMu.Unlock()
+
+	config.AppConfig = &config.ConfigManager{}
+	config.AppConfig.Live = config.DefaultLiveConfig
+	config.AppConfig.Live.Mode = "secondary"
+	config.AppConfig.Live.Primary.Ip = "" // no upstream configured
+	config.AppConfig.Live.Secondary.Zones = []string{"a.test."}
+
+	StartSecondaryRefresh(context.Background())
+
+	select {
+	case z := <-fetchQueue:
+		t.Fatalf("empty Primary.Ip must not enqueue, got %q", z)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func TestRunRefreshTicker_PeriodicEnqueue(t *testing.T) {
+	clearFetchQueue()
+	stateMu.Lock()
+	zoneStates = make(map[string]*zoneState)
+	stateMu.Unlock()
+
+	config.AppConfig = &config.ConfigManager{}
+	config.AppConfig.Live = config.DefaultLiveConfig
+	config.AppConfig.Live.Mode = "secondary"
+	config.AppConfig.Live.Primary.Ip = "127.0.0.1"
+	config.AppConfig.Live.Secondary.MinFetchIntervalSec = 0
+	config.AppConfig.Live.Secondary.RefreshIntervalSec = 1
+	config.AppConfig.Live.Secondary.RefreshJitterSec = 0
+	config.AppConfig.Live.Secondary.Zones = []string{"t.test."}
+
+	// Drain enqueued zones and clear the pending flag so each tick can re-enqueue
+	// (ProcessFetchQueue is not running in this test).
+	var mu sync.Mutex
+	count := 0
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case z := <-fetchQueue:
+				mu.Lock()
+				count++
+				mu.Unlock()
+				stateMu.Lock()
+				if s, ok := zoneStates[z]; ok {
+					s.pending = false
+				}
+				stateMu.Unlock()
+			case <-stop:
+				return
+			}
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go runRefreshTicker(ctx)
+	time.Sleep(2500 * time.Millisecond) // ~2 ticks at 1s
+	cancel()
+	close(stop)
+
+	mu.Lock()
+	got := count
+	mu.Unlock()
+	if got < 2 {
+		t.Fatalf("periodic ticker enqueued %d times in ~2.5s at 1s interval, want >= 2", got)
+	}
 }
 
 func TestProcessFetchQueue_Trigger(t *testing.T) {

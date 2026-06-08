@@ -40,9 +40,12 @@ type PrimaryConfig struct {
 }
 
 type SecondaryConfig struct {
-	FetchDebounceMs     int `json:"fetch_debounce_ms"`      // delay before starting AXFR/IXFR
-	MinFetchIntervalSec int `json:"min_fetch_interval_sec"` // rate limit per zone
-	MaxParallelFetches  int `json:"max_parallel_fetches"`   // limit concurrent zone fetches
+	FetchDebounceMs     int      `json:"fetch_debounce_ms"`      // delay before starting AXFR/IXFR
+	MinFetchIntervalSec int      `json:"min_fetch_interval_sec"` // rate limit per zone
+	MaxParallelFetches  int      `json:"max_parallel_fetches"`   // limit concurrent zone fetches
+	Zones               []string `json:"zones"`                  // bootstrap zone list for cold-start secondaries
+	RefreshIntervalSec  int      `json:"refresh_interval_sec"`   // periodic sweep cadence; 0 disables periodic refresh
+	RefreshJitterSec    int      `json:"refresh_jitter_sec"`     // max random per-zone delay each sweep
 }
 
 type DNSSECSignaturePolicy struct {

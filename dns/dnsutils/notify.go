@@ -1,15 +1,19 @@
 package dnsutils
 
 import (
+	"context"
 	"fmt"
 	"go53/config"
 	"go53/internal"
 	"go53/security"
 	"go53/zone"
+	"go53/zone/rtypes"
 	"log"
+	"math/rand"
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
@@ -25,6 +29,11 @@ type zoneState struct {
 	pending   bool
 	lastFetch time.Time
 }
+
+// stateMu guards both notifyStates and zoneStates. Multiple producers feed the
+// fetch pipeline concurrently (incoming NOTIFY handlers, the startup sweep, and the
+// periodic refresh ticker), so all access to these maps must be serialized.
+var stateMu sync.Mutex
 
 var notifyStates = make(map[string]*notifyState)
 
@@ -45,6 +54,7 @@ var (
 // Parameters:
 //   - zone: The zone name for which a NOTIFY message should be sent.
 func ScheduleNotify(zone string) {
+	stateMu.Lock()
 	state, ok := notifyStates[zone]
 	if !ok {
 		state = &notifyState{}
@@ -52,16 +62,20 @@ func ScheduleNotify(zone string) {
 	}
 
 	if state.pending {
+		stateMu.Unlock()
 		return
 	}
 
 	state.pending = true
+	stateMu.Unlock()
 
-	state.debounceTimer = time.AfterFunc(time.Duration(
-		config.AppConfig.GetLive().Primary.NotifyDebounceMs)*time.Millisecond, func() {
+	debounce := time.Duration(config.AppConfig.GetLive().Primary.NotifyDebounceMs) * time.Millisecond
+	state.debounceTimer = time.AfterFunc(debounce, func() {
 		SendNotify(zone)
+		stateMu.Lock()
 		state.lastNotify = time.Now()
 		state.pending = false
+		stateMu.Unlock()
 	})
 }
 
@@ -258,24 +272,47 @@ func checkSOA(zone string) bool {
 	return primarySerial > localSerial
 }
 
-// handleNotify updates the state for a zone upon receiving a NOTIFY.
-// It respects secondary.min_fetch_interval_sec between fetches for the same zone and
-// ensures no fetch is currently pending. If eligible, the zone is queued for background fetching.
+// enqueueFetch applies the per-zone pending guard and secondary.min_fetch_interval_sec
+// rate-limit under stateMu, then submits the zone to fetchQueue for a background AXFR.
+// It is the single producer path shared by NOTIFY, the startup sweep, and the periodic
+// refresh ticker, so they all share identical rate-limiting and the pending guard.
+//
+// The zone name is normalized to a sanitized FQDN so producers using different name
+// forms (NOTIFY question names vs. ZoneNamesSnapshot keys) map to the same zoneStates
+// entry. The channel send happens OUTSIDE the lock: fetchQueue is buffered, and holding
+// stateMu across a blocking send could deadlock the worker's pending-reset.
+//
+// Returns true if the zone was enqueued.
+func enqueueFetch(zone string) bool {
+	z, err := internal.SanitizeFQDN(zone)
+	if err != nil || z == "" {
+		return false
+	}
+	stateMu.Lock()
+	state, ok := zoneStates[z]
+	if !ok {
+		state = &zoneState{}
+		zoneStates[z] = state
+	}
+	minInterval := time.Duration(config.AppConfig.GetLive().Secondary.MinFetchIntervalSec) * time.Second
+	if state.pending || (minInterval > 0 && time.Since(state.lastFetch) < minInterval) {
+		stateMu.Unlock()
+		return false
+	}
+	state.pending = true
+	stateMu.Unlock()
+
+	fetchQueue <- z
+	return true
+}
+
+// handleNotify is the NOTIFY fast-path entry point. It delegates to enqueueFetch so
+// the rate-limit and pending guard are identical across all producers.
 //
 // Parameters:
 //   - zone: The zone name received in the NOTIFY message.
 func handleNotify(zone string) {
-	state, ok := zoneStates[zone]
-	if !ok {
-		state = &zoneState{}
-		zoneStates[zone] = state
-	}
-	minInterval := time.Duration(config.AppConfig.GetLive().Secondary.MinFetchIntervalSec) * time.Second
-	if state.pending || (minInterval > 0 && time.Since(state.lastFetch) < minInterval) {
-		return
-	}
-	state.pending = true
-	fetchQueue <- zone
+	enqueueFetch(zone)
 }
 
 // fetchZone performs a full AXFR (zone transfer) for the specified zone
@@ -357,19 +394,139 @@ func fetchZone(zoneName string) {
 // This function is intended to run as a background worker.
 
 func ProcessFetchQueue() {
+	maxParallel := config.AppConfig.GetLive().Secondary.MaxParallelFetches
+	if maxParallel <= 0 {
+		maxParallel = 5 // sane default when 0/unset
+	}
+	// Bounded semaphore enforcing Secondary.MaxParallelFetches. The slot is acquired in
+	// the dispatch loop (not inside the goroutine) so a full pool also throttles draining
+	// of fetchQueue — real backpressure. Sized once: a channel cannot be resized live, so
+	// changing the limit requires a restart.
+	sem := make(chan struct{}, maxParallel)
+
 	for izone := range fetchQueue {
+		sem <- struct{}{}
 		go func(zone string) {
+			defer func() { <-sem }()
 			defer func() {
+				stateMu.Lock()
 				if state, ok := zoneStates[zone]; ok {
 					state.pending = false
 				}
+				stateMu.Unlock()
 			}()
 			if checkSOAFunc(zone) || config.AppConfig.GetLive().Dev.DualMode {
 				fetchZoneFunc(zone)
+				// lastFetch is set only on the success branch, so a failed AXFR is not
+				// rate-limited and is retried on the next sweep/NOTIFY.
+				stateMu.Lock()
 				if state, ok := zoneStates[zone]; ok {
 					state.lastFetch = time.Now()
 				}
+				stateMu.Unlock()
 			}
 		}(izone)
+	}
+}
+
+// secondaryEnabled reports whether secondary refresh logic should run for the given
+// live config. It mirrors the NOTIFY gating used in dns/handler.go.
+func secondaryEnabled(live config.LiveConfig) bool {
+	return live.Mode == "secondary" || live.Dev.DualMode
+}
+
+// refreshZoneUnion returns the deduped union of the configured bootstrap zones
+// (Secondary.Zones) and the locally stored zones (ZoneNamesSnapshot), as sanitized
+// FQDNs. The configured list bootstraps a fresh/empty secondary; the local snapshot
+// self-heals already-imported zones after downtime.
+func refreshZoneUnion() []string {
+	set := make(map[string]struct{})
+	for _, z := range config.AppConfig.GetLive().Secondary.Zones {
+		if f, err := internal.SanitizeFQDN(z); err == nil && f != "" {
+			set[f] = struct{}{}
+		}
+	}
+	if store := rtypes.GetMemStore(); store != nil {
+		for _, z := range store.ZoneNamesSnapshot() {
+			if f, err := internal.SanitizeFQDN(z); err == nil && f != "" {
+				set[f] = struct{}{}
+			}
+		}
+	}
+	out := make([]string, 0, len(set))
+	for z := range set {
+		out = append(out, z)
+	}
+	return out
+}
+
+// StartSecondaryRefresh runs a one-shot startup sweep and then the periodic refresh
+// ticker. It is a no-op (with a single log line) unless secondary mode / DualMode is
+// active and Primary.Ip is configured. The startup sweep enqueues the zone union once
+// through the guarded enqueueFetch path, so ProcessFetchQueue's SOA-gate decides whether
+// an AXFR is actually needed. NOTIFY remains the fast-path signal on top of this.
+//
+// The provided context cancels the periodic ticker for graceful shutdown.
+func StartSecondaryRefresh(ctx context.Context) {
+	live := config.AppConfig.GetLive()
+	if !secondaryEnabled(live) {
+		return
+	}
+	if strings.TrimSpace(live.Primary.Ip) == "" {
+		log.Printf("[secondary-refresh] disabled: Primary.Ip is empty")
+		return
+	}
+
+	go func() {
+		zones := refreshZoneUnion()
+		log.Printf("[secondary-refresh] startup sweep: %d zones", len(zones))
+		for _, z := range zones {
+			enqueueFetch(z)
+		}
+		runRefreshTicker(ctx)
+	}()
+}
+
+// runRefreshTicker periodically re-enqueues the zone union on the configured
+// Secondary.RefreshIntervalSec cadence. A value <= 0 disables periodic refresh (the
+// startup sweep still ran, and NOTIFY remains active). It mirrors the distributed
+// resync ticker idiom: read the interval once, run on the ticker, exit on ctx.Done().
+func runRefreshTicker(ctx context.Context) {
+	interval := time.Duration(config.AppConfig.GetLive().Secondary.RefreshIntervalSec) * time.Second
+	if interval <= 0 {
+		log.Printf("[secondary-refresh] periodic refresh disabled (refresh_interval_sec<=0)")
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			live := config.AppConfig.GetLive()
+			if !secondaryEnabled(live) || strings.TrimSpace(live.Primary.Ip) == "" {
+				continue
+			}
+			sweepOnce(live)
+		}
+	}
+}
+
+// sweepOnce recomputes the zone union and enqueues each zone, spreading the enqueues
+// across [0, RefreshJitterSec] so a many-zone secondary does not hammer the primary at
+// a single instant. The union is recomputed each call so newly imported local zones and
+// edits to Secondary.Zones are picked up automatically.
+func sweepOnce(live config.LiveConfig) {
+	zones := refreshZoneUnion()
+	jitterMax := time.Duration(live.Secondary.RefreshJitterSec) * time.Second
+	log.Printf("[secondary-refresh] periodic sweep: %d zones", len(zones))
+	for _, z := range zones {
+		if jitterMax > 0 {
+			zz := z
+			time.AfterFunc(time.Duration(rand.Int63n(int64(jitterMax)+1)), func() { enqueueFetch(zz) })
+		} else {
+			enqueueFetch(z)
+		}
 	}
 }

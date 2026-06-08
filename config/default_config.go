@@ -28,6 +28,9 @@ var DefaultLiveConfig = LiveConfig{
 		FetchDebounceMs:     3000,
 		MinFetchIntervalSec: 10,
 		MaxParallelFetches:  5,
+		Zones:               []string{},
+		RefreshIntervalSec:  3600, // hourly self-heal, BIND-like
+		RefreshJitterSec:    60,
 	},
 
 	Dev: DevConfig{
