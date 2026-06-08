@@ -279,8 +279,8 @@ func checkSOA(zone string) bool {
 //
 // The zone name is normalized to a sanitized FQDN so producers using different name
 // forms (NOTIFY question names vs. ZoneNamesSnapshot keys) map to the same zoneStates
-// entry. The channel send happens OUTSIDE the lock: fetchQueue is buffered, and holding
-// stateMu across a blocking send could deadlock the worker's pending-reset.
+// entry. The channel send happens OUTSIDE the lock and never blocks; a full queue
+// rolls back pending so later NOTIFY/sweeps can retry the zone.
 //
 // Returns true if the zone was enqueued.
 func enqueueFetch(zone string) bool {
@@ -302,8 +302,17 @@ func enqueueFetch(zone string) bool {
 	state.pending = true
 	stateMu.Unlock()
 
-	fetchQueue <- z
-	return true
+	select {
+	case fetchQueue <- z:
+		return true
+	default:
+		stateMu.Lock()
+		if state, ok := zoneStates[z]; ok {
+			state.pending = false
+		}
+		stateMu.Unlock()
+		return false
+	}
 }
 
 // handleNotify is the NOTIFY fast-path entry point. It delegates to enqueueFetch so
@@ -320,11 +329,11 @@ func handleNotify(zone string) {
 // the resulting records are imported into the system.
 //
 // This function logs the outcome and any errors encountered during transfer
-// or record import.
+// or record import. It returns true only after a successful import.
 //
 // Parameters:
 //   - zoneName: The name of the zone to fetch.
-func fetchZone(zoneName string) {
+func fetchZone(zoneName string) bool {
 	live := config.AppConfig.GetLive()
 	primaryIP := live.Primary.Ip
 	port := live.Primary.Port
@@ -349,7 +358,7 @@ func fetchZone(zoneName string) {
 		tsigKey, ok := security.GetTSIGKey(tsigKeyName)
 		if !ok {
 			log.Printf("[fetchZone] TSIG is enforced but key %s is not loaded", tsigKeyName)
-			return
+			return false
 		}
 
 		req.SetTsig(tsigKeyName, dns.HmacSHA256, 300, time.Now().Unix())
@@ -362,14 +371,14 @@ func fetchZone(zoneName string) {
 	envCh, err := tran.In(req, addr)
 	if err != nil {
 		log.Printf("[fetchZone] error initiating AXFR: %v", err)
-		return
+		return false
 	}
 
 	var records []dns.RR
 	for env := range envCh {
 		if env.Error != nil {
 			log.Printf("[fetchZone] AXFR error for %s: %v", zoneName, env.Error)
-			return
+			return false
 		}
 		records = append(records, env.RR...)
 	}
@@ -380,16 +389,17 @@ func fetchZone(zoneName string) {
 	err = ImportRecords("", zoneName, records)
 	if err != nil {
 		log.Println("[fetchZone] error importing AXFR records: ", err)
-		return
+		return false
 	}
 
 	log.Printf("[fetchZone] got %d records for %s", len(records), zoneName)
+	return true
 }
 
 // ProcessFetchQueue starts an infinite loop to process zone fetches
 // from the `fetchQueue` channel. For each zone, it launches a goroutine
 // that checks if an update is required using `checkSOA`, and if so,
-// performs an AXFR via `fetchZone`. It respects `Dev.DualMode` as an override.
+// performs an AXFR via `fetchZone`.
 //
 // This function is intended to run as a background worker.
 
@@ -415,8 +425,7 @@ func ProcessFetchQueue() {
 				}
 				stateMu.Unlock()
 			}()
-			if checkSOAFunc(zone) || config.AppConfig.GetLive().Dev.DualMode {
-				fetchZoneFunc(zone)
+			if checkSOAFunc(zone) && fetchZoneFunc(zone) {
 				// lastFetch is set only on the success branch, so a failed AXFR is not
 				// rate-limited and is retried on the next sweep/NOTIFY.
 				stateMu.Lock()
@@ -432,7 +441,7 @@ func ProcessFetchQueue() {
 // secondaryEnabled reports whether secondary refresh logic should run for the given
 // live config. It mirrors the NOTIFY gating used in dns/handler.go.
 func secondaryEnabled(live config.LiveConfig) bool {
-	return live.Mode == "secondary" || live.Dev.DualMode
+	return live.Mode == "secondary"
 }
 
 // refreshZoneUnion returns the deduped union of the configured bootstrap zones
@@ -461,8 +470,8 @@ func refreshZoneUnion() []string {
 }
 
 // StartSecondaryRefresh runs a one-shot startup sweep and then the periodic refresh
-// ticker. It is a no-op (with a single log line) unless secondary mode / DualMode is
-// active and Primary.Ip is configured. The startup sweep enqueues the zone union once
+// ticker. It is a no-op unless secondary mode is active and Primary.Ip is configured.
+// The startup sweep enqueues the zone union once
 // through the guarded enqueueFetch path, so ProcessFetchQueue's SOA-gate decides whether
 // an AXFR is actually needed. NOTIFY remains the fast-path signal on top of this.
 //
@@ -508,7 +517,7 @@ func runRefreshTicker(ctx context.Context) {
 			if !secondaryEnabled(live) || strings.TrimSpace(live.Primary.Ip) == "" {
 				continue
 			}
-			sweepOnce(live)
+			sweepOnce(ctx, live)
 		}
 	}
 }
@@ -517,14 +526,20 @@ func runRefreshTicker(ctx context.Context) {
 // across [0, RefreshJitterSec] so a many-zone secondary does not hammer the primary at
 // a single instant. The union is recomputed each call so newly imported local zones and
 // edits to Secondary.Zones are picked up automatically.
-func sweepOnce(live config.LiveConfig) {
+func sweepOnce(ctx context.Context, live config.LiveConfig) {
 	zones := refreshZoneUnion()
 	jitterMax := time.Duration(live.Secondary.RefreshJitterSec) * time.Second
 	log.Printf("[secondary-refresh] periodic sweep: %d zones", len(zones))
 	for _, z := range zones {
 		if jitterMax > 0 {
 			zz := z
-			time.AfterFunc(time.Duration(rand.Int63n(int64(jitterMax)+1)), func() { enqueueFetch(zz) })
+			time.AfterFunc(time.Duration(rand.Int63n(int64(jitterMax)+1)), func() {
+				live := config.AppConfig.GetLive()
+				if ctx.Err() != nil || !secondaryEnabled(live) || strings.TrimSpace(live.Primary.Ip) == "" {
+					return
+				}
+				enqueueFetch(zz)
+			})
 		} else {
 			enqueueFetch(z)
 		}

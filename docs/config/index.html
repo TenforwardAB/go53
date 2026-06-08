@@ -220,7 +220,6 @@
         <li><a href="#secondary">Secondary</a></li>
         <li><a href="#dnssec">DNSSEC</a></li>
         <li><a href="#distributed">Distributed</a></li>
-        <li><a href="#dev">Development</a></li>
         <li><a href="#storage-shape">Storage Shape</a></li>
       </ul>
       <p class="subtitle"><a href="../admin_guide/">Admin guide</a></p>
@@ -375,23 +374,6 @@
             <tr><td><code>distributed.peer_public_keys</code></td><td>object</td><td><code>{}</code></td><td>Map of trusted peer <code>node_id</code> to base64 Ed25519 public key used for event signature verification, HELLO verification, and TLS certificate public key pinning.</td></tr>
             <tr><td><code>distributed.push_timeout_ms</code></td><td>int milliseconds</td><td><code>2000</code></td><td>Timeout used by distributed HTTP client paths, socket peer workers, vector fetches, event delivery, and Merkle repair requests.</td></tr>
             <tr><td><code>distributed.resync_interval_s</code></td><td>int seconds</td><td><code>30</code></td><td>Interval for background distributed resync, vector comparison, and Merkle integrity repair.</td></tr>
-          </tbody>
-        </table>
-      </section>
-
-      <section id="dev">
-        <h2>Development Parameters</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>JSON path</th>
-              <th>Type</th>
-              <th>Default</th>
-              <th>Effect</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr><td><code>dev.dual_mode</code></td><td>bool</td><td><code>false</code></td><td>Development override that lets NOTIFY/secondary fetch behavior run together in one process.</td></tr>
           </tbody>
         </table>
       </section>

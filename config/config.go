@@ -30,9 +30,6 @@ type BaseConfig struct {
 	AdminSocketGroup string
 }
 
-type DevConfig struct {
-	DualMode bool `json:"dual_mode"` // true/false if you want to use server as both Primary/Replictor and Secondary
-}
 type PrimaryConfig struct {
 	NotifyDebounceMs int    `json:"notify_debounce_ms"` // delay before sending NOTIFY
 	Ip               string `json:"ip"`                 //ip of primary DNS
@@ -88,7 +85,6 @@ type LiveConfig struct {
 
 	Primary     PrimaryConfig         `json:"primary"`
 	Secondary   SecondaryConfig       `json:"secondary"`
-	Dev         DevConfig             `json:"dev"`
 	DNSSEC      DNSSECSignaturePolicy `json:"dnssec"`
 	Distributed DistributedConfig     `json:"distributed"`
 }

@@ -268,6 +268,33 @@ func TestHandleNotifyUsesConfiguredMinFetchInterval(t *testing.T) {
 	}
 }
 
+func TestEnqueueFetchFullQueueClearsPending(t *testing.T) {
+	testZone := "full-queue.test."
+	clearFetchQueue()
+	stateMu.Lock()
+	zoneStates = make(map[string]*zoneState)
+	stateMu.Unlock()
+	config.AppConfig = &config.ConfigManager{}
+	config.AppConfig.Live = config.DefaultLiveConfig
+	config.AppConfig.Live.Secondary.MinFetchIntervalSec = 0
+
+	for i := 0; i < cap(fetchQueue); i++ {
+		fetchQueue <- "queued.test."
+	}
+	if enqueueFetch(testZone) {
+		t.Fatalf("enqueueFetch succeeded with a full queue")
+	}
+
+	stateMu.Lock()
+	state := zoneStates[testZone]
+	pending := state != nil && state.pending
+	stateMu.Unlock()
+	if pending {
+		t.Fatalf("zone remained pending after full queue rejection")
+	}
+	clearFetchQueue()
+}
+
 func readQueuedZone(t *testing.T, want string) {
 	t.Helper()
 	select {
@@ -321,7 +348,9 @@ func TestFetchZone_InvalidAXFR(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	fetchZone(zoneName)
+	if fetchZone(zoneName) {
+		t.Fatalf("fetchZone succeeded for refused AXFR")
+	}
 
 }
 
@@ -469,13 +498,39 @@ func TestRunRefreshTicker_PeriodicEnqueue(t *testing.T) {
 	}
 }
 
+func TestSweepOnceJitterHonorsCanceledContext(t *testing.T) {
+	clearFetchQueue()
+	stateMu.Lock()
+	zoneStates = make(map[string]*zoneState)
+	stateMu.Unlock()
+
+	config.AppConfig = &config.ConfigManager{}
+	config.AppConfig.Live = config.DefaultLiveConfig
+	config.AppConfig.Live.Mode = "secondary"
+	config.AppConfig.Live.Primary.Ip = "127.0.0.1"
+	config.AppConfig.Live.Secondary.MinFetchIntervalSec = 0
+	config.AppConfig.Live.Secondary.RefreshJitterSec = 1
+	config.AppConfig.Live.Secondary.Zones = []string{"jitter.test."}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	sweepOnce(ctx, config.AppConfig.GetLive())
+	cancel()
+
+	select {
+	case z := <-fetchQueue:
+		t.Fatalf("canceled jitter callback enqueued %q", z)
+	case <-time.After(1200 * time.Millisecond):
+	}
+}
+
 func TestProcessFetchQueue_Trigger(t *testing.T) {
 	called := make(chan string, 1)
 
 	// Override fetchZone temporarily
 	originalFetchZone := fetchZoneFunc
-	fetchZoneFunc = func(zoneName string) {
+	fetchZoneFunc = func(zoneName string) bool {
 		called <- zoneName
+		return true
 	}
 	defer func() { fetchZoneFunc = originalFetchZone }()
 

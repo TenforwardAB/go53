@@ -20,7 +20,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	opt := r.IsEdns0()
 	wantsDNSSEC := config.AppConfig.GetLive().DNSSECEnabled && opt != nil && opt.Do()
 
-	if r.Opcode == dns.OpcodeNotify && (live.Mode == "secondary" || live.Dev.DualMode) {
+	if r.Opcode == dns.OpcodeNotify && live.Mode == "secondary" {
 		remoteIP, _, err := net.SplitHostPort(w.RemoteAddr().String())
 		if err != nil {
 			log.Println("Invalid remote address:", w.RemoteAddr())

@@ -33,10 +33,6 @@ var DefaultLiveConfig = LiveConfig{
 		RefreshJitterSec:    60,
 	},
 
-	Dev: DevConfig{
-		DualMode: false,
-	},
-
 	DNSSEC: DNSSECSignaturePolicy{
 		ValiditySeconds:       7 * 24 * 3600,
 		DNSKEYValiditySeconds: 14 * 24 * 3600,
