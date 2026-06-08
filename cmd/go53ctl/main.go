@@ -189,6 +189,9 @@ func main() {
 		handleAPI(os.Args[2:])
 		return
 	}
+	if len(os.Args) > 1 && handleAdminCommand(os.Args[1], os.Args[2:]) {
+		return
+	}
 
 	var (
 		dbPath    string
@@ -239,11 +242,31 @@ func printMainUsage(help bool) {
 
 Commands:
   api METHOD PATH      Call any admin API route locally over the Unix socket (break-glass)
+  config               Read or patch live runtime config
+  zones                List, delete, import, or export zones
+  records              List, add, get, patch, or delete records
+  catalog              Inspect catalog-zone status and members
+  secondary            Trigger secondary transfer fetches
+  notify               Schedule DNS NOTIFY
+  tsig                 Manage TSIG keys
+  dnskeys              Manage DNSSEC keys
+  ds|cds|cdnskey       Generate parent-signaling records
+  distributed          Inspect and repair distributed state
+  docs                 Fetch OpenAPI docs or Swagger HTML
   cluster invite       Create a JWT invite token for a new distributed node
   cluster join         Join/configure a distributed node from a JWT invite token`)
 	if help {
 		fmt.Println(`
 Local admin examples (Unix socket, no API token):
+  go53ctl config get
+  go53ctl config patch '{"default_ttl":120}'
+  go53ctl zones list --limit 50
+  go53ctl records add example.com. A '{"name":"www","ttl":300,"ip":"192.0.2.10"}'
+  go53ctl records get example.com. A www.example.com.
+  go53ctl zones export example.com. > example.com.zone
+  go53ctl docs openapi > openapi.yaml
+
+Raw API passthrough:
   go53ctl api GET /api/config
   go53ctl api PATCH /api/config '{"default_ttl":120}'
 
@@ -259,7 +282,8 @@ Zone storage tools:
 	}
 	fmt.Println(`
 Local admin over Unix socket (break-glass, filesystem-gated):
-  go53ctl api METHOD PATH [JSON_BODY]   Run 'go53ctl api' with no args for details
+  go53ctl COMMAND [SUBCOMMAND] [ARGS]    Run 'go53ctl help' for all commands
+  go53ctl api METHOD PATH [JSON_BODY]    Raw route passthrough
   Requires root or membership in the admin socket group (default go53_admin).
 
 Zone storage tools:
@@ -269,7 +293,9 @@ Zone storage tools:
   --count-only         Only show record counts instead of full record data
 
 Examples:
-  go53ctl api GET /api/config
+  go53ctl config get
+  go53ctl records add example.com. A '{"name":"www","ip":"192.0.2.10"}'
+  go53ctl catalog status
   go53ctl cluster invite
   go53ctl cluster join --token TOKEN --api http://10.0.0.11:8053 --sync-endpoint tls://10.0.0.11:53530
   go53ctl --list-all-zones --count-only`)
@@ -478,6 +504,515 @@ Examples:
   go53ctl api PATCH /api/config '{"default_ttl":120}'
   go53ctl api POST /api/zones/example.com./records/A '{"name":"www.example.com.","ttl":300,"ip":"192.0.2.10"}'
   go53ctl api DELETE /api/zones/example.com./records/A/www.example.com.`)
+}
+
+type adminOptions struct {
+	Socket string
+	API    string
+	Limit  int
+	Offset int
+}
+
+func handleAdminCommand(command string, args []string) bool {
+	switch command {
+	case "config":
+		handleAdminConfig(args)
+	case "zones":
+		handleAdminZones(args)
+	case "records":
+		handleAdminRecords(args)
+	case "catalog":
+		handleAdminCatalog(args)
+	case "secondary":
+		handleAdminSecondary(args)
+	case "notify":
+		handleAdminNotify(args)
+	case "tsig":
+		handleAdminTSIG(args)
+	case "dnskeys":
+		handleAdminDNSKeys(args)
+	case "ds", "cds", "cdnskey":
+		handleAdminParentSignal(command, args)
+	case "distributed":
+		handleAdminDistributed(args)
+	case "docs":
+		handleAdminDocs(args)
+	default:
+		return false
+	}
+	return true
+}
+
+func newAdminFlagSet(name string, withPaging bool) (*flag.FlagSet, *adminOptions) {
+	opts := &adminOptions{Socket: defaultAdminSocket(), Limit: 100}
+	fs := flag.NewFlagSet(name, flag.ExitOnError)
+	fs.StringVar(&opts.Socket, "socket", opts.Socket, "Unix admin socket path")
+	fs.StringVar(&opts.API, "api", "", "TCP API base URL; overrides --socket")
+	if withPaging {
+		fs.IntVar(&opts.Limit, "limit", 100, "Page size for list endpoints")
+		fs.IntVar(&opts.Offset, "offset", 0, "Page offset for list endpoints")
+	}
+	return fs, opts
+}
+
+func adminEndpoint(opts adminOptions) (*http.Client, string) {
+	if strings.TrimSpace(opts.API) != "" {
+		return http.DefaultClient, strings.TrimRight(opts.API, "/")
+	}
+	return socketClient(opts.Socket), "http://go53-admin-socket"
+}
+
+func adminRequest(opts adminOptions, method, path, body, contentType string) ([]byte, error) {
+	client, base := adminEndpoint(opts)
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	req, err := http.NewRequest(method, base+path, reader)
+	if err != nil {
+		return nil, err
+	}
+	if body != "" {
+		if contentType == "" {
+			contentType = "application/json"
+		}
+		req.Header.Set("Content-Type", contentType)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return data, fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(data)))
+	}
+	return data, nil
+}
+
+func mustAdminRequest(opts adminOptions, method, path, body, contentType string) {
+	data, err := adminRequest(opts, method, path, body, contentType)
+	if err != nil {
+		log.Fatal(err)
+	}
+	printResponse(data)
+}
+
+func printResponse(data []byte) {
+	if len(data) > 0 {
+		fmt.Println(strings.TrimRight(string(data), "\n"))
+	}
+}
+
+func pageQuery(opts adminOptions) string {
+	return fmt.Sprintf("?limit=%d&offset=%d", opts.Limit, opts.Offset)
+}
+
+func requireArgs(args []string, n int, usage func()) {
+	if len(args) < n {
+		usage()
+		os.Exit(1)
+	}
+}
+
+func handleAdminConfig(args []string) {
+	if len(args) == 0 {
+		printConfigUsage()
+		os.Exit(1)
+	}
+	fs, opts := newAdminFlagSet("config "+args[0], false)
+	_ = fs.Parse(args[1:])
+	rest := fs.Args()
+	switch args[0] {
+	case "get":
+		mustAdminRequest(*opts, http.MethodGet, "/api/config", "", "")
+	case "patch":
+		requireArgs(rest, 1, printConfigUsage)
+		mustAdminRequest(*opts, http.MethodPatch, "/api/config", rest[0], "application/json")
+	default:
+		printConfigUsage()
+		os.Exit(1)
+	}
+}
+
+func printConfigUsage() {
+	fmt.Println(`Usage:
+  go53ctl config get [--socket PATH|--api URL]
+  go53ctl config patch JSON [--socket PATH|--api URL]
+
+Examples:
+  go53ctl config get
+  go53ctl config patch '{"auth":{"mode":"none"}}'`)
+}
+
+func handleAdminZones(args []string) {
+	if len(args) == 0 {
+		printZonesUsage()
+		os.Exit(1)
+	}
+	withPaging := args[0] == "list"
+	fs, opts := newAdminFlagSet("zones "+args[0], withPaging)
+	_ = fs.Parse(args[1:])
+	rest := fs.Args()
+	switch args[0] {
+	case "list":
+		mustAdminRequest(*opts, http.MethodGet, "/api/zones"+pageQuery(*opts), "", "")
+	case "delete":
+		requireArgs(rest, 1, printZonesUsage)
+		mustAdminRequest(*opts, http.MethodDelete, "/api/zones/"+rest[0], "", "")
+	case "export":
+		requireArgs(rest, 1, printZonesUsage)
+		mustAdminRequest(*opts, http.MethodGet, "/api/zones/"+rest[0]+"/export", "", "")
+	case "import":
+		requireArgs(rest, 2, printZonesUsage)
+		data, err := os.ReadFile(rest[1])
+		if err != nil {
+			log.Fatal(err)
+		}
+		mustAdminRequest(*opts, http.MethodPost, "/api/zones/"+rest[0]+"/import", string(data), "text/dns")
+	default:
+		printZonesUsage()
+		os.Exit(1)
+	}
+}
+
+func printZonesUsage() {
+	fmt.Println(`Usage:
+  go53ctl zones list [--limit N] [--offset N] [--socket PATH|--api URL]
+  go53ctl zones delete ZONE [--socket PATH|--api URL]
+  go53ctl zones export ZONE [--socket PATH|--api URL]
+  go53ctl zones import ZONE FILE [--socket PATH|--api URL]
+
+Examples:
+  go53ctl zones list --limit 50
+  go53ctl zones export example.com. > example.com.zone
+  go53ctl zones import example.com. example.com.zone`)
+}
+
+func handleAdminRecords(args []string) {
+	if len(args) == 0 {
+		printRecordsUsage()
+		os.Exit(1)
+	}
+	withPaging := args[0] == "list" || args[0] == "list-type"
+	fs, opts := newAdminFlagSet("records "+args[0], withPaging)
+	_ = fs.Parse(args[1:])
+	rest := fs.Args()
+	switch args[0] {
+	case "list":
+		requireArgs(rest, 1, printRecordsUsage)
+		mustAdminRequest(*opts, http.MethodGet, "/api/zones/"+rest[0]+"/records"+pageQuery(*opts), "", "")
+	case "list-type":
+		requireArgs(rest, 2, printRecordsUsage)
+		mustAdminRequest(*opts, http.MethodGet, "/api/zones/"+rest[0]+"/records/"+strings.ToUpper(rest[1])+pageQuery(*opts), "", "")
+	case "add":
+		requireArgs(rest, 3, printRecordsUsage)
+		mustAdminRequest(*opts, http.MethodPost, "/api/zones/"+rest[0]+"/records/"+strings.ToUpper(rest[1]), rest[2], "application/json")
+	case "get":
+		requireArgs(rest, 3, printRecordsUsage)
+		mustAdminRequest(*opts, http.MethodGet, "/api/zones/"+rest[0]+"/records/"+strings.ToUpper(rest[1])+"/"+rest[2], "", "")
+	case "patch":
+		requireArgs(rest, 4, printRecordsUsage)
+		mustAdminRequest(*opts, http.MethodPatch, "/api/zones/"+rest[0]+"/records/"+strings.ToUpper(rest[1])+"/"+rest[2], rest[3], "application/json")
+	case "delete":
+		requireArgs(rest, 3, printRecordsUsage)
+		body := ""
+		if len(rest) > 3 {
+			body = rest[3]
+		}
+		mustAdminRequest(*opts, http.MethodDelete, "/api/zones/"+rest[0]+"/records/"+strings.ToUpper(rest[1])+"/"+rest[2], body, "application/json")
+	default:
+		printRecordsUsage()
+		os.Exit(1)
+	}
+}
+
+func printRecordsUsage() {
+	fmt.Println(`Usage:
+  go53ctl records list ZONE [--limit N] [--offset N]
+  go53ctl records list-type ZONE RRTYPE [--limit N] [--offset N]
+  go53ctl records add ZONE RRTYPE JSON
+  go53ctl records get ZONE RRTYPE NAME
+  go53ctl records patch ZONE RRTYPE NAME JSON
+  go53ctl records delete ZONE RRTYPE NAME [JSON_VALUE]
+
+Examples:
+  go53ctl records add example.com. A '{"name":"www","ttl":300,"ip":"192.0.2.10"}'
+  go53ctl records get example.com. A www.example.com.
+  go53ctl records delete example.com. A www.example.com.`)
+}
+
+func handleAdminCatalog(args []string) {
+	if len(args) == 0 {
+		printCatalogUsage()
+		os.Exit(1)
+	}
+	withPaging := args[0] == "members"
+	fs, opts := newAdminFlagSet("catalog "+args[0], withPaging)
+	_ = fs.Parse(args[1:])
+	switch args[0] {
+	case "status":
+		mustAdminRequest(*opts, http.MethodGet, "/api/catalog", "", "")
+	case "members":
+		mustAdminRequest(*opts, http.MethodGet, "/api/catalog/members"+pageQuery(*opts), "", "")
+	default:
+		printCatalogUsage()
+		os.Exit(1)
+	}
+}
+
+func printCatalogUsage() {
+	fmt.Println(`Usage:
+  go53ctl catalog status [--socket PATH|--api URL]
+  go53ctl catalog members [--limit N] [--offset N] [--socket PATH|--api URL]`)
+}
+
+func handleAdminSecondary(args []string) {
+	if len(args) == 0 || args[0] != "fetch" {
+		printSecondaryUsage()
+		os.Exit(1)
+	}
+	fs, opts := newAdminFlagSet("secondary fetch", false)
+	_ = fs.Parse(args[1:])
+	rest := fs.Args()
+	requireArgs(rest, 1, printSecondaryUsage)
+	mustAdminRequest(*opts, http.MethodPost, "/api/secondary/fetch/"+rest[0], "", "")
+}
+
+func printSecondaryUsage() {
+	fmt.Println(`Usage:
+  go53ctl secondary fetch ZONE [--socket PATH|--api URL]`)
+}
+
+func handleAdminNotify(args []string) {
+	fs, opts := newAdminFlagSet("notify", false)
+	_ = fs.Parse(args)
+	rest := fs.Args()
+	requireArgs(rest, 1, printNotifyUsage)
+	mustAdminRequest(*opts, http.MethodPost, "/api/notify/"+rest[0], "", "")
+}
+
+func printNotifyUsage() {
+	fmt.Println(`Usage:
+  go53ctl notify ZONE [--socket PATH|--api URL]`)
+}
+
+func handleAdminTSIG(args []string) {
+	if len(args) == 0 {
+		printTSIGUsage()
+		os.Exit(1)
+	}
+	fs, opts := newAdminFlagSet("tsig "+args[0], false)
+	_ = fs.Parse(args[1:])
+	rest := fs.Args()
+	switch args[0] {
+	case "list":
+		mustAdminRequest(*opts, http.MethodGet, "/api/tsig", "", "")
+	case "add":
+		requireArgs(rest, 3, printTSIGUsage)
+		body := fmt.Sprintf(`{"algorithm":%q,"secret":%q}`, rest[1], rest[2])
+		mustAdminRequest(*opts, http.MethodPost, "/api/tsig/"+rest[0], body, "application/json")
+	case "delete":
+		requireArgs(rest, 1, printTSIGUsage)
+		mustAdminRequest(*opts, http.MethodDelete, "/api/tsig/"+rest[0], "", "")
+	default:
+		printTSIGUsage()
+		os.Exit(1)
+	}
+}
+
+func printTSIGUsage() {
+	fmt.Println(`Usage:
+  go53ctl tsig list [--socket PATH|--api URL]
+  go53ctl tsig add NAME ALGORITHM SECRET [--socket PATH|--api URL]
+  go53ctl tsig delete NAME [--socket PATH|--api URL]`)
+}
+
+func handleAdminDNSKeys(args []string) {
+	if len(args) == 0 {
+		printDNSKeysUsage()
+		os.Exit(1)
+	}
+	fs, opts := newAdminFlagSet("dnskeys "+args[0], false)
+	_ = fs.Parse(args[1:])
+	rest := fs.Args()
+	switch args[0] {
+	case "list":
+		mustAdminRequest(*opts, http.MethodGet, "/api/dnskeys", "", "")
+	case "get":
+		requireArgs(rest, 1, printDNSKeysUsage)
+		mustAdminRequest(*opts, http.MethodGet, "/api/dnskeys/"+rest[0], "", "")
+	case "create":
+		requireArgs(rest, 1, printDNSKeysUsage)
+		mustAdminRequest(*opts, http.MethodPost, "/api/dnskeys?zone="+rest[0], "", "")
+	case "rollover":
+		requireArgs(rest, 1, printDNSKeysUsage)
+		body := rest[0]
+		if len(rest) >= 3 {
+			body = fmt.Sprintf(`{"zone":%q,"role":%q,"algorithm":%q}`, rest[0], rest[1], rest[2])
+		}
+		mustAdminRequest(*opts, http.MethodPost, "/api/dnskeys/rollover", body, "application/json")
+	case "lifecycle":
+		requireArgs(rest, 2, printDNSKeysUsage)
+		mustAdminRequest(*opts, http.MethodPatch, "/api/dnskeys/"+rest[0]+"/lifecycle", rest[1], "application/json")
+	case "retire":
+		requireArgs(rest, 1, printDNSKeysUsage)
+		path := "/api/dnskeys/" + rest[0] + "/retire"
+		if len(rest) > 1 {
+			path += "?remove_after_days=" + rest[1]
+		}
+		mustAdminRequest(*opts, http.MethodPost, path, "", "")
+	case "revoke":
+		requireArgs(rest, 1, printDNSKeysUsage)
+		path := "/api/dnskeys/" + rest[0] + "/revoke"
+		if len(rest) > 1 {
+			path += "?remove_after_days=" + rest[1]
+		}
+		mustAdminRequest(*opts, http.MethodPost, path, "", "")
+	case "delete":
+		requireArgs(rest, 1, printDNSKeysUsage)
+		mustAdminRequest(*opts, http.MethodDelete, "/api/dnskeys/"+rest[0], "", "")
+	default:
+		printDNSKeysUsage()
+		os.Exit(1)
+	}
+}
+
+func printDNSKeysUsage() {
+	fmt.Println(`Usage:
+  go53ctl dnskeys list
+  go53ctl dnskeys get ZONE
+  go53ctl dnskeys create ZONE
+  go53ctl dnskeys rollover JSON
+  go53ctl dnskeys rollover ZONE ROLE ALGORITHM
+  go53ctl dnskeys lifecycle KEYID JSON
+  go53ctl dnskeys retire KEYID [REMOVE_AFTER_DAYS]
+  go53ctl dnskeys revoke KEYID [REMOVE_AFTER_DAYS]
+  go53ctl dnskeys delete KEYID`)
+}
+
+func handleAdminParentSignal(kind string, args []string) {
+	fs, opts := newAdminFlagSet(kind, false)
+	digest := fs.String("digest", "", "Comma-separated DNSSEC digest type numbers")
+	ttl := fs.Int("ttl", 0, "TTL for CDS/CDNSKEY delete signaling")
+	deleteSignal := fs.Bool("delete", false, "Return parent delete signaling records")
+	_ = fs.Parse(args)
+	rest := fs.Args()
+	requireArgs(rest, 1, func() { printParentSignalUsage(kind) })
+	path := "/api/" + kind + "/" + rest[0]
+	query := []string{}
+	if *digest != "" {
+		query = append(query, "digest="+*digest)
+	}
+	if *deleteSignal {
+		query = append(query, "delete=true")
+	}
+	if *ttl > 0 {
+		query = append(query, fmt.Sprintf("ttl=%d", *ttl))
+	}
+	if len(query) > 0 {
+		path += "?" + strings.Join(query, "&")
+	}
+	mustAdminRequest(*opts, http.MethodGet, path, "", "")
+}
+
+func printParentSignalUsage(kind string) {
+	fmt.Printf(`Usage:
+  go53ctl %s ZONE [--digest LIST] [--delete] [--ttl N] [--socket PATH|--api URL]
+`, kind)
+}
+
+func handleAdminDistributed(args []string) {
+	if len(args) == 0 {
+		printDistributedUsage()
+		os.Exit(1)
+	}
+	fs, opts := newAdminFlagSet("distributed "+args[0], false)
+	_ = fs.Parse(args[1:])
+	rest := fs.Args()
+	switch args[0] {
+	case "status":
+		mustAdminRequest(*opts, http.MethodGet, "/api/distributed/status", "", "")
+	case "keypair":
+		mustAdminRequest(*opts, http.MethodPost, "/api/distributed/keypair", "", "")
+	case "vector":
+		mustAdminRequest(*opts, http.MethodGet, "/api/distributed/vector", "", "")
+	case "events":
+		path := "/api/distributed/events"
+		if len(rest) > 0 {
+			path += "?" + strings.Join(rest, "&")
+		}
+		mustAdminRequest(*opts, http.MethodGet, path, "", "")
+	case "post-event":
+		requireArgs(rest, 1, printDistributedUsage)
+		path := "/api/distributed/events"
+		if len(rest) > 1 && rest[1] == "resync" {
+			path += "?resync=true"
+		}
+		mustAdminRequest(*opts, http.MethodPost, path, rest[0], "application/json")
+	case "merkle-roots":
+		mustAdminRequest(*opts, http.MethodGet, "/api/distributed/merkle/roots", "", "")
+	case "merkle-branches":
+		requireArgs(rest, 1, printDistributedUsage)
+		mustAdminRequest(*opts, http.MethodGet, "/api/distributed/merkle/branches?zone="+rest[0], "", "")
+	case "merkle-leaves":
+		requireArgs(rest, 1, printDistributedUsage)
+		mustAdminRequest(*opts, http.MethodPost, "/api/distributed/merkle/leaves", rest[0], "application/json")
+	case "repair-events":
+		requireArgs(rest, 1, printDistributedUsage)
+		mustAdminRequest(*opts, http.MethodPost, "/api/distributed/merkle/repair-events", rest[0], "application/json")
+	case "invite-save":
+		requireArgs(rest, 1, printDistributedUsage)
+		mustAdminRequest(*opts, http.MethodPost, "/api/distributed/invites", rest[0], "application/json")
+	case "invite-consume":
+		requireArgs(rest, 1, printDistributedUsage)
+		mustAdminRequest(*opts, http.MethodPost, "/api/distributed/invites/"+rest[0]+"/consume", "", "")
+	case "well-known":
+		mustAdminRequest(*opts, http.MethodGet, "/.well-known/go53-node.json", "", "")
+	default:
+		printDistributedUsage()
+		os.Exit(1)
+	}
+}
+
+func printDistributedUsage() {
+	fmt.Println(`Usage:
+  go53ctl distributed status
+  go53ctl distributed keypair
+  go53ctl distributed vector
+  go53ctl distributed events [origin=NODE] [after=N]
+  go53ctl distributed post-event JSON [resync]
+  go53ctl distributed merkle-roots
+  go53ctl distributed merkle-branches ZONE
+  go53ctl distributed merkle-leaves JSON
+  go53ctl distributed repair-events JSON
+  go53ctl distributed invite-save JSON
+  go53ctl distributed invite-consume JTI
+  go53ctl distributed well-known`)
+}
+
+func handleAdminDocs(args []string) {
+	if len(args) == 0 {
+		printDocsUsage()
+		os.Exit(1)
+	}
+	fs, opts := newAdminFlagSet("docs "+args[0], false)
+	_ = fs.Parse(args[1:])
+	switch args[0] {
+	case "openapi":
+		mustAdminRequest(*opts, http.MethodGet, "/openapi.yaml", "", "")
+	case "swagger":
+		mustAdminRequest(*opts, http.MethodGet, "/swagger", "", "")
+	default:
+		printDocsUsage()
+		os.Exit(1)
+	}
+}
+
+func printDocsUsage() {
+	fmt.Println(`Usage:
+  go53ctl docs openapi [--socket PATH|--api URL]
+  go53ctl docs swagger [--socket PATH|--api URL]`)
 }
 
 func printClusterUsage() {

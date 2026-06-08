@@ -721,21 +721,64 @@ curl http://10.0.0.11:8053/api/distributed/merkle/roots</code></pre>
         <div class="note">
           <p>Grant an operator local admin by adding them to the group: <code>sudo usermod -aG go53_admin alice</code>. Under systemd, provision the socket directory with <code>RuntimeDirectory=go53</code> so <code>/run/go53</code> exists with the right ownership.</p>
         </div>
-        <p>The <code>go53ctl api</code> command is a thin passthrough that calls any admin route over the socket by default. It reads the socket path from <code>--socket</code> or <code>$GO53_ADMIN_SOCKET</code>, falling back to <code>/run/go53/admin.sock</code>. Pass <code>--api URL</code> to target the TCP API instead.</p>
+        <p>The management subcommands call the admin API over the socket by default. They read the socket path from <code>--socket</code> or <code>$GO53_ADMIN_SOCKET</code>, falling back to <code>/run/go53/admin.sock</code>. Pass <code>--api URL</code> to target the TCP API instead. The lower-level <code>go53ctl api</code> command remains available as a raw passthrough for any route not covered by a typed helper.</p>
         <pre><code># Read live config locally, no token required
-go53ctl api GET /api/config
+go53ctl config get
 
 # Change a setting
-go53ctl api PATCH /api/config '{"default_ttl":120}'
+go53ctl config patch '{"default_ttl":120}'
 
-# Create and delete a record
-go53ctl api POST /api/zones/example.com./records/A \
-  '{"name":"www.example.com.","ttl":300,"ip":"192.0.2.10"}'
-go53ctl api DELETE /api/zones/example.com./records/A/www.example.com.
+# List zones and records
+go53ctl zones list --limit 50
+go53ctl records list example.com.
+go53ctl records list-type example.com. A
+
+# Create, read, update, and delete a record
+go53ctl records add example.com. A '{"name":"www","ttl":300,"ip":"192.0.2.10"}'
+go53ctl records get example.com. A www.example.com.
+go53ctl records patch example.com. A www.example.com. '{"ip":"192.0.2.11","ttl":300}'
+go53ctl records delete example.com. A www.example.com.
+
+# Zone file import/export
+go53ctl zones export example.com. > example.com.zone
+go53ctl zones import example.com. example.com.zone
+
+# Catalog, secondary, notify, and docs
+go53ctl catalog status
+go53ctl catalog members --limit 100
+go53ctl secondary fetch example.com.
+go53ctl notify example.com.
+go53ctl docs openapi > openapi.yaml
 
 # Explicit socket path or TCP fallback
-go53ctl api --socket /run/go53/admin.sock GET /api/config
-go53ctl api --api http://127.0.0.1:8053 GET /api/config</code></pre>
+go53ctl config get --socket /run/go53/admin.sock
+go53ctl config get --api http://127.0.0.1:8053
+
+# Raw API passthrough remains available
+go53ctl api GET /api/config
+go53ctl api PATCH /api/config '{"default_ttl":120}'</code></pre>
+        <table>
+          <thead>
+            <tr>
+              <th>Command group</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><code>config</code></td><td>Read or patch live runtime config.</td></tr>
+            <tr><td><code>zones</code></td><td>List, delete, import, and export zones.</td></tr>
+            <tr><td><code>records</code></td><td>List, add, read, patch, and delete RRsets.</td></tr>
+            <tr><td><code>catalog</code></td><td>Inspect catalog-zone status and member zones.</td></tr>
+            <tr><td><code>secondary</code></td><td>Queue explicit secondary fetches.</td></tr>
+            <tr><td><code>notify</code></td><td>Schedule DNS NOTIFY for a zone.</td></tr>
+            <tr><td><code>tsig</code></td><td>List, add, and delete TSIG keys.</td></tr>
+            <tr><td><code>dnskeys</code></td><td>Manage DNSSEC key creation, rollover, lifecycle, retire, revoke, and delete operations.</td></tr>
+            <tr><td><code>ds</code>, <code>cds</code>, <code>cdnskey</code></td><td>Generate parent-signaling records.</td></tr>
+            <tr><td><code>distributed</code></td><td>Inspect vectors, events, Merkle state, invites, and node discovery.</td></tr>
+            <tr><td><code>docs</code></td><td>Fetch the OpenAPI spec or Swagger UI HTML.</td></tr>
+            <tr><td><code>api</code></td><td>Raw method/path passthrough for advanced use.</td></tr>
+          </tbody>
+        </table>
         <div class="warning">
           <p>The socket grants unauthenticated, full administrative control of the local node to anyone who can open it. Keep <code>go53_admin</code> membership tight and ensure the socket directory is not world-writable. Cluster onboarding that touches remote peers still uses TCP — the socket administers the local node only.</p>
         </div>
