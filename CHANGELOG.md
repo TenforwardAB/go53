@@ -1,3 +1,6 @@
+## 0.77.0 (June 09, 2026)
+
+
 ## 0.1.0 (June 09, 2026)
   - Fixed sonarcloud security
   - Added AI guidlines documents
