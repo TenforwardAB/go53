@@ -1,4 +1,4 @@
-version: 2
+version: 1
 
 project_name: go53
 
@@ -44,8 +44,6 @@ archives:
       - go53ctl
     name_template: "go53_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     wrap_in_directory: true
-    goos:
-      - windows
 
 checksum:
   name_template: 'checksums.txt'
