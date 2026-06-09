@@ -1,0 +1,70 @@
+## 0.1.0 (June 09, 2026)
+  - Fixed sonarcloud security
+  - Added AI guidlines documents
+  - Added the new openapi.yaml version to repo
+  - Fixed openapi.yaml syntax error
+  - Updated cluster invite logic to stop using api endpoints and also added pending mode for manually approving joined new nodes from the current cluster
+  - Updated go53ctl for new API routes
+  - Add auth mode scaffolding and OpenAPI docs
+  - Extended API for more use cases and added pagination for large result, also added test cases
+  - Updated docs and some old scripts cleanup
+  - Added Delete member zoines when removed from catalog
+  - Addeded GO53 primray->BIND secondary catalog zone test
+  - Added Catalog zone as an option with _catalog.go53 as default catalog name
+  - Implementing time based and contextd based AXFR syncing
+  -  Add BIND interop coverage and tighten DNSSEC transfer behavior
+  - Added full BIND tests in script form
+  - Harden authoritative DNS RFC behavior and public DNSSEC compliance
+  - Added integration test and a minor zone fix for compliance
+  - Removed NOSONAR and resolved the issue @sonarcloud, makred as safe
+  - Fixed Sonar insecure error (not valid for this scope)
+  - Fixed workflow tests for correct json parsing
+  -  Add methods across 12 record types stored the raw POST body name as the storage key (key := name), but Lookup always derives the key via SplitName, which strips the zone suffix and normalizes the apex to @. So a FQDN like go53.test. was stored under that literal string but looked up under @ — a key that never existed.
+  - Added sockt for local go53ctl admin and api tests and integration test i github
+  - Reorganising so go53ctl is a package component of go53
+  - Updated technical documentation for distributed mode
+  - NSID (EDNS NSID) support added
+  - Reduce complexity try: 1 go53ctl
+  - Code cleanup
+  - Code cleanup
+  - Added tests for better coverage
+  - Updated Memory lock for better multile write operations
+  - Code refactor to decrease complexifty
+  - Updated README.me
+  - Fix Added updated go53ctl to manage auto invite for new cluster members and updated docs accordingly
+  - Added updated go53ctl to manage auto invite for new cluster members and updated docs accordingly
+  - feat(distributed): add distributed mode
+  - docs: add go53 configuration guide
+  - feat: add DNSSEC implementation
+  - Adding multitarget for A recrods to demo
+  - Adding SonarQube badge to readme
+  - Removing code that where migrated to new location
+  - Feature/250626 tsig (#3)
+  - Feature/250617 axfr (#2)
+  - Feature/250617 persistent config (#1)
+  - Add additional Record types for future implementatio
+  - Adding PTR, SRV, TXT, CNAME, AAAA and testcases for all record types availble
+  - Adding Automatic seriaupdate
+  - WIP: in main A rtype OK using []dns.RR
+  - WIP: in main rtype return as []
+  - Changing design for storage layout to not use duplicate names in key value storage
+  - Redesign of RRtypes and SOA an serial increase
+  - Added Favicons to docs
+  - New logo for page update
+  - Add Logo
+  - fix merge conflict
+  - rename docs do index.html
+  - Create CNAME
+  - Adding docs to repo
+  - WIP: Authkey generation and storage
+  - Adding contribution and updating code of cunduct
+  - Adding first Paseto auth draft
+  - Add some newly created tools and AAAA+MBX type logic
+  - Fixing A record Return issue
+  - WIP incorrect return of GetRecord
+  - removing all but A to start building a working memory cache from scratch
+  - Adding new licence and update for new standard api port 8053
+  - Adding basic code for data persistance
+  - Adding A, AAAA, CNAME, DNAME, MX, NS, PTR, SOA & TXT With Add, Delete, Lookuk functionality with tests
+  - Adding first working draft with most hardcoded
+
