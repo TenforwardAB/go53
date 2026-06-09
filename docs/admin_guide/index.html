@@ -640,6 +640,30 @@ curl -X POST http://127.0.0.1:8053/api/dnskeys/rollover \
 curl http://127.0.0.1:8053/api/ds/example.com.
 curl http://127.0.0.1:8053/api/cds/example.com.
 curl http://127.0.0.1:8053/api/cdnskey/example.com.</code></pre>
+        <p>Rollover key generation accepts the DNSSEC algorithm names below. Imported zone files may contain DNSKEY and RRSIG records with other algorithm numbers as data, but go53 can only generate private keys and sign RRsets with the algorithms marked as supported.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>DNSSEC alg</th>
+              <th>Name</th>
+              <th>Status</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><code>8</code></td><td><code>RSASHA256</code></td><td>Supported</td><td>Generates 2048-bit RSA keys.</td></tr>
+            <tr><td><code>10</code></td><td><code>RSASHA512</code></td><td>Supported</td><td>Generates 2048-bit RSA keys.</td></tr>
+            <tr><td><code>13</code></td><td><code>ECDSAP256SHA256</code></td><td>Supported</td><td>Uses ECDSA P-256.</td></tr>
+            <tr><td><code>14</code></td><td><code>ECDSAP384SHA384</code></td><td>Supported</td><td>Uses ECDSA P-384.</td></tr>
+            <tr><td><code>15</code></td><td><code>ED25519</code></td><td>Supported; default</td><td>Default for <code>/api/dnskeys/rollover</code> when no algorithm is supplied.</td></tr>
+            <tr><td><code>16</code></td><td><code>ED448</code></td><td>Not supported</td><td>The name is recognized, but key generation fails because ED448 is not available in Go's standard crypto library.</td></tr>
+            <tr><td><code>5</code></td><td><code>RSASHA1</code></td><td>Not supported</td><td>Legacy SHA-1 based signing algorithm; go53 does not generate or sign with it.</td></tr>
+            <tr><td><code>7</code></td><td><code>RSASHA1-NSEC3-SHA1</code></td><td>Not supported</td><td>Legacy SHA-1 based signing algorithm; go53 does not generate or sign with it.</td></tr>
+            <tr><td><code>3</code></td><td><code>DSA</code></td><td>Not supported</td><td>Obsolete DNSSEC algorithm; no key generation/signing path is implemented.</td></tr>
+            <tr><td><code>6</code></td><td><code>DSA-NSEC3-SHA1</code></td><td>Not supported</td><td>Obsolete DNSSEC algorithm; no key generation/signing path is implemented.</td></tr>
+            <tr><td><code>12</code></td><td><code>ECC-GOST</code></td><td>Not supported</td><td>Not implemented in go53's key generation/signing path.</td></tr>
+          </tbody>
+        </table>
         <p>The DNSSEC key lifecycle API supports pre-publish, activation, retirement, revocation, and removal metadata. Use <code>PATCH /api/dnskeys/{keyid}/lifecycle</code> for explicit lifecycle changes, or the helper endpoints for common operations.</p>
         <table>
           <thead>

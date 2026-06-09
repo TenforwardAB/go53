@@ -336,6 +336,7 @@
 
       <section id="dnssec">
         <h2>DNSSEC Policy Parameters</h2>
+        <p>DNSSEC rollover key generation supports <code>RSASHA256</code>, <code>RSASHA512</code>, <code>ECDSAP256SHA256</code>, <code>ECDSAP384SHA384</code>, and <code>ED25519</code> (<code>ED25519</code> is the default). Legacy SHA-1 and DSA algorithms, <code>ECC-GOST</code>, and <code>ED448</code> are not supported for go53-generated signing keys; see the admin guide DNSSEC section for the full algorithm table and rationale.</p>
         <table>
           <thead>
             <tr>
