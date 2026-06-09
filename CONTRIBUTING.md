@@ -95,6 +95,24 @@ We use GitHub labels to guide contributors:
 - `in progress`: Being actively worked on
 - `discussion`: Needs more input
 
+--- 
+
+## AI Usage
+
+This project allows the use of AI tools (e.g., Vibe Coding) **only** for the following purposes:
+
+- **Tests**: Generating, improving, or debugging test code.
+- **Documentation**: Creating or updating documentation (e.g., README, comments, API docs).
+
+**Prohibited:**
+- AI tools **must not** be used to write or modify **core project code**. All core logic must be manually written by contributors.
+
+**Review Requirement:**
+- All AI-generated code (even for tests or documentation) must be manually reviewed before merging.
+- Clearly document AI-assisted changes in commit messages or PR descriptions.
+
+For detailed guidelines, see [AI-GUIDELINES.md](AI-GUIDELINES.md).
+
 ---
 
 ## Tests & Linting
