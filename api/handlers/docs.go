@@ -11,11 +11,11 @@ const swaggerHTML = `<!doctype html>
   <meta charset="utf-8">
   <title>go53 API Docs</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.32.4/swagger-ui.css" integrity="sha384-AHNbXeU7DPcgcihnwKYc3FOT0hTfhEwVFc2JRxxF5S/mplUdt/7G1g6nIblzENrX" crossorigin="anonymous">
 </head>
 <body>
   <div id="swagger-ui"></div>
-  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5.32.4/swagger-ui-bundle.js" integrity="sha384-FgJpbEfGqpFeiFJh0+HNvyohx84XMd+IwgPyxJxjuDFMHVYmoFqrDEJNrVFexwA0" crossorigin="anonymous"></script>
   <script>
     window.onload = function() {
       SwaggerUIBundle({ url: "/openapi.yaml", dom_id: "#swagger-ui" });
