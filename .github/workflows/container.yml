@@ -55,8 +55,8 @@ jobs:
           push: true
           platforms: ${{ matrix.platform }}
           tags: |
-            ghcr.io/${{ github.repository_owner }}/go53:${{ steps.version.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/go53:latest
+            ghcr.io/${{ github.repository_owner | lower }}/go53:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository_owner | lower }}/go53:latest
           labels: |
             org.opencontainers.image.title=go53
             org.opencontainers.image.description=Distributed DNS Server
@@ -93,7 +93,7 @@ jobs:
           Pull and run the image:
           ```bash
           # Pull the image
-          podman pull ghcr.io/${{ github.repository_owner }}/go53:${{ steps.version.outputs.version }}
+          podman pull ghcr.io/${{ github.repository_owner | lower }}/go53:${{ steps.version.outputs.version }}
 
           # Run with persistent data
           podman volume create go53_data
@@ -105,7 +105,7 @@ jobs:
             -p 8053:8053/tcp \
             -p 53530:53530/tcp \
             -v go53_data:/var/lib/go53 \
-            ghcr.io/${{ github.repository_owner }}/go53:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository_owner | lower }}/go53:${{ steps.version.outputs.version }}
           ```
 
           ### Using Docker Compose
@@ -144,7 +144,7 @@ jobs:
         run: |
           if [ "${{ needs.build-and-push.result }}" == "success" ]; then
             echo "✅ Container image built and pushed successfully"
-            echo "Image: ghcr.io/${{ github.repository_owner }}/go53:${{ github.ref_type == 'tag' && github.ref || 'latest' }}"
+            echo "Image: ghcr.io/${{ github.repository_owner | lower }}/go53:${{ github.ref_type == 'tag' && github.ref || 'latest' }}"
           else
             echo "❌ Container image build failed"
           fi
