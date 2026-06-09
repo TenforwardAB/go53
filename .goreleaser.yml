@@ -1,0 +1,63 @@
+version: 2
+
+project_name: go53
+
+builds:
+  - id: go53-server
+    main: ./cmd/server
+    binary: go53
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.Version={{.Version}}
+
+  - id: go53ctl
+    main: ./cmd/go53ctl
+    binary: go53ctl
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.Version={{.Version}}
+
+archives:
+  - format: tar.gz
+    builds:
+      - go53-server
+      - go53ctl
+    name_template: "go53_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    wrap_in_directory: true
+
+  - id: windows
+    format: zip
+    builds:
+      - go53-server
+      - go53ctl
+    name_template: "go53_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    wrap_in_directory: true
+    goos:
+      - windows
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  use: github
+  sort: asc
+  abbrev: -1
+
+release:
+  draft: false
+  make_latest: true
+  github:
+    owner: TenforwardAB
+    name: go53
