@@ -5,10 +5,11 @@
 The easiest way to install go53 and set up a systemd service:
 
 ```bash
-curl -fsSL https://github.com/TenforwardAB/go53/releases/download/latest/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/TenforwardAB/go53/main/scripts/install.sh | sudo bash
 ```
 
 This script will:
+- Automatically detect the latest version from GitHub
 - Detect your OS and CPU architecture
 - Download the appropriate binaries
 - Install both `go53` (server) and `go53ctl` (CLI tool)
@@ -22,11 +23,11 @@ This script will:
 The installation script handles everything automatically:
 
 ```bash
-# Install latest version
-curl -fsSL https://github.com/TenforwardAB/go53/releases/download/v0.77.0/install.sh | sudo bash
+# Install latest version (automatically fetches from GitHub)
+curl -fsSL https://raw.githubusercontent.com/TenforwardAB/go53/main/scripts/install.sh | sudo bash
 
 # Install specific version
-curl -fsSL https://github.com/TenforwardAB/go53/releases/download/v0.76.0/install.sh | sudo bash -s v0.76.0
+curl -fsSL https://raw.githubusercontent.com/TenforwardAB/go53/main/scripts/install.sh | sudo bash -s v0.77.0
 ```
 
 ### 2. Manual Installation

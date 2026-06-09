@@ -39,12 +39,12 @@ Or via `bump_version.sh` (which does everything automatically).
 #### One-liner Installation (Linux/macOS)
 The easiest way to install go53 with systemd service support:
 ```bash
-curl -fsSL https://github.com/TenforwardAB/go53/releases/download/v0.77.0/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/TenforwardAB/go53/main/scripts/install.sh | sudo bash
 ```
 
 Or with a specific version:
 ```bash
-curl -fsSL https://github.com/TenforwardAB/go53/releases/download/v0.77.0/install.sh | sudo bash -s v0.77.0
+curl -fsSL https://raw.githubusercontent.com/TenforwardAB/go53/main/scripts/install.sh | sudo bash -s v0.77.0
 ```
 
 #### Manual Installation

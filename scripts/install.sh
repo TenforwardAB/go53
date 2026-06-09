@@ -4,8 +4,9 @@
 # Downloads and installs go53 server and go53ctl
 # Sets up systemd service for automatic startup
 #
-# Usage: curl https://github.com/TenforwardAB/go53/releases/download/v0.77.0/install.sh | bash
-# Or:    bash <(curl -s https://github.com/TenforwardAB/go53/releases/download/v0.77.0/install.sh)
+# Usage: curl -fsSL https://raw.githubusercontent.com/TenforwardAB/go53/main/scripts/install.sh | sudo bash
+# Or:    bash <(curl -fsSL https://raw.githubusercontent.com/TenforwardAB/go53/main/scripts/install.sh)
+# With specific version: ... | sudo bash -s v0.77.0
 
 set -euo pipefail
 
@@ -17,13 +18,14 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-VERSION="${1:-latest}"
+VERSION="${1:-}"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/go53"
 DATA_DIR="/var/lib/go53"
 USER="go53"
 GROUP="go53"
 GITHUB_REPO="TenforwardAB/go53"
+GITHUB_API="https://api.github.com/repos/${GITHUB_REPO}"
 
 # Logging functions
 log_info() {
@@ -85,10 +87,13 @@ detect_platform() {
 # Get latest release version from GitHub
 get_latest_version() {
     local latest
-    latest=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
+    log_info "Fetching latest release from GitHub API..."
+
+    latest=$(curl -s "${GITHUB_API}/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
 
     if [ -z "$latest" ]; then
         log_error "Failed to fetch latest version from GitHub"
+        log_error "Check: ${GITHUB_API}/releases/latest"
         return 1
     fi
 
@@ -271,13 +276,14 @@ main() {
     fi
     log_success "Detected platform: $platform"
 
-    # Determine version
-    if [ "$VERSION" = "latest" ]; then
-        log_info "Fetching latest version..."
+    # Determine version (fetch latest if not specified)
+    if [ -z "$VERSION" ]; then
         if ! VERSION=$(get_latest_version); then
             exit 1
         fi
         log_success "Latest version: $VERSION"
+    else
+        log_info "Installing version: $VERSION"
     fi
 
     # Install binaries
