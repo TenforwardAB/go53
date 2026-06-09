@@ -1,667 +1,1113 @@
 openapi: 3.0.3
 info:
   title: go53 Admin API
-  version: "1.0.0"
-  description: |
-    Administrative API for go53 authoritative DNS.
+  version: 1.0.0
+  description: 'Administrative API for go53 authoritative DNS.
 
-    Authentication modes are configured through `auth.mode`:
-    `none`, `x-auth-key`, or `oidc`. The current implementation supports
-    `none`; `x-auth-key` and `oidc` are reserved configuration modes.
 
-    The local Unix admin socket is a break-glass path gated by filesystem
-    permissions and intentionally bypasses API authentication.
+    The API is intentionally route-based and mirrors the operations exposed by go53ctl: runtime configuration, zone and RRset management, DNSSEC key lifecycle, TSIG keys, secondary refresh, NOTIFY, catalog-zone status, and distributed cluster repair/onboarding.
+
+
+    Authentication modes are configured through `auth.mode`: `none`, `x-auth-key`, or `oidc`. The current implementation supports `none`; `x-auth-key` and `oidc` are reserved configuration modes for future middleware.
+
+
+    Large list endpoints use `limit` and `offset`. The server clamps `limit` to the documented maximum so clients should always read `total`, `limit`, and `offset` from the response before fetching the next page.'
 servers:
-  - url: http://127.0.0.1:8053
-    description: TCP admin API
-  - url: http://go53-admin-socket
-    description: Local Unix socket placeholder used by go53ctl
+- url: http://127.0.0.1:8053
+  description: TCP admin API
 tags:
-  - name: Docs
-  - name: Config
-  - name: Zones
-  - name: Catalog
-  - name: Secondary
-  - name: TSIG
-  - name: DNSSEC
-  - name: Distributed
+- name: Docs
+  description: OpenAPI document and Swagger UI endpoints.
+- name: Config
+  description: Live runtime configuration. PATCH applies a partial JSON overlay.
+- name: Zones
+  description: Zone, RRset, zone-file import/export, and DNS NOTIFY operations.
+- name: Catalog
+  description: Catalog-zone status and member listing.
+- name: Secondary
+  description: Explicit secondary transfer scheduling.
+- name: TSIG
+  description: TSIG key storage used by transfer and update paths.
+- name: DNSSEC
+  description: DNSSEC key material, lifecycle state, and parent-signaling record generation.
+- name: Distributed
+  description: Distributed replication status, vector clocks, Merkle repair, invites, and join requests.
 paths:
   /openapi.yaml:
     get:
-      tags: [Docs]
+      tags:
+      - Docs
       summary: Download the OpenAPI specification
       responses:
-        "200":
+        '200':
           description: OpenAPI YAML
           content:
             application/yaml:
               schema:
                 type: string
+      description: Returns this OpenAPI document as YAML. Useful for generated clients and for the static Swagger UI under `docs/api/`.
   /swagger/:
     get:
-      tags: [Docs]
+      tags:
+      - Docs
       summary: Swagger UI for the admin API
       responses:
-        "200":
+        '200':
           description: Swagger UI HTML
           content:
             text/html:
               schema:
                 type: string
+      description: Returns the built-in Swagger UI page that loads `/openapi.yaml`.
   /.well-known/go53-node.json:
     get:
-      tags: [Distributed]
-      summary: Discover local distributed node metadata
+      tags:
+      - Distributed
+      summary: Discover distributed node metadata
       responses:
-        "200":
-          description: Node discovery metadata
+        '200':
+          description: Node discovery metadata.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/NodeDiscovery"
-        "503":
-          $ref: "#/components/responses/ServiceUnavailable"
+                $ref: '#/components/schemas/NodeDiscovery'
+              examples:
+                tls:
+                  summary: TLS node
+                  value:
+                    node_id: node-a
+                    mode: distributed
+                    transport: tls
+                    sync_endpoint: tls://10.0.0.11:53530
+                    fingerprint: sha256:...
+                    tls_enabled: true
+                    version: go53
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+      description: Returns public distributed-node discovery metadata for the current node when the distributed service is initialized.
   /api/config:
     get:
-      tags: [Config]
+      tags:
+      - Config
       summary: Read live runtime configuration
       responses:
-        "200":
-          description: Live configuration
+        '200':
+          description: Current live configuration.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/LiveConfig"
+                $ref: '#/components/schemas/LiveConfig'
+              examples:
+                distributed:
+                  summary: Distributed primary config
+                  value:
+                    mode: distributed
+                    dnssec_enabled: true
+                    default_ttl: 300
+                    auth:
+                      mode: none
+                    distributed:
+                      node_id: node-a
+                      transport: tls
+                      sync_port: '53530'
+                      peers: tls://10.0.0.12:53530
+      description: Reads the live runtime configuration currently used by go53. Secret-bearing fields may be present because this is an administrative API.
     patch:
-      tags: [Config]
+      tags:
+      - Config
       summary: Patch live runtime configuration
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/LiveConfigPatch"
+              $ref: '#/components/schemas/LiveConfigPatch'
+            examples:
+              enableCatalog:
+                summary: Enable catalog-zone support
+                value:
+                  secondary:
+                    catalog_enabled: true
+                    catalog_zone: catalog.example.
+              setAuthNone:
+                summary: Explicit no-auth mode
+                value:
+                  auth:
+                    mode: none
       responses:
-        "204":
+        '204':
           description: Configuration updated
-        "400":
-          $ref: "#/components/responses/BadRequest"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+      description: Applies a partial JSON overlay to the live configuration. Fields not included are left unchanged; nested config sections can be patched independently.
   /api/zones:
     get:
-      tags: [Zones]
+      tags:
+      - Zones
       summary: List loaded zones
       parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Offset'
       responses:
-        "200":
-          description: Paginated zone names
+        '200':
+          description: Paginated zone names.
           content:
             application/json:
               schema:
-                allOf:
-                  - $ref: "#/components/schemas/Page"
-                  - type: object
-                    properties:
-                      items:
-                        type: array
-                        items:
-                          type: string
-                          example: example.com.
+                $ref: '#/components/schemas/ZonePage'
+              examples:
+                firstPage:
+                  summary: First page
+                  value:
+                    items:
+                    - example.com.
+                    - example.net.
+                    limit: 100
+                    offset: 0
+                    total: 2
+      description: Lists loaded zone names with offset/limit pagination. Use this before fetching records for large installations.
   /api/zones/{zone}:
     delete:
-      tags: [Zones]
+      tags:
+      - Zones
       summary: Delete a complete zone
       parameters:
-        - $ref: "#/components/parameters/Zone"
+      - $ref: '#/components/parameters/Zone'
       responses:
-        "204":
+        '204':
           description: Zone deleted
-        "503":
-          $ref: "#/components/responses/SecondaryMode"
+        '503':
+          $ref: '#/components/responses/SecondaryMode'
+      description: Deletes an entire zone and all its records. This route is disabled when the node is running in secondary mode.
   /api/zones/{zone}/records:
     get:
-      tags: [Zones]
+      tags:
+      - Zones
       summary: List all record owners in a zone
       parameters:
-        - $ref: "#/components/parameters/Zone"
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
+      - $ref: '#/components/parameters/Zone'
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Offset'
       responses:
-        "200":
-          description: Paginated record owner entries
+        '200':
+          description: Paginated record owner entries.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RecordPage"
+                $ref: '#/components/schemas/RecordPage'
+              examples:
+                records:
+                  summary: Record page
+                  value:
+                    items:
+                    - zone: example.com.
+                      type: A
+                      name: www.example.com.
+                      records:
+                      - ip: 192.0.2.10
+                        ttl: 300
+                    limit: 100
+                    offset: 0
+                    total: 1
+      description: Lists all record owner/type entries in one zone. Large zones should be read page by page using `limit` and `offset`.
   /api/zones/{zone}/records/{rrtype}:
     get:
-      tags: [Zones]
+      tags:
+      - Zones
       summary: List record owners for one RR type
       parameters:
-        - $ref: "#/components/parameters/Zone"
-        - $ref: "#/components/parameters/RRType"
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
+      - $ref: '#/components/parameters/Zone'
+      - $ref: '#/components/parameters/RRType'
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Offset'
       responses:
-        "200":
-          description: Paginated record owner entries
+        '200':
+          description: Paginated owner entries for the requested RR type.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RecordPage"
+                $ref: '#/components/schemas/RecordPage'
+      description: Lists all owners for a single RR type in a zone, for example every A RRset in `example.com.`.
     post:
-      tags: [Zones]
+      tags:
+      - Zones
       summary: Add one record value
       parameters:
-        - $ref: "#/components/parameters/Zone"
-        - $ref: "#/components/parameters/RRType"
+      - $ref: '#/components/parameters/Zone'
+      - $ref: '#/components/parameters/RRType'
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/RecordPayload"
+              oneOf:
+              - $ref: '#/components/schemas/ARecordPayload'
+              - $ref: '#/components/schemas/AAAARecordPayload'
+              - $ref: '#/components/schemas/CNAMERecordPayload'
+              - $ref: '#/components/schemas/MXRecordPayload'
+              - $ref: '#/components/schemas/TXTRecordPayload'
+              - $ref: '#/components/schemas/SRVRecordPayload'
+              - $ref: '#/components/schemas/SOARecordPayload'
+              - $ref: '#/components/schemas/RecordPayload'
+            examples:
+              a:
+                summary: A record
+                value:
+                  name: www
+                  ttl: 300
+                  ip: 192.0.2.10
+              aaaa:
+                summary: AAAA record
+                value:
+                  name: www
+                  ttl: 300
+                  ip: 2001:db8::10
+              cname:
+                summary: CNAME record
+                value:
+                  name: app
+                  ttl: 300
+                  target: www.example.com.
+              mx:
+                summary: MX record
+                value:
+                  name: '@'
+                  ttl: 3600
+                  preference: 10
+                  mx: mail.example.com.
+              txt:
+                summary: TXT record
+                value:
+                  name: '@'
+                  ttl: 300
+                  text: v=spf1 -all
+              srv:
+                summary: SRV record
+                value:
+                  name: _sip._tcp
+                  ttl: 300
+                  priority: 10
+                  weight: 20
+                  port: 5060
+                  target: sip.example.com.
+              soa:
+                summary: SOA record
+                value:
+                  ttl: 3600
+                  ns: ns1.example.com.
+                  mbox: hostmaster.example.com.
+                  serial: 2026060901
+                  refresh: 3600
+                  retry: 600
+                  expire: 1209600
+                  minttl: 300
       responses:
-        "201":
+        '201':
           description: Record added
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "503":
-          $ref: "#/components/responses/SecondaryMode"
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '503':
+          $ref: '#/components/responses/SecondaryMode'
+      description: Adds one record value to the owner/type RRset. The payload schema is RR-type specific; examples show the common shapes.
   /api/zones/{zone}/records/{rrtype}/{name}:
     get:
-      tags: [Zones]
+      tags:
+      - Zones
       summary: Read one RRset owner
       parameters:
-        - $ref: "#/components/parameters/Zone"
-        - $ref: "#/components/parameters/RRType"
-        - $ref: "#/components/parameters/RecordName"
+      - $ref: '#/components/parameters/Zone'
+      - $ref: '#/components/parameters/RRType'
+      - $ref: '#/components/parameters/RecordName'
       responses:
-        "200":
-          description: DNS resource records encoded as JSON
+        '200':
+          description: DNS resource records encoded as JSON.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  type: object
-                  additionalProperties: true
-        "404":
-          $ref: "#/components/responses/NotFound"
+                $ref: '#/components/schemas/RRset'
+        '404':
+          $ref: '#/components/responses/NotFound'
+      description: Reads the complete RRset for one owner name and RR type.
     patch:
-      tags: [Zones]
+      tags:
+      - Zones
       summary: Replace one RRset owner for a type
       parameters:
-        - $ref: "#/components/parameters/Zone"
-        - $ref: "#/components/parameters/RRType"
-        - $ref: "#/components/parameters/RecordName"
+      - $ref: '#/components/parameters/Zone'
+      - $ref: '#/components/parameters/RRType'
+      - $ref: '#/components/parameters/RecordName'
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/RecordPayload"
+              oneOf:
+              - $ref: '#/components/schemas/ARecordPayload'
+              - $ref: '#/components/schemas/AAAARecordPayload'
+              - $ref: '#/components/schemas/CNAMERecordPayload'
+              - $ref: '#/components/schemas/MXRecordPayload'
+              - $ref: '#/components/schemas/TXTRecordPayload'
+              - $ref: '#/components/schemas/SRVRecordPayload'
+              - $ref: '#/components/schemas/SOARecordPayload'
+              - $ref: '#/components/schemas/RecordPayload'
+            examples:
+              a:
+                summary: A record
+                value:
+                  name: www
+                  ttl: 300
+                  ip: 192.0.2.10
+              aaaa:
+                summary: AAAA record
+                value:
+                  name: www
+                  ttl: 300
+                  ip: 2001:db8::10
+              cname:
+                summary: CNAME record
+                value:
+                  name: app
+                  ttl: 300
+                  target: www.example.com.
+              mx:
+                summary: MX record
+                value:
+                  name: '@'
+                  ttl: 3600
+                  preference: 10
+                  mx: mail.example.com.
+              txt:
+                summary: TXT record
+                value:
+                  name: '@'
+                  ttl: 300
+                  text: v=spf1 -all
+              srv:
+                summary: SRV record
+                value:
+                  name: _sip._tcp
+                  ttl: 300
+                  priority: 10
+                  weight: 20
+                  port: 5060
+                  target: sip.example.com.
+              soa:
+                summary: SOA record
+                value:
+                  ttl: 3600
+                  ns: ns1.example.com.
+                  mbox: hostmaster.example.com.
+                  serial: 2026060901
+                  refresh: 3600
+                  retry: 600
+                  expire: 1209600
+                  minttl: 300
       responses:
-        "204":
+        '204':
           description: Record owner replaced
-        "503":
-          $ref: "#/components/responses/SecondaryMode"
+        '503':
+          $ref: '#/components/responses/SecondaryMode'
+      description: Replaces the RRset for one owner name and RR type with the supplied value. For multi-value changes, clients can delete and re-add values or send the full replacement supported by the RR type handler.
     delete:
-      tags: [Zones]
+      tags:
+      - Zones
       summary: Delete an RRset owner or selected value
       parameters:
-        - $ref: "#/components/parameters/Zone"
-        - $ref: "#/components/parameters/RRType"
-        - $ref: "#/components/parameters/RecordName"
+      - $ref: '#/components/parameters/Zone'
+      - $ref: '#/components/parameters/RRType'
+      - $ref: '#/components/parameters/RecordName'
       requestBody:
         required: false
         content:
           application/json:
             schema:
-              description: Optional value selector for multi-value RRsets.
-              oneOf:
-                - type: string
-                - type: object
-                  additionalProperties: true
+              $ref: '#/components/schemas/DeleteRecordSelector'
+            examples:
+              singleA:
+                summary: Delete one A value
+                value:
+                  ip: 192.0.2.10
       responses:
-        "204":
+        '204':
           description: Record deleted
-        "503":
-          $ref: "#/components/responses/SecondaryMode"
+        '503':
+          $ref: '#/components/responses/SecondaryMode'
+      description: Deletes either the whole owner/type RRset or, when a selector body is supplied, one value from a multi-value RRset.
   /api/zones/{zone}/export:
     get:
-      tags: [Zones]
+      tags:
+      - Zones
       summary: Export a zone file
       parameters:
-        - $ref: "#/components/parameters/Zone"
+      - $ref: '#/components/parameters/Zone'
       responses:
-        "200":
-          description: Zone file text
+        '200':
+          description: Zone file text.
           content:
             text/dns:
               schema:
                 type: string
-        "404":
-          $ref: "#/components/responses/NotFound"
+                example: '$ORIGIN example.com.
+
+                  @ 3600 IN SOA ns1.example.com. hostmaster.example.com. 2026060901 3600 600 1209600 300
+
+                  www 300 IN A 192.0.2.10
+
+                  '
+        '404':
+          $ref: '#/components/responses/NotFound'
+      description: Exports a zone in master-file text format suitable for review, backup, or transfer into another DNS implementation.
   /api/zones/{zone}/import:
     post:
-      tags: [Zones]
+      tags:
+      - Zones
       summary: Import a zone file
       parameters:
-        - $ref: "#/components/parameters/Zone"
+      - $ref: '#/components/parameters/Zone'
       requestBody:
         required: true
         content:
           text/dns:
             schema:
               type: string
+              example: '$ORIGIN example.com.
+
+                www 300 IN A 192.0.2.10
+
+                '
       responses:
-        "201":
-          description: Zone imported
+        '201':
+          description: Zone imported.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  zone:
-                    type: string
-                  records:
-                    type: integer
-        "503":
-          $ref: "#/components/responses/SecondaryMode"
+                $ref: '#/components/schemas/ImportResult'
+        '503':
+          $ref: '#/components/responses/SecondaryMode'
+      description: Imports a DNS master file into the named zone. Existing implementation behavior decides how duplicate owner/type values are handled.
   /api/secondary/fetch/{zone}:
     post:
-      tags: [Secondary]
+      tags:
+      - Secondary
       summary: Queue a secondary transfer fetch
       parameters:
-        - $ref: "#/components/parameters/Zone"
+      - $ref: '#/components/parameters/Zone'
       responses:
-        "202":
+        '202':
           description: Fetch queued
-        "409":
+        '409':
           description: Node is not in secondary mode
-        "429":
+        '429':
           description: Fetch already pending, rate-limited, or queue full
+      description: Queues an explicit AXFR/IXFR fetch for a secondary zone. Debounce and minimum interval settings still apply.
   /api/notify/{zone}:
     post:
-      tags: [Zones]
+      tags:
+      - Zones
       summary: Schedule DNS NOTIFY for a zone
       parameters:
-        - $ref: "#/components/parameters/Zone"
+      - $ref: '#/components/parameters/Zone'
       responses:
-        "202":
+        '202':
           description: Notify scheduled
-        "503":
-          $ref: "#/components/responses/SecondaryMode"
+        '503':
+          $ref: '#/components/responses/SecondaryMode'
+      description: Schedules DNS NOTIFY for a primary/distributed zone. Debounce settings may delay the actual wire notification.
   /api/catalog:
     get:
-      tags: [Catalog]
+      tags:
+      - Catalog
       summary: Get catalog-zone status
       responses:
-        "200":
-          description: Catalog status
+        '200':
+          description: Catalog status.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CatalogStatus"
+                $ref: '#/components/schemas/CatalogStatus'
+      description: Returns catalog-zone status, including configured catalog zone, validity, member count, and current members.
   /api/catalog/members:
     get:
-      tags: [Catalog]
+      tags:
+      - Catalog
       summary: List catalog-zone members
       parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Offset'
       responses:
-        "200":
-          description: Paginated catalog members
+        '200':
+          description: Paginated catalog members.
           content:
             application/json:
               schema:
                 allOf:
-                  - $ref: "#/components/schemas/Page"
-                  - type: object
-                    properties:
+                - $ref: '#/components/schemas/Page'
+                - type: object
+                  properties:
+                    items:
+                      type: array
                       items:
-                        type: array
-                        items:
-                          type: string
+                        type: string
+                      example:
+                      - example.com.
+                      - example.net.
+      description: Lists catalog-zone member zones with pagination. Members are derived from the catalog-zone records.
   /api/tsig:
     get:
-      tags: [TSIG]
+      tags:
+      - TSIG
       summary: List TSIG keys
       responses:
-        "200":
-          description: TSIG keys
+        '200':
+          description: TSIG keys.
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: "#/components/schemas/TSIGKey"
+                  $ref: '#/components/schemas/TSIGKey'
+              examples:
+                keys:
+                  summary: Keys
+                  value:
+                  - name: xfr-key.
+                    algorithm: hmac-sha256.
+                    secret: uU0/example/base64/secret==
+      description: Lists stored TSIG keys. The administrative response includes the base64 secret because the API is intended for trusted operators.
   /api/tsig/{name}:
     post:
-      tags: [TSIG]
+      tags:
+      - TSIG
       summary: Add or replace a TSIG key
       parameters:
-        - name: name
-          in: path
-          required: true
-          schema:
-            type: string
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/TSIGKeyInput"
+              $ref: '#/components/schemas/TSIGKeyInput'
+            examples:
+              hmacSha256:
+                summary: HMAC-SHA256 key
+                value:
+                  algorithm: hmac-sha256.
+                  secret: uU0/example/base64/secret==
       responses:
-        "201":
-          description: TSIG key stored
-    delete:
-      tags: [TSIG]
-      summary: Delete a TSIG key
-      parameters:
-        - name: name
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "204":
-          description: TSIG key deleted
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /api/dnskeys:
-    get:
-      tags: [DNSSEC]
-      summary: List stored DNSSEC keys
-      responses:
-        "200":
-          description: Stored DNSSEC keys
+        '201':
+          description: TSIG key stored.
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties:
-                  $ref: "#/components/schemas/StoredKey"
+                $ref: '#/components/schemas/TSIGKey'
+      description: Adds or replaces a TSIG key. The path name is the key identity; the request body supplies algorithm and shared secret.
+    delete:
+      tags:
+      - TSIG
+      summary: Delete a TSIG key
+      parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: TSIG key deleted
+        '404':
+          $ref: '#/components/responses/NotFound'
+      description: Deletes one TSIG key by name.
+  /api/dnskeys:
+    get:
+      tags:
+      - DNSSEC
+      summary: List stored DNSSEC keys
+      responses:
+        '200':
+          description: Stored DNSSEC keys.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSKeyMap'
+      description: Lists all stored DNSSEC keys keyed by internal key id.
     post:
-      tags: [DNSSEC]
+      tags:
+      - DNSSEC
       summary: Generate standard DNSSEC key material for a zone
       parameters:
-        - name: zone
-          in: query
-          required: true
-          schema:
-            type: string
+      - name: zone
+        in: query
+        required: true
+        schema:
+          type: string
       responses:
-        "201":
-          description: Keys generated
-        "503":
-          $ref: "#/components/responses/SecondaryMode"
+        '201':
+          description: Keys generated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSKeyGenerationResponse'
+        '503':
+          $ref: '#/components/responses/SecondaryMode'
+      description: Generates the standard DNSSEC key material for a zone. The zone is supplied as a query parameter.
   /api/dnskeys/rollover:
     post:
-      tags: [DNSSEC]
+      tags:
+      - DNSSEC
       summary: Generate a rollover DNSSEC key
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/RolloverKeyRequest"
+              $ref: '#/components/schemas/RolloverKeyRequest'
+            examples:
+              ksk:
+                summary: KSK rollover
+                value:
+                  zone: example.com.
+                  role: ksk
+                  algorithm: ED25519
+              scheduled:
+                summary: Scheduled ZSK rollover
+                value:
+                  zone: example.com.
+                  role: zsk
+                  algorithm: ED25519
+                  publish_at: 1781000000
+                  activate_at: 1781600000
       responses:
-        "201":
-          description: Rollover key generated
+        '201':
+          description: Rollover key generated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RolloverKeyResponse'
+      description: Generates a single rollover key for a KSK or ZSK lifecycle, optionally with future publish/activate timestamps.
   /api/dnskeys/{keyid}:
     get:
-      tags: [DNSSEC]
+      tags:
+      - DNSSEC
       summary: Get DNSSEC keys for a zone
       parameters:
-        - $ref: "#/components/parameters/KeyID"
+      - $ref: '#/components/parameters/KeyID'
       responses:
-        "200":
-          description: DNSSEC keys for the requested zone
+        '200':
+          description: DNSSEC keys for the requested zone.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StoredKey'
+      description: Returns DNSSEC keys for a zone. This legacy route name uses `{keyid}` in the path, but the handler treats the value as the zone name for reads.
     delete:
-      tags: [DNSSEC]
+      tags:
+      - DNSSEC
       summary: Delete a DNSSEC key
       parameters:
-        - $ref: "#/components/parameters/KeyID"
+      - $ref: '#/components/parameters/KeyID'
       responses:
-        "204":
+        '204':
           description: Key deleted
+      description: Deletes a stored DNSSEC key by internal key id.
   /api/dnskeys/{keyid}/lifecycle:
     patch:
-      tags: [DNSSEC]
+      tags:
+      - DNSSEC
       summary: Update DNSSEC key lifecycle metadata
       parameters:
-        - $ref: "#/components/parameters/KeyID"
+      - $ref: '#/components/parameters/KeyID'
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/StoredKey"
+              $ref: '#/components/schemas/StoredKey'
+            examples:
+              activate:
+                summary: Mark active
+                value:
+                  state: active
+                  activate_at: 1781000000
+              scheduleRetire:
+                summary: Schedule retire
+                value:
+                  state: retired
+                  retire_at: 1781600000
+                  remove_at: 1784200000
       responses:
-        "200":
-          description: Updated key
+        '200':
+          description: Updated key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoredKey'
+      description: Updates lifecycle metadata for one DNSSEC key, such as publish/activate/retire/remove timestamps or state.
   /api/dnskeys/{keyid}/retire:
     post:
-      tags: [DNSSEC]
+      tags:
+      - DNSSEC
       summary: Mark a DNSSEC key retired
       parameters:
-        - $ref: "#/components/parameters/KeyID"
-        - $ref: "#/components/parameters/RemoveAfterDays"
+      - $ref: '#/components/parameters/KeyID'
+      - $ref: '#/components/parameters/RemoveAfterDays'
       responses:
-        "200":
-          description: Retired key
+        '200':
+          description: Retired key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoredKey'
+      description: Marks a DNSSEC key retired and schedules removal after `remove_after_days`.
   /api/dnskeys/{keyid}/revoke:
     post:
-      tags: [DNSSEC]
+      tags:
+      - DNSSEC
       summary: Mark a DNSSEC key revoked
       parameters:
-        - $ref: "#/components/parameters/KeyID"
-        - $ref: "#/components/parameters/RemoveAfterDays"
+      - $ref: '#/components/parameters/KeyID'
+      - $ref: '#/components/parameters/RemoveAfterDays'
       responses:
-        "200":
-          description: Revoked key
+        '200':
+          description: Revoked key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoredKey'
+      description: Marks a DNSSEC key revoked and schedules removal after `remove_after_days`.
   /api/ds/{zone}:
     get:
-      tags: [DNSSEC]
+      tags:
+      - DNSSEC
       summary: Generate DS records for a zone
       parameters:
-        - $ref: "#/components/parameters/Zone"
-        - $ref: "#/components/parameters/Digest"
+      - $ref: '#/components/parameters/Zone'
+      - $ref: '#/components/parameters/Digest'
       responses:
-        "200":
-          description: DS records
+        '200':
+          description: DS records.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DSRecord'
+      description: Generates DS records from active KSK material for parent-zone publication. Use `digest`/`digest_type` to request specific digest algorithms.
   /api/cds/{zone}:
     get:
-      tags: [DNSSEC]
+      tags:
+      - DNSSEC
       summary: Generate CDS records for a zone
       parameters:
-        - $ref: "#/components/parameters/Zone"
-        - $ref: "#/components/parameters/Digest"
-        - $ref: "#/components/parameters/DeleteSignal"
-        - $ref: "#/components/parameters/TTL"
+      - $ref: '#/components/parameters/Zone'
+      - $ref: '#/components/parameters/Digest'
+      - $ref: '#/components/parameters/DeleteSignal'
+      - $ref: '#/components/parameters/TTL'
       responses:
-        "200":
-          description: CDS records
+        '200':
+          description: CDS records.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CDSRecord'
+      description: Generates CDS records for parent automation. Set `delete=true` to emit delete-signaling records.
   /api/cdnskey/{zone}:
     get:
-      tags: [DNSSEC]
+      tags:
+      - DNSSEC
       summary: Generate CDNSKEY records for a zone
       parameters:
-        - $ref: "#/components/parameters/Zone"
-        - $ref: "#/components/parameters/DeleteSignal"
-        - $ref: "#/components/parameters/TTL"
+      - $ref: '#/components/parameters/Zone'
+      - $ref: '#/components/parameters/DeleteSignal'
+      - $ref: '#/components/parameters/TTL'
       responses:
-        "200":
-          description: CDNSKEY records
+        '200':
+          description: CDNSKEY records.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CDNSKEYRecord'
+      description: Generates CDNSKEY records for parent automation. Set `delete=true` to emit delete-signaling records.
   /api/distributed/status:
     get:
-      tags: [Distributed]
+      tags:
+      - Distributed
       summary: Get distributed service status
       responses:
-        "200":
-          description: Distributed status
+        '200':
+          description: Distributed status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DistributedStatus'
+      description: Returns distributed replication status, transport mode flags, local public identity, vector clock, and node discovery metadata when initialized.
   /api/distributed/keypair:
     post:
-      tags: [Distributed]
+      tags:
+      - Distributed
       summary: Generate an Ed25519 distributed keypair
       responses:
-        "200":
-          description: Generated keypair
+        '200':
+          description: Generated keypair.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KeyPair'
+      description: Generates a new Ed25519 keypair suitable for distributed event signing. The caller is responsible for storing it in configuration.
   /api/distributed/vector:
     get:
-      tags: [Distributed]
+      tags:
+      - Distributed
       summary: Get distributed vector clock
       responses:
-        "200":
-          description: Vector clock
+        '200':
+          description: Vector clock.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VectorClock'
+      description: Returns the local vector clock as `node_id -> sequence`.
   /api/distributed/events:
     get:
-      tags: [Distributed]
+      tags:
+      - Distributed
       summary: List distributed events
       parameters:
-        - name: origin
-          in: query
-          schema:
-            type: string
-        - name: after
-          in: query
-          schema:
-            type: integer
-            format: uint64
+      - name: origin
+        in: query
+        schema:
+          type: string
+      - name: after
+        in: query
+        schema:
+          type: integer
+          format: uint64
       responses:
-        "200":
-          description: Events
+        '200':
+          description: Distributed events.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DistributedEvent'
+      description: Lists stored distributed events, optionally scoped to one origin and sequence number greater than `after`.
     post:
-      tags: [Distributed]
+      tags:
+      - Distributed
       summary: Ingest a distributed event
       parameters:
-        - name: resync
-          in: query
-          schema:
-            type: boolean
+      - name: resync
+        in: query
+        schema:
+          type: boolean
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
+              $ref: '#/components/schemas/DistributedEvent'
+            examples:
+              recordUpsert:
+                summary: Record upsert event
+                value:
+                  event_id: node-a:12
+                  origin: node-a
+                  seq: 12
+                  entity: zone_record:example.com.:A:www.example.com.
+                  entity_type: zone_record
+                  zone: example.com.
+                  rrtype: A
+                  name: www.example.com.
+                  operation: UPSERT
+                  value:
+                    ip: 192.0.2.10
+                    ttl: 300
+                  vector:
+                    node-a: 12
+                  created_at: 1781000000
+                  signature: base64-signature
       responses:
-        "200":
-          description: Event applied state
+        '200':
+          description: Event applied state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventApplyResult'
+      description: Ingests one signed distributed event. When TCP/TLS distributed transport is enabled, HTTP ingest is only accepted with `?resync=true` for manual recovery paths.
   /api/distributed/merkle/roots:
     get:
-      tags: [Distributed]
+      tags:
+      - Distributed
       summary: Get Merkle roots for all zones
       responses:
-        "200":
-          description: Merkle roots
+        '200':
+          description: Merkle roots by zone.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MerkleRoots'
+      description: Returns one Merkle root per zone. Roots are used to identify zones that need repair without transferring every record.
   /api/distributed/merkle/branches:
     get:
-      tags: [Distributed]
+      tags:
+      - Distributed
       summary: Get Merkle branches for one zone
       parameters:
-        - $ref: "#/components/parameters/ZoneQuery"
+      - $ref: '#/components/parameters/ZoneQuery'
       responses:
-        "200":
-          description: Merkle branches
+        '200':
+          description: Merkle branches.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MerkleBranches'
+      description: Returns Merkle branch hashes for one zone, keyed by branch prefix.
   /api/distributed/merkle/leaves:
     post:
-      tags: [Distributed]
+      tags:
+      - Distributed
       summary: Get Merkle leaves for zone prefixes
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [zone]
-              properties:
-                zone:
-                  type: string
-                prefixes:
-                  type: array
-                  items:
-                    type: string
+              $ref: '#/components/schemas/MerkleLeavesRequest'
+            examples:
+              prefixes:
+                summary: Selected prefixes
+                value:
+                  zone: example.com.
+                  prefixes:
+                  - ab
+                  - cd
       responses:
-        "200":
-          description: Merkle leaves
+        '200':
+          description: Merkle leaves.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MerkleLeaves'
+      description: Returns Merkle leaves for selected branch prefixes in one zone. Supplying no prefixes returns all leaves for the zone.
   /api/distributed/merkle/repair-events:
     post:
-      tags: [Distributed]
+      tags:
+      - Distributed
       summary: Get latest repair events for entities
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                entities:
-                  type: array
-                  items:
-                    type: string
+              $ref: '#/components/schemas/RepairEventsRequest'
+            examples:
+              entities:
+                summary: One record entity
+                value:
+                  entities:
+                  - zone_record:example.com.:A:www.example.com.
       responses:
-        "200":
-          description: Repair events
+        '200':
+          description: Repair events.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DistributedEvent'
+      description: Returns the latest stored distributed events for specific entity ids so a peer can repair divergent records.
   /api/distributed/invites:
     post:
-      tags: [Distributed]
+      tags:
+      - Distributed
       summary: Save a distributed cluster invite record
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
+              $ref: '#/components/schemas/InviteRecord'
+            examples:
+              invite:
+                summary: Invite record
+                value:
+                  jti: 8f1b2c3d
+                  cluster_id: prod-dns
+                  join_node_id: node-c
+                  issuer: node-a
+                  token: signed-invite-token
+                  usage_count: 1
+                  used_count: 0
+                  iat: 1781000000
+                  exp: 1781086400
+                  created_at: 1781000000
       responses:
-        "204":
+        '204':
           description: Invite saved
+      description: Stores a cluster invite record. This is used by cluster onboarding and replicated between existing nodes.
   /api/distributed/invites/{jti}/consume:
     post:
-      tags: [Distributed]
+      tags:
+      - Distributed
       summary: Consume a distributed cluster invite
       parameters:
-        - name: jti
-          in: path
-          required: true
-          schema:
-            type: string
+      - name: jti
+        in: path
+        required: true
+        schema:
+          type: string
       responses:
-        "200":
-          description: Consumed invite
+        '200':
+          description: Consumed invite.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InviteRecord'
+      description: Consumes one invite usage by token id and returns the updated invite record. Conflicts are returned when the invite is expired or exhausted.
   /api/distributed/join-requests:
     get:
-      tags: [Distributed]
+      tags:
+      - Distributed
       summary: List pending distributed join requests
       responses:
-        "200":
-          description: Pending join requests
+        '200':
+          description: Pending join requests.
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  type: object
-                  additionalProperties: true
+                  $ref: '#/components/schemas/JoinRequest'
+      description: Lists pending distributed join requests awaiting operator approval. Auto-accepted joins normally do not remain in this list.
   /api/distributed/join-requests/{node}/approve:
     post:
-      tags: [Distributed]
+      tags:
+      - Distributed
       summary: Approve a pending distributed join request
       parameters:
-        - name: node
-          in: path
-          required: true
-          schema:
-            type: string
+      - name: node
+        in: path
+        required: true
+        schema:
+          type: string
       responses:
-        "200":
-          description: Join request approved
+        '200':
+          description: Approved join request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JoinRequest'
+      description: Approves one pending join request by node id. Approval consumes the invite, pins the joining node public key, and publishes the membership config update.
 components:
   securitySchemes:
     XAuthKey:
@@ -682,6 +1128,7 @@ components:
       schema:
         type: string
       example: example.com.
+      description: Canonical DNS zone name. A trailing dot is accepted and shown in examples.
     ZoneQuery:
       name: zone
       in: query
@@ -689,6 +1136,7 @@ components:
       schema:
         type: string
       example: example.com.
+      description: Canonical DNS zone name passed as a query parameter.
     RRType:
       name: rrtype
       in: path
@@ -696,6 +1144,7 @@ components:
       schema:
         type: string
       example: A
+      description: 'DNS RR type mnemonic, case-insensitive. Examples: A, AAAA, CNAME, MX, NS, SOA, TXT, SRV, CAA, DNSKEY.'
     RecordName:
       name: name
       in: path
@@ -703,12 +1152,15 @@ components:
       schema:
         type: string
       example: www.example.com.
+      description: Owner name. Relative labels and absolute FQDNs are accepted by the handlers; examples use FQDN form for clarity.
     KeyID:
       name: keyid
       in: path
       required: true
       schema:
         type: string
+      description: DNSSEC key identifier. Some legacy routes use this path component as a zone name for reads.
+      example: example.com.:257:59647
     Limit:
       name: limit
       in: query
@@ -717,6 +1169,7 @@ components:
         default: 100
         maximum: 500
         minimum: 1
+      description: Maximum number of items to return. The server default is 100 and the maximum is 500.
     Offset:
       name: offset
       in: query
@@ -724,12 +1177,14 @@ components:
         type: integer
         default: 0
         minimum: 0
+      description: Zero-based item offset for pagination.
     Digest:
       name: digest
       in: query
       schema:
         type: string
-      description: "Comma-separated DNSSEC digest type numbers. Alias: `digest_type`."
+      description: 'Comma-separated DNSSEC digest type numbers. Alias: `digest_type`.'
+      example: 2,4
     DeleteSignal:
       name: delete
       in: query
@@ -742,182 +1197,1012 @@ components:
       schema:
         type: integer
         default: 3600
+      description: TTL in seconds for generated CDS/CDNSKEY records.
     RemoveAfterDays:
       name: remove_after_days
       in: query
       schema:
         type: integer
         default: 30
+      description: Number of days before the key is eligible for removal after retire/revoke.
   responses:
     BadRequest:
-      description: Invalid request
+      description: Invalid request.
+      content:
+        text/plain:
+          schema:
+            $ref: '#/components/schemas/ErrorText'
     NotFound:
-      description: Resource not found
+      description: Resource not found.
+      content:
+        text/plain:
+          schema:
+            $ref: '#/components/schemas/ErrorText'
     SecondaryMode:
-      description: Zone/record management is disabled in secondary mode
+      description: Zone/record management is disabled in secondary mode.
+      content:
+        text/plain:
+          schema:
+            $ref: '#/components/schemas/ErrorText'
     ServiceUnavailable:
-      description: Service is unavailable or not initialized
+      description: Service is unavailable or not initialized.
+      content:
+        text/plain:
+          schema:
+            $ref: '#/components/schemas/ErrorText'
   schemas:
     Page:
       type: object
-      required: [items, limit, offset, total]
+      required:
+      - items
+      - limit
+      - offset
+      - total
       properties:
         items:
           type: array
           items: {}
         limit:
           type: integer
+          example: 100
         offset:
           type: integer
+          example: 0
         total:
           type: integer
+          example: 3
     RecordPage:
       allOf:
-        - $ref: "#/components/schemas/Page"
-        - type: object
-          properties:
+      - $ref: '#/components/schemas/Page'
+      - type: object
+        properties:
+          items:
+            type: array
             items:
-              type: array
-              items:
-                $ref: "#/components/schemas/RecordListItem"
+              $ref: '#/components/schemas/RecordListItem'
     RecordListItem:
       type: object
       properties:
         zone:
           type: string
+          example: example.com.
         type:
           type: string
+          example: A
         name:
           type: string
+          example: www.example.com.
         records:
-          description: Stored record value for the owner/type.
+          description: Stored RR value or values for this owner/type. Shape depends on RR type.
           oneOf:
-            - type: object
+          - type: object
+            additionalProperties: true
+          - type: array
+            items:
+              type: object
               additionalProperties: true
-            - type: array
-              items:
-                type: object
-                additionalProperties: true
+          example:
+          - ip: 192.0.2.10
+            ttl: 300
     RecordPayload:
       type: object
       additionalProperties: true
-      description: |
-        DNS record payload. Most RR types require `name`; SOA uses the zone apex.
-        Common fields include `ttl`, `ip`, `text`, `ns`, `target`, `priority`,
-        `weight`, `port`, and `mbox`, depending on RR type.
+      description: Type-specific DNS record payload. Most RR types require `name`; SOA uses the zone apex. `ttl` is optional and defaults to server policy. The remaining fields are decoded by the RR type implementation.
+      properties:
+        name:
+          type: string
+          description: Owner name, relative to the zone or absolute FQDN. Required for most RR types.
+          example: www
+        ttl:
+          type: integer
+          description: TTL in seconds.
+          example: 300
       example:
         name: www
         ttl: 300
         ip: 192.0.2.10
     LiveConfig:
       type: object
+      properties:
+        log_level:
+          type: string
+          enum:
+          - debug
+          - info
+          - warn
+          example: info
+        mode:
+          type: string
+          enum:
+          - primary
+          - secondary
+          - distributed
+          example: distributed
+        allow_transfer:
+          type: string
+          description: Comma-separated IP/CIDR allow list for transfers.
+          example: 192.0.2.0/24,2001:db8::/32
+        allow_recursion:
+          type: boolean
+          example: false
+        dnssec_enabled:
+          type: boolean
+          example: true
+        default_ttl:
+          type: integer
+          example: 300
+        version:
+          type: string
+          example: go53
+        max_udp_size:
+          type: integer
+          example: 1232
+        enable_edns:
+          type: boolean
+          example: true
+        nsid:
+          type: string
+          example: node-a
+        rate_limit_qps:
+          type: integer
+          example: 1000
+        allow_axfr:
+          type: boolean
+          example: false
+        default_ns:
+          type: string
+          example: ns1.example.com.
+        enforce_tsig:
+          type: boolean
+          example: false
+        any_query_policy:
+          type: string
+          enum:
+          - hinfo
+          - refuse
+          example: hinfo
+        unknown_zone_policy:
+          type: string
+          enum:
+          - refused
+          example: refused
+        primary:
+          $ref: '#/components/schemas/PrimaryConfig'
+        secondary:
+          $ref: '#/components/schemas/SecondaryConfig'
+        dnssec:
+          $ref: '#/components/schemas/DNSSECSignaturePolicy'
+        distributed:
+          $ref: '#/components/schemas/DistributedConfig'
+        auth:
+          $ref: '#/components/schemas/AuthConfig'
+    LiveConfigPatch:
+      type: object
+      description: Partial `LiveConfig` JSON overlay. Only supplied fields are changed; false booleans and empty strings are meaningful values. Nested objects are merged by field name.
       additionalProperties: true
       properties:
         mode:
           type: string
-          enum: [primary, secondary, distributed]
+          enum:
+          - primary
+          - secondary
+          - distributed
+        dnssec_enabled:
+          type: boolean
+        secondary:
+          $ref: '#/components/schemas/SecondaryConfig'
+        distributed:
+          $ref: '#/components/schemas/DistributedConfig'
         auth:
-          $ref: "#/components/schemas/AuthConfig"
-    LiveConfigPatch:
-      type: object
-      additionalProperties: true
-      description: Partial live configuration overlay.
+          $ref: '#/components/schemas/AuthConfig'
+      example:
+        mode: distributed
+        dnssec_enabled: true
+        secondary:
+          catalog_enabled: true
+          catalog_zone: catalog.example.
+        auth:
+          mode: none
     AuthConfig:
       type: object
       properties:
         mode:
           type: string
-          enum: [none, x-auth-key, oidc]
+          enum:
+          - none
+          - x-auth-key
+          - oidc
           default: none
+          description: Only `none` is implemented by the current middleware.
         x_auth_key:
           type: string
-          description: Reserved static base62 key, minimum 32 characters.
+          description: Reserved static base62 key, minimum 32 characters when enabled.
         oidc_issuer:
           type: string
+          description: Reserved OIDC issuer URL.
         oidc_audience:
           type: string
+          description: Reserved OIDC audience/client id.
         oidc_jwks_url:
           type: string
+          description: Reserved JWKS endpoint override.
     CatalogStatus:
       type: object
       properties:
         enabled:
           type: boolean
+          example: true
         zone:
           type: string
+          example: catalog.example.
         valid:
           type: boolean
+          example: true
         members:
           type: array
           items:
             type: string
+          example:
+          - example.com.
+          - example.net.
         count:
           type: integer
+          example: 2
         version:
           type: string
+          example: '2'
     TSIGKey:
       type: object
+      required:
+      - name
+      - algorithm
+      - secret
       properties:
         name:
           type: string
+          example: xfr-key.
         algorithm:
           type: string
+          example: hmac-sha256.
         secret:
           type: string
+          description: Base64 encoded shared secret.
+          example: uU0/example/base64/secret==
     TSIGKeyInput:
       type: object
-      required: [algorithm, secret]
+      required:
+      - algorithm
+      - secret
       properties:
         name:
           type: string
+          description: Optional; path parameter is authoritative.
+          example: xfr-key.
         algorithm:
           type: string
           example: hmac-sha256.
         secret:
           type: string
           description: Base64 encoded TSIG secret.
+          example: uU0/example/base64/secret==
     StoredKey:
       type: object
-      additionalProperties: true
       properties:
         key_tag:
           type: integer
+          example: 59647
         zone:
           type: string
+          example: example.com.
         algorithm:
           type: string
+          example: ED25519
         flags:
           type: integer
+          description: DNSKEY flags, usually 257 for KSK or 256 for ZSK.
+          example: 257
+        private_pem:
+          type: string
+          description: PEM encoded private key material.
         public_key:
           type: string
+          description: DNSKEY public key material.
+          example: mAexamplePublicKey==
         state:
           type: string
-    RolloverKeyRequest:
-      type: object
-      properties:
-        zone:
-          type: string
-        role:
-          type: string
-          enum: [ksk, zsk]
-        algorithm:
-          type: string
-          default: ED25519
+          enum:
+          - generated
+          - published
+          - active
+          - retired
+          - revoked
+          - removed
+          example: active
+        created_at:
+          type: integer
+          format: int64
         publish_at:
           type: integer
           format: int64
         activate_at:
           type: integer
           format: int64
+        retire_at:
+          type: integer
+          format: int64
+        remove_at:
+          type: integer
+          format: int64
+        revoked_at:
+          type: integer
+          format: int64
+        revoke:
+          type: boolean
+          example: false
+    RolloverKeyRequest:
+      type: object
+      required:
+      - zone
+      - role
+      properties:
+        zone:
+          type: string
+          example: example.com.
+        role:
+          type: string
+          enum:
+          - ksk
+          - zsk
+          example: ksk
+        algorithm:
+          type: string
+          default: ED25519
+          example: ED25519
+        publish_at:
+          type: integer
+          format: int64
+          description: Unix timestamp. Omit for immediate publication.
+        activate_at:
+          type: integer
+          format: int64
+          description: Unix timestamp. Omit for immediate activation.
     NodeDiscovery:
       type: object
-      additionalProperties: true
       properties:
         node_id:
           type: string
+          example: node-a
         mode:
           type: string
+          example: distributed
+        transport:
+          type: string
+          example: tls
         sync_endpoint:
           type: string
+          example: tls://10.0.0.11:53530
         public_key:
           type: string
+          description: Base64 Ed25519 public key.
+        fingerprint:
+          type: string
+          description: Stable fingerprint of public_key.
+        tls_enabled:
+          type: boolean
+          example: true
+        tls_certificate:
+          type: string
+          description: PEM encoded TLS certificate when TLS transport is enabled.
+        tls_fingerprint:
+          type: string
+        tls_public_key_pin:
+          type: string
+        version:
+          type: string
+          example: go53
+    ErrorText:
+      type: string
+      description: Plain text error returned by http.Error.
+    PaginationEnvelope:
+      type: object
+      required:
+      - items
+      - limit
+      - offset
+      - total
+      properties:
+        items:
+          type: array
+          items: {}
+        limit:
+          type: integer
+          example: 100
+        offset:
+          type: integer
+          example: 0
+        total:
+          type: integer
+          example: 237
+      description: Common envelope for paginated list endpoints. `total` is the full result size before limit/offset are applied.
+    ZonePage:
+      allOf:
+      - $ref: '#/components/schemas/Page'
+      - type: object
+        properties:
+          items:
+            type: array
+            items:
+              type: string
+            example:
+            - example.com.
+            - example.net.
+    RRset:
+      type: array
+      description: Records for one owner name and RR type. Each object shape depends on the RR type.
+      items:
+        type: object
+        additionalProperties: true
+      example:
+      - ip: 192.0.2.10
+        ttl: 300
+      - ip: 192.0.2.11
+        ttl: 300
+    ARecordPayload:
+      allOf:
+      - $ref: '#/components/schemas/RecordPayload'
+      - type: object
+        required:
+        - name
+        - ip
+        properties:
+          ip:
+            type: string
+            format: ipv4
+            example: 192.0.2.10
+    AAAARecordPayload:
+      allOf:
+      - $ref: '#/components/schemas/RecordPayload'
+      - type: object
+        required:
+        - name
+        - ip
+        properties:
+          ip:
+            type: string
+            format: ipv6
+            example: 2001:db8::10
+    CNAMERecordPayload:
+      allOf:
+      - $ref: '#/components/schemas/RecordPayload'
+      - type: object
+        required:
+        - name
+        - target
+        properties:
+          target:
+            type: string
+            example: www.example.com.
+    MXRecordPayload:
+      allOf:
+      - $ref: '#/components/schemas/RecordPayload'
+      - type: object
+        required:
+        - name
+        - preference
+        - mx
+        properties:
+          preference:
+            type: integer
+            example: 10
+          mx:
+            type: string
+            example: mail.example.com.
+    TXTRecordPayload:
+      allOf:
+      - $ref: '#/components/schemas/RecordPayload'
+      - type: object
+        required:
+        - name
+        - text
+        properties:
+          text:
+            type: string
+            example: v=spf1 -all
+    SRVRecordPayload:
+      allOf:
+      - $ref: '#/components/schemas/RecordPayload'
+      - type: object
+        required:
+        - name
+        - priority
+        - weight
+        - port
+        - target
+        properties:
+          priority:
+            type: integer
+            example: 10
+          weight:
+            type: integer
+            example: 20
+          port:
+            type: integer
+            example: 5060
+          target:
+            type: string
+            example: sip.example.com.
+    SOARecordPayload:
+      type: object
+      description: SOA payload. SOA is stored at the zone apex, so `name` is not required.
+      properties:
+        ttl:
+          type: integer
+          example: 3600
+        ns:
+          type: string
+          example: ns1.example.com.
+        mbox:
+          type: string
+          example: hostmaster.example.com.
+        serial:
+          type: integer
+          example: 2026060901
+        refresh:
+          type: integer
+          example: 3600
+        retry:
+          type: integer
+          example: 600
+        expire:
+          type: integer
+          example: 1209600
+        minttl:
+          type: integer
+          example: 300
+    DeleteRecordSelector:
+      description: Optional selector used to delete one value from a multi-value RRset. Omit the body to delete the whole owner/type RRset.
+      oneOf:
+      - type: string
+        example: 192.0.2.10
+      - type: object
+        additionalProperties: true
+        example:
+          ip: 192.0.2.10
+    ImportResult:
+      type: object
+      required:
+      - zone
+      - records
+      properties:
+        zone:
+          type: string
+          example: example.com.
+        records:
+          type: integer
+          example: 42
+    PrimaryConfig:
+      type: object
+      properties:
+        notify_debounce_ms:
+          type: integer
+          example: 250
+        ip:
+          type: string
+          example: 192.0.2.53
+        port:
+          type: integer
+          example: 53
+    SecondaryConfig:
+      type: object
+      properties:
+        fetch_debounce_ms:
+          type: integer
+          example: 500
+        min_fetch_interval_sec:
+          type: integer
+          example: 30
+        max_parallel_fetches:
+          type: integer
+          example: 4
+        zones:
+          type: array
+          items:
+            type: string
+          example:
+          - example.com.
+        refresh_interval_sec:
+          type: integer
+          example: 300
+        refresh_jitter_sec:
+          type: integer
+          example: 30
+        catalog_enabled:
+          type: boolean
+          example: true
+        catalog_zone:
+          type: string
+          example: catalog.example.
+    DNSSECSignaturePolicy:
+      type: object
+      properties:
+        validity_seconds:
+          type: integer
+          example: 1209600
+        dnskey_validity_seconds:
+          type: integer
+          example: 2592000
+        refresh_before_seconds:
+          type: integer
+          example: 604800
+        jitter_seconds:
+          type: integer
+          example: 3600
+        inception_skew_seconds:
+          type: integer
+          example: 300
+    DistributedConfig:
+      type: object
+      properties:
+        node_id:
+          type: string
+          example: node-a
+        peers:
+          type: string
+          description: Comma-separated sync endpoints for peer nodes.
+          example: tls://10.0.0.11:53530,tls://10.0.0.12:53530
+        transport:
+          type: string
+          enum:
+          - http
+          - tcp
+          - tls
+          - mtls
+          example: tls
+        sync_bind_host:
+          type: string
+          example: 0.0.0.0
+        sync_port:
+          type: string
+          example: '53530'
+        private_key:
+          type: string
+          description: Base64 Ed25519 private key for distributed event signing.
+        peer_public_keys:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            node-b: base64-ed25519-public-key
+        push_timeout_ms:
+          type: integer
+          example: 2000
+        resync_interval_s:
+          type: integer
+          example: 60
+    DNSKeyMap:
+      type: object
+      additionalProperties:
+        $ref: '#/components/schemas/StoredKey'
+    DNSKeyGenerationResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: 'Keys generated for zone: example.com.'
+    RolloverKeyResponse:
+      type: object
+      properties:
+        keyid:
+          type: string
+          example: example.com.:257:59647
+        key:
+          $ref: '#/components/schemas/StoredKey'
+    DSRecord:
+      type: object
+      properties:
+        name:
+          type: string
+          example: example.com.
+        type:
+          type: string
+          example: DS
+        class:
+          type: string
+          example: IN
+        ttl:
+          type: integer
+          example: 3600
+        keytag:
+          type: integer
+          example: 59647
+        algorithm:
+          type: integer
+          example: 15
+        digestType:
+          type: integer
+          example: 2
+        digest:
+          type: string
+          example: 0123456789ABCDEF
+    CDSRecord:
+      allOf:
+      - $ref: '#/components/schemas/DSRecord'
+    CDNSKEYRecord:
+      type: object
+      properties:
+        name:
+          type: string
+          example: example.com.
+        type:
+          type: string
+          example: CDNSKEY
+        class:
+          type: string
+          example: IN
+        ttl:
+          type: integer
+          example: 3600
+        flags:
+          type: integer
+          example: 257
+        protocol:
+          type: integer
+          example: 3
+        algorithm:
+          type: integer
+          example: 15
+        publicKey:
+          type: string
+          example: mAexamplePublicKey==
+    DistributedStatus:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          example: true
+        tcp_transport:
+          type: boolean
+          example: true
+        tls_transport:
+          type: boolean
+          example: true
+        public_key:
+          type: string
+        fingerprint:
+          type: string
+        vector:
+          $ref: '#/components/schemas/VectorClock'
+        node:
+          $ref: '#/components/schemas/NodeDiscovery'
+    KeyPair:
+      type: object
+      properties:
+        private_key:
+          type: string
+          description: Base64 Ed25519 private key.
+        public_key:
+          type: string
+          description: Base64 Ed25519 public key.
+    VectorClock:
+      type: object
+      additionalProperties:
+        type: integer
+        format: uint64
+      example:
+        node-a: 12
+        node-b: 11
+    DistributedEvent:
+      type: object
+      required:
+      - event_id
+      - origin
+      - seq
+      - entity
+      - operation
+      - created_at
+      - signature
+      properties:
+        event_id:
+          type: string
+          example: node-a:12
+        origin:
+          type: string
+          example: node-a
+        seq:
+          type: integer
+          format: uint64
+          example: 12
+        entity:
+          type: string
+          description: Stable entity id for conflict/replay handling.
+          example: zone_record:example.com.:A:www.example.com.
+        entity_type:
+          type: string
+          enum:
+          - zone_record
+          - config
+          - tsig_key
+          - dnssec_key
+          example: zone_record
+        zone:
+          type: string
+          example: example.com.
+        rrtype:
+          type: string
+          example: A
+        name:
+          type: string
+          example: www.example.com.
+        operation:
+          type: string
+          enum:
+          - UPSERT
+          - DELETE
+          example: UPSERT
+        value:
+          type: object
+          additionalProperties: true
+          description: Entity payload. For zone records this is the RR value JSON.
+        vector:
+          $ref: '#/components/schemas/VectorClock'
+        created_at:
+          type: integer
+          format: int64
+        signature:
+          type: string
+          description: Base64 Ed25519 signature over the event canonical form.
+    EventApplyResult:
+      type: object
+      properties:
+        applied:
+          type: boolean
+          description: False means the event was already known or superseded.
+          example: true
+    MerkleZoneRoot:
+      type: object
+      properties:
+        zone:
+          type: string
+          example: example.com.
+        root:
+          type: string
+          example: base64-root-hash
+        leaf_count:
+          type: integer
+          example: 42
+    MerkleBranch:
+      type: object
+      properties:
+        prefix:
+          type: string
+          example: ab
+        hash:
+          type: string
+          example: base64-branch-hash
+        leaf_count:
+          type: integer
+          example: 3
+    MerkleLeaf:
+      type: object
+      properties:
+        entity:
+          type: string
+          example: zone_record:example.com.:A:www.example.com.
+        hash:
+          type: string
+          example: base64-leaf-hash
+    MerkleRoots:
+      type: object
+      additionalProperties:
+        $ref: '#/components/schemas/MerkleZoneRoot'
+    MerkleBranches:
+      type: object
+      additionalProperties:
+        $ref: '#/components/schemas/MerkleBranch'
+    MerkleLeaves:
+      type: object
+      additionalProperties:
+        $ref: '#/components/schemas/MerkleLeaf'
+    MerkleLeavesRequest:
+      type: object
+      required:
+      - zone
+      properties:
+        zone:
+          type: string
+          example: example.com.
+        prefixes:
+          type: array
+          items:
+            type: string
+          description: Optional branch prefixes to return. Empty or omitted returns all leaves.
+          example:
+          - ab
+          - cd
+    RepairEventsRequest:
+      type: object
+      properties:
+        entities:
+          type: array
+          items:
+            type: string
+          example:
+          - zone_record:example.com.:A:www.example.com.
+    InviteRecord:
+      type: object
+      required:
+      - jti
+      - cluster_id
+      - join_node_id
+      - issuer
+      - token
+      - usage_count
+      - used_count
+      - iat
+      - exp
+      - created_at
+      properties:
+        jti:
+          type: string
+          example: 8f1b2c3d
+        cluster_id:
+          type: string
+          example: prod-dns
+        join_node_id:
+          type: string
+          example: node-c
+        issuer:
+          type: string
+          example: node-a
+        token:
+          type: string
+          description: Signed invite token.
+        usage_count:
+          type: integer
+          example: 1
+        used_count:
+          type: integer
+          example: 0
+        iat:
+          type: integer
+          format: int64
+        exp:
+          type: integer
+          format: int64
+        created_at:
+          type: integer
+          format: int64
+        last_used_at:
+          type: integer
+          format: int64
+    JoinRequest:
+      type: object
+      required:
+      - token
+      - token_id
+      - join_node_id
+      - join_sync_endpoint
+      - join_public_key
+      - proof
+      properties:
+        token:
+          type: string
+          description: Invite token submitted by the joining node.
+        token_id:
+          type: string
+          example: 8f1b2c3d
+        join_node_id:
+          type: string
+          example: node-c
+        join_sync_endpoint:
+          type: string
+          example: tls://10.0.0.13:53530
+        join_public_key:
+          type: string
+          description: Base64 Ed25519 public key for the joining node.
+        proof:
+          type: string
+          description: Join-node signature proving possession of the private key.
+        submitted_at:
+          type: integer
+          format: int64
