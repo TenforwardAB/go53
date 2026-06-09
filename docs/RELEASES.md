@@ -35,7 +35,20 @@ Or via `bump_version.sh` (which does everything automatically).
 - Binaries are published on the [Releases page](https://github.com/TenforwardAB/go53/releases)
 
 ### Download Binaries
-After release, binaries are available:
+
+#### One-liner Installation (Linux/macOS)
+The easiest way to install go53 with systemd service support:
+```bash
+curl -fsSL https://github.com/TenforwardAB/go53/releases/download/v0.77.0/install.sh | sudo bash
+```
+
+Or with a specific version:
+```bash
+curl -fsSL https://github.com/TenforwardAB/go53/releases/download/v0.77.0/install.sh | sudo bash -s v0.77.0
+```
+
+#### Manual Installation
+After release, binaries are available for direct download:
 ```bash
 # Linux x86_64
 wget https://github.com/TenforwardAB/go53/releases/download/v0.77.0/go53_0.77.0_linux_amd64.tar.gz
@@ -45,6 +58,13 @@ wget https://github.com/TenforwardAB/go53/releases/download/v0.77.0/go53_0.77.0_
 
 # Windows x86_64
 wget https://github.com/TenforwardAB/go53/releases/download/v0.77.0/go53_0.77.0_windows_amd64.zip
+```
+
+Extract and install manually:
+```bash
+tar -xzf go53_0.77.0_linux_amd64.tar.gz
+sudo install -m 755 go53/go53 /usr/local/bin/
+sudo install -m 755 go53/go53ctl /usr/local/bin/
 ```
 
 ### Local Testing Before Release
@@ -65,6 +85,53 @@ make build
 - **Linux**: amd64, arm64
 - **macOS**: amd64, arm64 (Intel & Apple Silicon)
 - **Windows**: amd64, arm64
+
+### Systemd Service (Linux)
+
+The installation script automatically sets up a systemd service. After installation:
+
+```bash
+# Start the service
+sudo systemctl start go53
+
+# Enable auto-start on boot
+sudo systemctl enable go53
+
+# Check service status
+sudo systemctl status go53
+
+# View logs
+journalctl -u go53 -f
+
+# Stop the service
+sudo systemctl stop go53
+
+# Restart the service
+sudo systemctl restart go53
+```
+
+#### Service Configuration
+- **User**: `go53` (created automatically)
+- **Config Directory**: `/etc/go53`
+- **Data Directory**: `/var/lib/go53`
+- **Service File**: `/etc/systemd/system/go53.service`
+
+Edit the service file to customize:
+```bash
+sudo systemctl edit go53
+```
+
+#### View Service Logs
+```bash
+# Last 50 lines
+journalctl -u go53 -n 50
+
+# Real-time logs
+journalctl -u go53 -f
+
+# Today's logs
+journalctl -u go53 --since today
+```
 
 ### Checksums
 Each release includes `checksums.txt` to verify file integrity:

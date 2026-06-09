@@ -47,6 +47,14 @@ archives:
     goos:
       - windows
 
+files:
+  - src: scripts/install.sh
+    dst: install.sh
+    strip_binary: false
+  - src: scripts/go53.service
+    dst: go53.service
+    strip_binary: false
+
 checksum:
   name_template: 'checksums.txt'
 

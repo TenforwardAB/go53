@@ -1,0 +1,31 @@
+[Unit]
+Description=go53 DNS Server
+Documentation=https://github.com/TenforwardAB/go53
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=go53
+Group=go53
+WorkingDirectory=/var/lib/go53
+
+# Main process
+ExecStart=/usr/local/bin/go53
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/go53
+
+# Process management
+Restart=on-failure
+RestartSec=10s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=go53
+
+[Install]
+WantedBy=multi-user.target
