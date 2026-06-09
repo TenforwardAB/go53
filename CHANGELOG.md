@@ -1,3 +1,12 @@
+## 0.77.1 (June 09, 2026)
+  - Clarify port 2053 usage in container documentation
+  - Add containerization with Podman and Docker Compose support
+  - Add GitHub Actions workflow for automatic container builds
+  - Fix install script to use main branch and auto-fetch latest version
+  - Add automated installation script and systemd service
+  - Add automated release pipeline with GoReleaser and GitHub Actions
+  - Bump version to 0.77.0.
+
 ## 0.77.0 (June 09, 2026)
 
 
