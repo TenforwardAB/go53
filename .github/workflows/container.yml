@@ -49,7 +49,6 @@ jobs:
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "Building version: ${VERSION}"
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
@@ -68,72 +67,3 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
-
-  create-release:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set lowercase owner
-        id: owner
-        run: echo "name=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
-
-      - name: Extract version
-        id: version
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/}
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-
-      - name: Create Release Notes
-        run: |
-          cat > /tmp/release_notes.md << EOF
-          ## Container Image
-
-          This release includes a Docker/Podman container image for easy deployment.
-
-          ### Quick Start
-
-          Pull and run the image:
-          \`\`\`bash
-          podman pull ghcr.io/${{ steps.owner.outputs.name }}/go53:${{ steps.version.outputs.version }}
-
-          podman volume create go53_data
-          podman run -d \\
-            --name go53 \\
-            -p 53:53/udp \\
-            -p 53:53/tcp \\
-            -p 8053:8053/tcp \\
-            -p 53530:53530/tcp \\
-            -v go53_data:/var/lib/go53 \\
-            ghcr.io/${{ steps.owner.outputs.name }}/go53:${{ steps.version.outputs.version }}
-          \`\`\`
-
-          For more information, see [Container Documentation](docs/CONTAINER.md)
-          EOF
-
-      - name: Update GitHub Release
-        uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          body_path: /tmp/release_notes.md
-          append_body: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  notify:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    if: always()
-
-    steps:
-      - name: Set status
-        run: |
-          if [ "${{ needs.build-and-push.result }}" == "success" ]; then
-            echo "Container image built and pushed successfully"
-          else
-            echo "Container image build failed"
-          fi
