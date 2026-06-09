@@ -297,6 +297,9 @@ check_prereqs() {
 check_image_access() {
 	local output
 	info "checking container image access: ${IMAGE}"
+	if podman_user image exists "$IMAGE" >/dev/null 2>&1; then
+		return 0
+	fi
 	if output="$(podman_user pull "$IMAGE" 2>&1)"; then
 		return 0
 	fi
@@ -374,6 +377,7 @@ Environment=GO53_ADMIN_SOCKET=/var/lib/go53/admin.sock
 Volume=${DATA_VOLUME}.volume:/var/lib/go53
 Volume=${IMPORT_DIR}:/imports:Z
 AutoUpdate=registry
+Notify=false
 
 [Service]
 Restart=always
