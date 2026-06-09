@@ -1,3 +1,9 @@
+## 0.77.2 (June 09, 2026)
+  - Feature key import using go53 key format with exporter tools for powerdns
+  - Added DNSSEC key support matrix
+  - Added updated Installtion documentation
+  - Simplify container workflow: remove redundant create-release job
+
 ## 0.77.1 (June 09, 2026)
   - Clarify port 2053 usage in container documentation
   - Add containerization with Podman and Docker Compose support
