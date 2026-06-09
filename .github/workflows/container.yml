@@ -30,6 +30,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set lowercase owner
+        id: owner
+        run: echo "name=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -55,8 +59,8 @@ jobs:
           push: true
           platforms: ${{ matrix.platform }}
           tags: |
-            ghcr.io/${{ github.repository_owner | lower }}/go53:${{ steps.version.outputs.version }}
-            ghcr.io/${{ github.repository_owner | lower }}/go53:latest
+            ghcr.io/${{ steps.owner.outputs.name }}/go53:${{ steps.version.outputs.version }}
+            ghcr.io/${{ steps.owner.outputs.name }}/go53:latest
           labels: |
             org.opencontainers.image.title=go53
             org.opencontainers.image.description=Distributed DNS Server
@@ -74,6 +78,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set lowercase owner
+        id: owner
+        run: echo "name=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
       - name: Extract version
         id: version
         run: |
@@ -81,9 +89,8 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: Create Release Notes
-        id: release_notes
         run: |
-          cat > /tmp/release_notes.md << 'EOF'
+          cat > /tmp/release_notes.md << EOF
           ## Container Image
 
           This release includes a Docker/Podman container image for easy deployment.
@@ -91,39 +98,22 @@ jobs:
           ### Quick Start
 
           Pull and run the image:
-          ```bash
-          # Pull the image
-          podman pull ghcr.io/${{ github.repository_owner | lower }}/go53:${{ steps.version.outputs.version }}
+          \`\`\`bash
+          podman pull ghcr.io/${{ steps.owner.outputs.name }}/go53:${{ steps.version.outputs.version }}
 
-          # Run with persistent data
           podman volume create go53_data
-          podman run -d \
-            --name go53 \
-            -p 53:53/udp \
-            -p 53:53/tcp \
-            -p 2053:2053/tcp \
-            -p 8053:8053/tcp \
-            -p 53530:53530/tcp \
-            -v go53_data:/var/lib/go53 \
-            ghcr.io/${{ github.repository_owner | lower }}/go53:${{ steps.version.outputs.version }}
-          ```
-
-          ### Using Docker Compose
-
-          ```bash
-          docker-compose up -d
-          ```
-
-          ### Image Details
-          - **Base**: Alpine Linux (~70MB)
-          - **Includes**: go53 server + go53ctl CLI tool
-          - **Ports**: DNS (53), API (8053), Cluster Sync (53530)
-          - **User**: Non-root (go53)
-          - **Health Checks**: Enabled
+          podman run -d \\
+            --name go53 \\
+            -p 53:53/udp \\
+            -p 53:53/tcp \\
+            -p 8053:8053/tcp \\
+            -p 53530:53530/tcp \\
+            -v go53_data:/var/lib/go53 \\
+            ghcr.io/${{ steps.owner.outputs.name }}/go53:${{ steps.version.outputs.version }}
+          \`\`\`
 
           For more information, see [Container Documentation](docs/CONTAINER.md)
           EOF
-          cat /tmp/release_notes.md
 
       - name: Update GitHub Release
         uses: softprops/action-gh-release@v1
@@ -143,8 +133,7 @@ jobs:
       - name: Set status
         run: |
           if [ "${{ needs.build-and-push.result }}" == "success" ]; then
-            echo "✅ Container image built and pushed successfully"
-            echo "Image: ghcr.io/${{ github.repository_owner | lower }}/go53:${{ github.ref_type == 'tag' && github.ref || 'latest' }}"
+            echo "Container image built and pushed successfully"
           else
-            echo "❌ Container image build failed"
+            echo "Container image build failed"
           fi
