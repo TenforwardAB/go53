@@ -1,222 +1,283 @@
 # go53 Installation Guide
 
-## Quick Start (Linux/macOS)
-
-The easiest way to install go53 and set up a systemd service:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/TenforwardAB/go53/main/scripts/install.sh | sudo bash
-```
-
-This script will:
-- Automatically detect the latest version from GitHub
-- Detect your OS and CPU architecture
-- Download the appropriate binaries
-- Install both `go53` (server) and `go53ctl` (CLI tool)
-- Create a system user (`go53`)
-- Set up systemd service for automatic startup (Linux only)
-
 ## Installation Methods
 
-### 1. Automatic Installation (Recommended)
+---
 
-The installation script handles everything automatically:
+## 1. Podman (Quickest)
+
+The fastest way to get go53 running — no installation required beyond pulling the image.
 
 ```bash
-# Install latest version (automatically fetches from GitHub)
-curl -fsSL https://raw.githubusercontent.com/TenforwardAB/go53/main/scripts/install.sh | sudo bash
+# Create a persistent volume for data
+podman volume create go53_data
 
-# Install specific version
-curl -fsSL https://raw.githubusercontent.com/TenforwardAB/go53/main/scripts/install.sh | sudo bash -s v0.77.0
+# Run go53
+podman run -d \
+  --name go53 \
+  --restart unless-stopped \
+  -p 53:2053/udp \
+  -p 53:2053/tcp \
+  -p 8053:8053/tcp \
+  -p 53530:53530/tcp \
+  -v go53_data:/var/lib/go53 \
+  ghcr.io/tenforwardab/go53:latest
 ```
 
-### 2. Manual Installation
+### Port mapping explained
 
-If you prefer to install manually:
+| Host port | Container port | Purpose |
+|-----------|---------------|---------|
+| 53 (UDP/TCP) | 2053 | DNS queries |
+| 8053 | 8053 | REST API |
+| 53530 | 53530 | Cluster sync |
+
+> **Note:** go53 listens on port 2053 inside the container to avoid requiring root. We map it to standard port 53 on the host.
+
+### Manage the container
 
 ```bash
-# 1. Download binaries for your platform
-VERSION=v0.77.0
-PLATFORM=linux_amd64  # Change based on your OS/arch
-wget https://github.com/TenforwardAB/go53/releases/download/${VERSION}/go53_${VERSION#v}_${PLATFORM}.tar.gz
+podman stop go53
+podman start go53
+podman restart go53
+podman logs -f go53
+```
 
-# 2. Extract
+### Use go53ctl from inside the container
+
+```bash
+podman exec go53 go53ctl --help
+```
+
+### Persistent data
+
+Data is stored in the `go53_data` named volume and survives container restarts and upgrades.
+
+```bash
+# Check where data is stored on disk
+podman volume inspect go53_data
+
+# Upgrade to a new version
+podman pull ghcr.io/tenforwardab/go53:latest
+podman stop go53 && podman rm go53
+podman run -d --name go53 --restart unless-stopped \
+  -p 53:2053/udp -p 53:2053/tcp \
+  -p 8053:8053/tcp -p 53530:53530/tcp \
+  -v go53_data:/var/lib/go53 \
+  ghcr.io/tenforwardab/go53:latest
+```
+
+---
+
+## 2. Podman Quadlet (Systemd Integration)
+
+Quadlets let Podman containers run as systemd services without root. This is the recommended approach for a persistent server setup on Linux.
+
+### Create the quadlet file
+
+```bash
+mkdir -p ~/.config/containers/systemd
+```
+
+Create `~/.config/containers/systemd/go53.container`:
+
+```ini
+[Unit]
+Description=go53 DNS Server
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/tenforwardab/go53:latest
+ContainerName=go53
+
+# Port mappings
+PublishPort=53:2053/udp
+PublishPort=53:2053/tcp
+PublishPort=8053:8053/tcp
+PublishPort=53530:53530/tcp
+
+# Persistent data volume
+Volume=go53_data.volume:/var/lib/go53
+
+# Auto-update policy
+AutoUpdate=registry
+
+[Service]
+Restart=always
+TimeoutStartSec=30
+
+[Install]
+WantedBy=default.target
+```
+
+Create `~/.config/containers/systemd/go53_data.volume`:
+
+```ini
+[Volume]
+```
+
+### Enable and start
+
+```bash
+# Reload systemd to pick up the new unit
+systemctl --user daemon-reload
+
+# Start the service
+systemctl --user start go53
+
+# Enable auto-start on login
+systemctl --user enable go53
+
+# Check status
+systemctl --user status go53
+
+# View logs
+journalctl --user -u go53 -f
+```
+
+### Auto-updates with Podman
+
+Since we set `AutoUpdate=registry`, you can enable automatic image updates:
+
+```bash
+# Enable the auto-update timer
+systemctl --user enable --now podman-auto-update.timer
+
+# Or trigger a manual update
+podman auto-update
+```
+
+### Lingering (run without being logged in)
+
+To keep go53 running even when you are not logged in:
+
+```bash
+sudo loginctl enable-linger $USER
+```
+
+---
+
+## 3. Install Script (Binary + Systemd)
+
+Installs go53 as system binaries with a root systemd service. Best for dedicated servers.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TenforwardAB/go53/main/scripts/install.sh | sudo bash
+```
+
+The script will:
+- Automatically detect the latest version from GitHub
+- Detect your OS and CPU architecture
+- Download the appropriate binaries (`go53` and `go53ctl`)
+- Create a system user `go53`
+- Install and enable a systemd service
+
+**Install a specific version:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TenforwardAB/go53/main/scripts/install.sh | sudo bash -s v0.77.1
+```
+
+### Service management
+
+```bash
+sudo systemctl start go53
+sudo systemctl stop go53
+sudo systemctl restart go53
+sudo systemctl status go53
+journalctl -u go53 -f
+```
+
+### Directory structure
+
+| Path | Purpose |
+|------|---------|
+| `/usr/local/bin/go53` | Server binary |
+| `/usr/local/bin/go53ctl` | CLI tool |
+| `/etc/go53/` | Configuration |
+| `/var/lib/go53/` | Data directory |
+| `/etc/systemd/system/go53.service` | Systemd unit file |
+
+---
+
+## 4. Manual Binary Install
+
+```bash
+VERSION=v0.77.1
+PLATFORM=linux_amd64   # or linux_arm64, darwin_amd64, darwin_arm64
+
+wget https://github.com/TenforwardAB/go53/releases/download/${VERSION}/go53_${VERSION#v}_${PLATFORM}.tar.gz
 tar -xzf go53_*_${PLATFORM}.tar.gz
 
-# 3. Install binaries
 sudo install -m 755 go53/go53 /usr/local/bin/
 sudo install -m 755 go53/go53ctl /usr/local/bin/
-
-# 4. Verify
-go53 --version
-go53ctl --version
 ```
 
-### 3. From Source
+---
+
+## 5. From Source
 
 ```bash
 git clone https://github.com/TenforwardAB/go53.git
 cd go53
-
-# Build binaries
 make build
 
-# Install
 sudo install -m 755 go53 /usr/local/bin/
 sudo install -m 755 go53ctl /usr/local/bin/
 ```
 
-## Post-Installation Setup
-
-### Linux with Systemd
-
-If you used the automatic installer, systemd is already configured. If not:
-
-```bash
-# 1. Create system user
-sudo useradd -r -s /bin/false -d /var/lib/go53 -m go53
-
-# 2. Create directories
-sudo mkdir -p /etc/go53 /var/lib/go53
-sudo chown go53:go53 /etc/go53 /var/lib/go53
-
-# 3. Install service file
-sudo curl -fsSL https://raw.githubusercontent.com/TenforwardAB/go53/main/scripts/go53.service \
-  -o /etc/systemd/system/go53.service
-sudo systemctl daemon-reload
-
-# 4. Enable and start
-sudo systemctl enable go53
-sudo systemctl start go53
-```
-
-### macOS
-
-go53 can be run manually or via a launch agent:
-
-```bash
-# Run in foreground
-go53
-
-# Run in background
-nohup go53 > /var/log/go53.log 2>&1 &
-```
-
-## Service Management (Linux)
-
-```bash
-# Start service
-sudo systemctl start go53
-
-# Stop service
-sudo systemctl stop go53
-
-# Restart service
-sudo systemctl restart go53
-
-# Check status
-sudo systemctl status go53
-
-# Enable auto-start on boot
-sudo systemctl enable go53
-
-# Disable auto-start
-sudo systemctl disable go53
-
-# View logs (last 50 lines)
-journalctl -u go53 -n 50
-
-# Follow logs in real-time
-journalctl -u go53 -f
-
-# View logs from today
-journalctl -u go53 --since today
-```
-
-## Configuration
-
-### Directory Structure
-- **Binaries**: `/usr/local/bin/go53`, `/usr/local/bin/go53ctl`
-- **Configuration**: `/etc/go53/`
-- **Data**: `/var/lib/go53/`
-- **Service**: `/etc/systemd/system/go53.service`
-
-### Configuration Files
-Create `/etc/go53/config.yaml` to customize go53 behavior. See documentation for available options.
+---
 
 ## Verification
 
 ```bash
-# Check if binaries are accessible
-which go53
-which go53ctl
-
-# Check service status (Linux)
-sudo systemctl status go53
-
-# View recent logs (Linux)
-journalctl -u go53 -n 20
-
-# Test DNS connectivity
+# Test DNS (binary install)
 dig @localhost example.com
+
+# Test API
+curl http://localhost:8053/
+
+# Check go53ctl (container)
+podman exec go53 go53ctl --help
 ```
 
-## Troubleshooting
-
-### Service won't start
-```bash
-# Check service status
-sudo systemctl status go53
-
-# View error logs
-journalctl -u go53 -n 100
-
-# Run go53 directly to see errors
-sudo -u go53 /usr/local/bin/go53
-```
-
-### Permission denied errors
-```bash
-# Fix directory permissions
-sudo chown -R go53:go53 /var/lib/go53
-sudo chmod -R 755 /var/lib/go53
-
-# Fix configuration permissions
-sudo chown -R go53:go53 /etc/go53
-sudo chmod -R 755 /etc/go53
-```
-
-### Binaries not found
-```bash
-# Verify binaries are installed
-ls -la /usr/local/bin/go53*
-
-# Ensure /usr/local/bin is in PATH
-echo $PATH
-
-# If not, add to ~/.bashrc or ~/.zshrc
-export PATH="/usr/local/bin:$PATH"
-```
+---
 
 ## Uninstallation
 
+### Podman
+
 ```bash
-# Stop and disable service (Linux)
-sudo systemctl stop go53
-sudo systemctl disable go53
+podman stop go53 && podman rm go53
+podman volume rm go53_data
+podman rmi ghcr.io/tenforwardab/go53:latest
+```
+
+### Quadlet
+
+```bash
+systemctl --user stop go53
+systemctl --user disable go53
+rm ~/.config/containers/systemd/go53.container
+rm ~/.config/containers/systemd/go53_data.volume
+systemctl --user daemon-reload
+```
+
+### Binary install
+
+```bash
+sudo systemctl stop go53 && sudo systemctl disable go53
 sudo rm /etc/systemd/system/go53.service
 sudo systemctl daemon-reload
-
-# Remove binaries
 sudo rm /usr/local/bin/go53 /usr/local/bin/go53ctl
-
-# Remove system user and directories (optional)
 sudo userdel -r go53
 sudo rm -rf /etc/go53 /var/lib/go53
 ```
 
+---
+
 ## Support
 
-For issues or questions:
 - GitHub Issues: https://github.com/TenforwardAB/go53/issues
 - Documentation: https://github.com/TenforwardAB/go53/tree/main/docs

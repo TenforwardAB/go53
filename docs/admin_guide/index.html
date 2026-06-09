@@ -291,6 +291,7 @@
       <p class="brand">go53</p>
       <p class="subtitle">Administrator guide</p>
       <ul>
+        <li><a href="#installation">Installation</a></li>
         <li><a href="#quick-start">Quick Start</a></li>
         <li><a href="#deployment">Deployment Config</a></li>
         <li><a href="#runtime">Runtime Config</a></li>
@@ -317,6 +318,137 @@
           <span class="pill">Authoritative DNS only</span>
         </div>
       </header>
+
+      <section id="installation">
+        <h2>Installation</h2>
+        <p>go53 ships as two self-contained binaries: <code>go53</code> (the server) and <code>go53ctl</code> (the admin CLI). Container images bundle both. Pick the method that matches your environment — the container path is the fastest way to a running server, the quadlet path gives you a rootless systemd-managed service, and the install script lays down native binaries with a system-wide systemd unit.</p>
+
+        <div class="grid">
+          <div class="panel">
+            <h3>Podman run</h3>
+            <p>Fastest start. One command pulls the image and runs the server. Good for evaluation and disposable environments.</p>
+          </div>
+          <div class="panel">
+            <h3>Podman quadlet</h3>
+            <p>Rootless systemd integration with auto-restart and auto-update. Recommended for a persistent server on Linux.</p>
+          </div>
+          <div class="panel">
+            <h3>Install script</h3>
+            <p>Native binaries plus a root systemd service. Best for dedicated hosts that should not run a container runtime.</p>
+          </div>
+        </div>
+
+        <h3>Port Model</h3>
+        <p>Inside the container, go53 listens on <code>2053</code> so it never needs root to bind. Map it to the standard port <code>53</code> on the host. The API and the distributed sync listener keep their native ports.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Host port</th>
+              <th>Container port</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><code>53</code> (UDP/TCP)</td><td><code>2053</code></td><td>Authoritative DNS queries.</td></tr>
+            <tr><td><code>8053</code></td><td><code>8053</code></td><td>HTTP admin API.</td></tr>
+            <tr><td><code>53530</code></td><td><code>53530</code></td><td>Distributed cluster sync.</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Method 1 &mdash; Podman Run</h3>
+        <p>Create a named volume so zone data, keys, and config survive restarts and upgrades, then start the container.</p>
+        <pre><code>podman volume create go53_data
+
+podman run -d \
+  --name go53 \
+  --restart unless-stopped \
+  -p 53:2053/udp \
+  -p 53:2053/tcp \
+  -p 8053:8053/tcp \
+  -p 53530:53530/tcp \
+  -v go53_data:/var/lib/go53 \
+  ghcr.io/tenforwardab/go53:latest</code></pre>
+        <p>Manage the running container and reach the bundled CLI through <code>podman exec</code>:</p>
+        <pre><code>podman logs -f go53
+podman exec go53 go53ctl config get</code></pre>
+        <p>Upgrade by pulling a new image and recreating the container. The named volume keeps your data intact.</p>
+        <pre><code>podman pull ghcr.io/tenforwardab/go53:latest
+podman stop go53 && podman rm go53
+podman run -d --name go53 --restart unless-stopped \
+  -p 53:2053/udp -p 53:2053/tcp \
+  -p 8053:8053/tcp -p 53530:53530/tcp \
+  -v go53_data:/var/lib/go53 \
+  ghcr.io/tenforwardab/go53:latest</code></pre>
+
+        <h3>Method 2 &mdash; Podman Quadlet (Rootless Systemd)</h3>
+        <p>Quadlets let systemd manage a Podman container from a small unit file. This runs go53 as your user, with no root and no long-lived <code>podman run</code> process.</p>
+        <pre><code>mkdir -p ~/.config/containers/systemd</code></pre>
+        <p>Create <code>~/.config/containers/systemd/go53.container</code>:</p>
+        <pre><code>[Unit]
+Description=go53 DNS Server
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/tenforwardab/go53:latest
+ContainerName=go53
+PublishPort=53:2053/udp
+PublishPort=53:2053/tcp
+PublishPort=8053:8053/tcp
+PublishPort=53530:53530/tcp
+Volume=go53_data.volume:/var/lib/go53
+AutoUpdate=registry
+
+[Service]
+Restart=always
+TimeoutStartSec=30
+
+[Install]
+WantedBy=default.target</code></pre>
+        <p>Create the matching volume unit <code>~/.config/containers/systemd/go53_data.volume</code>:</p>
+        <pre><code>[Volume]</code></pre>
+        <p>Reload systemd so it generates the service from the quadlet, then start and enable it.</p>
+        <pre><code>systemctl --user daemon-reload
+systemctl --user start go53
+systemctl --user enable go53
+
+systemctl --user status go53
+journalctl --user -u go53 -f</code></pre>
+        <div class="note">
+          <p>To keep the service running after you log out, enable lingering for your user: <code>sudo loginctl enable-linger $USER</code>. Because the unit sets <code>AutoUpdate=registry</code>, you can let Podman pull new images automatically with <code>systemctl --user enable --now podman-auto-update.timer</code>, or trigger it on demand with <code>podman auto-update</code>.</p>
+        </div>
+
+        <h3>Method 3 &mdash; Install Script (Native Binaries)</h3>
+        <p>The install script detects your OS and CPU architecture, downloads the matching release, installs both binaries to <code>/usr/local/bin</code>, creates a <code>go53</code> system user, and installs and enables a systemd service.</p>
+        <pre><code>curl -fsSL https://raw.githubusercontent.com/TenforwardAB/go53/main/scripts/install.sh | sudo bash</code></pre>
+        <p>Pin a specific version by passing it as an argument:</p>
+        <pre><code>curl -fsSL https://raw.githubusercontent.com/TenforwardAB/go53/main/scripts/install.sh | sudo bash -s v0.77.1</code></pre>
+        <p>Manage the service with systemd and inspect logs through the journal.</p>
+        <pre><code>sudo systemctl start go53
+sudo systemctl status go53
+journalctl -u go53 -f</code></pre>
+        <table>
+          <thead>
+            <tr>
+              <th>Path</th>
+              <th>Purpose</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><code>/usr/local/bin/go53</code></td><td>Server binary.</td></tr>
+            <tr><td><code>/usr/local/bin/go53ctl</code></td><td>Admin CLI.</td></tr>
+            <tr><td><code>/etc/go53/</code></td><td>Configuration directory.</td></tr>
+            <tr><td><code>/var/lib/go53/</code></td><td>Data directory.</td></tr>
+            <tr><td><code>/etc/systemd/system/go53.service</code></td><td>Systemd unit file.</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Verify The Server Is Up</h3>
+        <p>Once go53 is running, confirm both the DNS listener and the API respond.</p>
+        <pre><code>dig @127.0.0.1 example.com. SOA +short
+curl http://127.0.0.1:8053/api/config</code></pre>
+        <p>With a server running, continue to <a href="#quick-start">Quick Start</a> to create your first zone and records.</p>
+      </section>
 
       <section id="quick-start">
         <h2>Quick Start</h2>
