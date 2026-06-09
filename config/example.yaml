@@ -1,0 +1,89 @@
+# Example go53 Configuration File
+# Copy this to /etc/go53/config.yaml and adjust settings as needed
+
+# DNS Server Configuration
+dns:
+  # Listen port for DNS queries
+  # Default: 53 (standard DNS port)
+  port: 53
+
+  # Default TTL for zone records (in seconds)
+  # Default: 3600 (1 hour)
+  default_ttl: 3600
+
+  # Default nameserver
+  # Default: ns1.go53.local.
+  default_ns: "ns1.go53.local."
+
+  # Zone transfer (AXFR) configuration
+  allow_transfer: "127.0.0.1"
+
+  # Allow recursive queries
+  allow_recursion: false
+
+# REST API Configuration
+api:
+  # API listen port
+  # Default: 8053
+  port: 8053
+
+  # Enable/disable API
+  enabled: true
+
+# Clustering Configuration
+cluster:
+  # Cluster synchronization port
+  # Default: 53530
+  sync_port: 53530
+
+  # Cluster mode: primary, secondary, or distributed
+  mode: "primary"
+
+  # Catalog zone for cluster coordination
+  catalog_zone: "_catalog.go53."
+
+# Storage Configuration (for future use)
+storage:
+  # Backend type: memory, postgres, etc.
+  type: "memory"
+
+  # PostgreSQL connection string (if using postgres backend)
+  # postgres_dsn: "host=localhost port=5432 user=postgres password=postgres dbname=go53 sslmode=disable"
+
+# Security Configuration
+security:
+  # Enable DNSSEC
+  dnssec_enabled: false
+
+  # Admin socket for local management
+  admin_socket: "/run/go53/admin.sock"
+  admin_socket_group: "go53_admin"
+
+# Logging Configuration
+logging:
+  # Log level: debug, info, warn, error
+  level: "info"
+
+  # Log format: json, text
+  format: "text"
+
+  # Log output: stdout, file path
+  output: "stdout"
+
+# Secondary Mode Configuration (if using secondary mode)
+secondary:
+  # Master server for zone transfers
+  master: "primary.example.com"
+  master_port: 53
+
+  # Refresh interval (seconds)
+  refresh_interval: 3600
+
+  # Retry interval (seconds)
+  retry_interval: 600
+
+  # Expire interval (seconds)
+  expire_interval: 604800
+
+  # Minimum TTL (seconds)
+  minimum_ttl: 300

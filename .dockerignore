@@ -1,7 +1,53 @@
-# Don't copy binaries or other local files into container
+# Build artifacts and binaries
 /go53
+/go53ctl
+*.test
 *.log
-*.zip
-data/
 
+# Version control
+.git
+.gitignore
+.github
+
+# Development files
+.idea
+.vscode
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Documentation
+docs/
+*.md
+README.md
+
+# Test and coverage files
+coverage.out
+*.out
+tests/
+
+# Build and configuration
+Makefile
+docker-compose*.yml
+
+# Data directories
+data/
+data-primary/
+data-secondary/
+primary/
+secondary/
+
+# Archives
+*.zip
+*.tar.gz
+
+# Runtime files
+.env
+.env.local
+*.sock
+
+# Container images
+Dockerfile*
+.dockerignore
 

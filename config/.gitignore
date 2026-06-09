@@ -1,0 +1,9 @@
+# Ignore actual configuration files (keep only examples)
+*.yaml
+*.yml
+!example.yaml
+
+# Ignore sensitive data
+.env
+secrets.txt
+credentials.json

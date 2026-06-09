@@ -2,19 +2,51 @@ version: '3.8'
 
 services:
   go53:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: go53
-    ports:
-      - "1053:53/udp"
-      - "1053:53/tcp"
-      - "8053:8053"
-    volumes:
-      - ./:/app
-      - ./data:/data
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8053"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
 
+    # Port mappings
+    # DNS: 53 (UDP/TCP)
+    # DNS TCP (alternative): 2053
+    # REST API: 8053
+    # Cluster Sync: 53530
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
+      - "2053:2053/tcp"
+      - "8053:8053/tcp"
+      - "53530:53530/tcp"
+
+    # Persistent volumes
+    volumes:
+      # Data directory (persistent storage)
+      - go53_data:/var/lib/go53
+      # Configuration directory (read-only)
+      - ./config:/etc/go53:ro
+
+    # Environment variables
+    environment:
+      LOG_LEVEL: info
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8053/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Named volume for persistent storage
+volumes:
+  go53_data:
+    driver: local
