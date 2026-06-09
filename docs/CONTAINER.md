@@ -68,12 +68,14 @@ The container uses a multi-stage Alpine build:
 
 ### Exposed Ports
 
-| Port  | Protocol | Purpose |
-|-------|----------|---------|
-| 53    | UDP/TCP  | DNS queries |
-| 2053  | TCP      | DNS (alternative port) |
-| 8053  | TCP      | REST API |
-| 53530 | TCP      | Cluster synchronization |
+| Port  | Protocol | Purpose | Notes |
+|-------|----------|---------|-------|
+| 53    | UDP/TCP  | DNS queries | Standard DNS port (mapped from 2053 inside container) |
+| 2053  | TCP      | DNS (inside container) | Internal port that go53 server listens on |
+| 8053  | TCP      | REST API | Management and status API |
+| 53530 | TCP      | Cluster synchronization | Node-to-node cluster communication |
+
+**Note**: Inside the container, go53 listens on port 2053 (instead of standard 53) to avoid requiring root privileges. The port mapping `53:2053` exposes it as standard DNS port 53 to external clients.
 
 ## Running with Podman
 
