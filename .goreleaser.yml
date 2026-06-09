@@ -49,13 +49,4 @@ checksum:
   name_template: 'checksums.txt'
 
 changelog:
-  use: github
   sort: asc
-  abbrev: -1
-
-release:
-  draft: false
-  make_latest: true
-  github:
-    owner: TenforwardAB
-    name: go53
