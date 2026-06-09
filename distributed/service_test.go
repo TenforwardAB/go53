@@ -2,6 +2,8 @@ package distributed
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -169,6 +171,78 @@ func TestPublishMetadataEventsAndInviteLifecycle(t *testing.T) {
 	}
 }
 
+func TestSubmitJoinRequestStoresPendingAndApproveAddsPinnedPeer(t *testing.T) {
+	issuerPriv, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair issuer: %v", err)
+	}
+	joinPriv, joinPub, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair join: %v", err)
+	}
+	svc := newTestService(t, "node-a", issuerPriv, map[string]string{"node-a": mustPublicKeyFromPrivate(t, issuerPriv)})
+	if err := svc.SaveInvite(InviteRecord{
+		TokenID:    "invite-1",
+		Token:      "token-1",
+		UsageCount: 1,
+		ExpiresAt:  time.Now().Add(time.Hour).Unix(),
+	}); err != nil {
+		t.Fatalf("SaveInvite: %v", err)
+	}
+
+	req := JoinRequest{
+		TokenID:          "invite-1",
+		Token:            "token-1",
+		JoinNodeID:       "node-b",
+		JoinSyncEndpoint: "tls://10.0.0.11:53530",
+		JoinPublicKey:    joinPub,
+	}
+	priv, err := privateKey(joinPriv)
+	if err != nil {
+		t.Fatalf("privateKey: %v", err)
+	}
+	req.Proof = base64.StdEncoding.EncodeToString(ed25519.Sign(priv, JoinRequestPayload(req)))
+	applied, err := svc.SubmitJoinRequest(context.Background(), req, false)
+	if err != nil {
+		t.Fatalf("SubmitJoinRequest: %v", err)
+	}
+	if applied {
+		t.Fatal("SubmitJoinRequest auto-applied pending request")
+	}
+	pending, err := svc.ListJoinRequests()
+	if err != nil {
+		t.Fatalf("ListJoinRequests: %v", err)
+	}
+	if len(pending) != 1 || pending[0].JoinNodeID != "node-b" {
+		t.Fatalf("pending = %#v", pending)
+	}
+	if _, err := svc.ApproveJoinRequest(context.Background(), "node-b"); err != nil {
+		t.Fatalf("ApproveJoinRequest: %v", err)
+	}
+
+	live := config.AppConfig.GetLive()
+	if live.Distributed.Peers != "tls://10.0.0.11:53530" {
+		t.Fatalf("peers = %q", live.Distributed.Peers)
+	}
+	if live.Distributed.PeerPublicKeys["node-b"] != joinPub {
+		t.Fatalf("node-b public key not pinned: %#v", live.Distributed.PeerPublicKeys)
+	}
+	consumed, err := svc.loadInvite("invite-1")
+	if err != nil {
+		t.Fatalf("loadInvite: %v", err)
+	}
+	if consumed.UsedCount != 1 {
+		t.Fatalf("UsedCount = %d, want 1", consumed.UsedCount)
+	}
+	pending, err = svc.ListJoinRequests()
+	if err != nil {
+		t.Fatalf("ListJoinRequests after approve: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending after approve = %#v", pending)
+	}
+}
+
 func TestApplyConfigEventAppliesFalseAndProtectsIdentity(t *testing.T) {
 	priv, _, err := GenerateKeyPair()
 	if err != nil {
@@ -196,8 +270,41 @@ func TestApplyConfigEventAppliesFalseAndProtectsIdentity(t *testing.T) {
 	}
 }
 
+func TestApplyConfigEventMergesDistributedMembership(t *testing.T) {
+	priv, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	svc := newTestService(t, "node-b", priv, map[string]string{"node-a": "pub-a"})
+	config.AppConfig.Live.Distributed.Transport = "tls"
+	config.AppConfig.Live.Distributed.SyncBindHost = "127.0.0.1"
+	config.AppConfig.Live.Distributed.SyncPort = ":53531"
+	config.AppConfig.Live.Distributed.Peers = "tls://127.0.0.1:53530"
+
+	event := Event{Operation: OperationUpsert, Value: []byte(`{"distributed":{"peers":"tls://127.0.0.1:53531,tls://127.0.0.1:53532","peer_public_keys":{"node-c":"pub-c"}}}`)}
+	if err := svc.applyConfigEvent(event); err != nil {
+		t.Fatalf("applyConfigEvent: %v", err)
+	}
+	live := config.AppConfig.GetLive()
+	if live.Distributed.Peers != "tls://127.0.0.1:53530,tls://127.0.0.1:53532" {
+		t.Fatalf("peers = %q", live.Distributed.Peers)
+	}
+	if live.Distributed.PeerPublicKeys["node-a"] != "pub-a" || live.Distributed.PeerPublicKeys["node-c"] != "pub-c" {
+		t.Fatalf("peer_public_keys = %#v", live.Distributed.PeerPublicKeys)
+	}
+}
+
+func mustPublicKeyFromPrivate(t *testing.T, privateKeyB64 string) string {
+	t.Helper()
+	priv, err := privateKey(privateKeyB64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.StdEncoding.EncodeToString(priv.Public().(ed25519.PublicKey))
+}
+
 func TestStripDistributedKey(t *testing.T) {
-	out, has, err := stripDistributedKey([]byte(`{"enable_edns":false,"distributed":{"node_id":"x"}}`))
+	out, has, err := stripDistributedKey([]byte(`{"enable_edns":false,"distributed":{"node_id":"x","peers":"tls://10.0.0.11:53530","peer_public_keys":{"node-b":"pub-b"}}}`))
 	if err != nil {
 		t.Fatalf("stripDistributedKey: %v", err)
 	}
@@ -208,8 +315,18 @@ func TestStripDistributedKey(t *testing.T) {
 	if err := json.Unmarshal(out, &fields); err != nil {
 		t.Fatalf("unmarshal stripped: %v", err)
 	}
-	if _, ok := fields["distributed"]; ok {
-		t.Fatalf("distributed block not stripped: %s", out)
+	var dist map[string]json.RawMessage
+	if err := json.Unmarshal(fields["distributed"], &dist); err != nil {
+		t.Fatalf("distributed membership not retained: %s", out)
+	}
+	if _, ok := dist["node_id"]; ok {
+		t.Fatalf("node-local distributed field not stripped: %s", out)
+	}
+	if _, ok := dist["peers"]; !ok {
+		t.Fatalf("distributed peers dropped: %s", out)
+	}
+	if _, ok := dist["peer_public_keys"]; !ok {
+		t.Fatalf("distributed peer_public_keys dropped: %s", out)
 	}
 	if _, ok := fields["enable_edns"]; !ok {
 		t.Fatalf("non-distributed field dropped: %s", out)

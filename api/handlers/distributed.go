@@ -220,3 +220,27 @@ func PostDistributedInviteConsumeHandler(w http.ResponseWriter, r *http.Request)
 	}
 	writeDistributedJSON(w, record)
 }
+
+func GetDistributedJoinRequestsHandler(w http.ResponseWriter, r *http.Request) {
+	if !distributedServiceReady(w) {
+		return
+	}
+	requests, err := distributed.Default.ListJoinRequests()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeDistributedJSON(w, requests)
+}
+
+func PostDistributedJoinRequestApproveHandler(w http.ResponseWriter, r *http.Request) {
+	if !distributedServiceReady(w) {
+		return
+	}
+	req, err := distributed.Default.ApproveJoinRequest(r.Context(), mux.Vars(r)["node"])
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	writeDistributedJSON(w, req)
+}

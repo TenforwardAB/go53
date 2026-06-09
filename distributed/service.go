@@ -36,10 +36,11 @@ const (
 	EntityTSIGKey    = "tsig_key"
 	EntityDNSSECKey  = "dnssec_key"
 
-	eventsTable  = "distributed-events"
-	vectorTable  = "distributed-vector"
-	entityTable  = "distributed-entities"
-	invitesTable = "distributed_invites"
+	eventsTable       = "distributed-events"
+	vectorTable       = "distributed-vector"
+	entityTable       = "distributed-entities"
+	invitesTable      = "distributed_invites"
+	joinRequestsTable = "distributed_join_requests"
 )
 
 type Event struct {
@@ -90,6 +91,16 @@ type InviteRecord struct {
 	ExpiresAt  int64  `json:"exp"`
 	CreatedAt  int64  `json:"created_at"`
 	LastUsedAt int64  `json:"last_used_at,omitempty"`
+}
+
+type JoinRequest struct {
+	Token            string `json:"token"`
+	TokenID          string `json:"token_id"`
+	JoinNodeID       string `json:"join_node_id"`
+	JoinSyncEndpoint string `json:"join_sync_endpoint"`
+	JoinPublicKey    string `json:"join_public_key"`
+	Proof            string `json:"proof"`
+	SubmittedAt      int64  `json:"submitted_at,omitempty"`
 }
 
 type Service struct {
@@ -187,8 +198,8 @@ func (s *Service) PublishDelete(zone, rrtype, name string) error {
 
 // PublishConfig replicates a live-config change to peers. It takes the raw JSON patch
 // (only the keys the admin actually set), so presence is preserved end-to-end and
-// false/empty values propagate. The node-local distributed block is stripped so peers
-// never overwrite their own identity, keys, or sync listener.
+// false/empty values propagate. Node-local distributed keys are stripped so peers
+// never overwrite their own identity, private key, or sync listener.
 func (s *Service) PublishConfig(raw []byte) error {
 	if s == nil || !readyToPublish() {
 		return nil
@@ -208,14 +219,34 @@ func (s *Service) PublishConfig(raw []byte) error {
 	})
 }
 
-// stripDistributedKey removes the node-local "distributed" object from a live-config
-// JSON patch, returning the re-encoded document and whether any keys remain.
+// stripDistributedKey removes node-local distributed keys from a live-config JSON
+// patch, returning the re-encoded document and whether any keys remain. Cluster
+// membership keys are intentionally retained so joins can replicate safely.
 func stripDistributedKey(raw []byte) ([]byte, bool, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return nil, false, err
 	}
-	delete(fields, "distributed")
+	if rawDist, ok := fields["distributed"]; ok {
+		var dist map[string]json.RawMessage
+		if err := json.Unmarshal(rawDist, &dist); err != nil {
+			return nil, false, err
+		}
+		for key := range dist {
+			if key != "peers" && key != "peer_public_keys" {
+				delete(dist, key)
+			}
+		}
+		if len(dist) == 0 {
+			delete(fields, "distributed")
+		} else {
+			encoded, err := json.Marshal(dist)
+			if err != nil {
+				return nil, false, err
+			}
+			fields["distributed"] = encoded
+		}
+	}
 	if len(fields) == 0 {
 		return nil, false, nil
 	}
@@ -875,7 +906,70 @@ func (s *Service) applyConfigEvent(event Event) error {
 	if !hasKeys {
 		return nil
 	}
+	stripped, err = mergeDistributedMembershipPatch(stripped)
+	if err != nil {
+		return err
+	}
 	return config.AppConfig.MergeUpdateLiveJSON(stripped)
+}
+
+func mergeDistributedMembershipPatch(raw []byte) ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, err
+	}
+	rawDist, ok := fields["distributed"]
+	if !ok {
+		return raw, nil
+	}
+	var dist map[string]json.RawMessage
+	if err := json.Unmarshal(rawDist, &dist); err != nil {
+		return nil, err
+	}
+	live := liveConfig()
+	if rawPeers, ok := dist["peers"]; ok {
+		var incoming string
+		if err := json.Unmarshal(rawPeers, &incoming); err != nil {
+			return nil, err
+		}
+		peers := splitCSV(live.Distributed.Peers)
+		self := advertisedSyncEndpoint()
+		for _, peer := range splitCSV(incoming) {
+			if peer != self {
+				peers = appendUnique(peers, peer)
+			}
+		}
+		sort.Strings(peers)
+		encoded, err := json.Marshal(strings.Join(peers, ","))
+		if err != nil {
+			return nil, err
+		}
+		dist["peers"] = encoded
+	}
+	if rawKeys, ok := dist["peer_public_keys"]; ok {
+		incoming := map[string]string{}
+		if err := json.Unmarshal(rawKeys, &incoming); err != nil {
+			return nil, err
+		}
+		merged := map[string]string{}
+		for nodeID, publicKey := range live.Distributed.PeerPublicKeys {
+			merged[nodeID] = publicKey
+		}
+		for nodeID, publicKey := range incoming {
+			merged[nodeID] = publicKey
+		}
+		encoded, err := json.Marshal(merged)
+		if err != nil {
+			return nil, err
+		}
+		dist["peer_public_keys"] = encoded
+	}
+	encoded, err := json.Marshal(dist)
+	if err != nil {
+		return nil, err
+	}
+	fields["distributed"] = encoded
+	return json.Marshal(fields)
 }
 
 func (s *Service) applyTSIGEvent(event Event) error {
@@ -1034,6 +1128,43 @@ func (s *Service) SaveInvite(record InviteRecord) error {
 }
 
 func (s *Service) ConsumeInvite(tokenID string) (InviteRecord, error) {
+	record, err := s.loadInvite(tokenID)
+	if err != nil {
+		return InviteRecord{}, err
+	}
+	return s.consumeInviteRecord(record)
+}
+
+func (s *Service) ConsumeInviteToken(tokenID, token string) (InviteRecord, error) {
+	record, err := s.loadInvite(tokenID)
+	if err != nil {
+		return InviteRecord{}, err
+	}
+	if strings.TrimSpace(record.Token) != "" && record.Token != strings.TrimSpace(token) {
+		return InviteRecord{}, errors.New("invite token mismatch")
+	}
+	return s.consumeInviteRecord(record)
+}
+
+func (s *Service) validateInviteTokenUsable(tokenID, token string) (InviteRecord, error) {
+	record, err := s.loadInvite(tokenID)
+	if err != nil {
+		return InviteRecord{}, err
+	}
+	if strings.TrimSpace(record.Token) != "" && record.Token != strings.TrimSpace(token) {
+		return InviteRecord{}, errors.New("invite token mismatch")
+	}
+	now := time.Now().Unix()
+	if record.ExpiresAt > 0 && now > record.ExpiresAt {
+		return InviteRecord{}, errors.New("invite expired")
+	}
+	if record.UsedCount >= record.UsageCount {
+		return InviteRecord{}, errors.New("invite usage limit reached")
+	}
+	return record, nil
+}
+
+func (s *Service) loadInvite(tokenID string) (InviteRecord, error) {
 	if s == nil || s.storage == nil {
 		return InviteRecord{}, errors.New("distributed service is not initialized")
 	}
@@ -1053,6 +1184,10 @@ func (s *Service) ConsumeInvite(tokenID string) (InviteRecord, error) {
 	if err := json.Unmarshal(raw, &record); err != nil {
 		return InviteRecord{}, err
 	}
+	return record, nil
+}
+
+func (s *Service) consumeInviteRecord(record InviteRecord) (InviteRecord, error) {
 	now := time.Now().Unix()
 	if record.ExpiresAt > 0 && now > record.ExpiresAt {
 		return InviteRecord{}, errors.New("invite expired")
@@ -1066,6 +1201,202 @@ func (s *Service) ConsumeInvite(tokenID string) (InviteRecord, error) {
 		return InviteRecord{}, err
 	}
 	return record, nil
+}
+
+func (s *Service) SubmitJoinRequest(ctx context.Context, req JoinRequest, autoAccept bool) (bool, error) {
+	if s == nil || !enabled() {
+		return false, errors.New("distributed mode is disabled")
+	}
+	if err := validateJoinRequest(req); err != nil {
+		return false, err
+	}
+	record, err := s.validateInviteTokenUsable(req.TokenID, req.Token)
+	if err != nil {
+		return false, err
+	}
+	if strings.TrimSpace(record.JoinNodeID) != "" && record.JoinNodeID != req.JoinNodeID {
+		return false, errors.New("join node id does not match invite")
+	}
+	if autoAccept {
+		return true, s.acceptJoinRequest(ctx, req)
+	}
+	if err := s.SaveJoinRequest(req); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func (s *Service) AcceptJoinRequest(ctx context.Context, req JoinRequest) error {
+	return s.acceptJoinRequest(ctx, req)
+}
+
+func (s *Service) acceptJoinRequest(_ context.Context, req JoinRequest) error {
+	if s == nil || !enabled() {
+		return errors.New("distributed mode is disabled")
+	}
+	if err := validateJoinRequest(req); err != nil {
+		return err
+	}
+	if _, err := s.ConsumeInviteToken(req.TokenID, req.Token); err != nil {
+		return err
+	}
+	patch, err := joinMembershipPatch(req)
+	if err != nil {
+		return err
+	}
+	if err := config.AppConfig.MergeUpdateLiveJSON(patch); err != nil {
+		return err
+	}
+	return s.PublishConfig(patch)
+}
+
+func (s *Service) SaveJoinRequest(req JoinRequest) error {
+	if s == nil || s.storage == nil {
+		return errors.New("distributed service is not initialized")
+	}
+	req.JoinNodeID = strings.TrimSpace(req.JoinNodeID)
+	if req.JoinNodeID == "" {
+		return errors.New("missing join node id")
+	}
+	if req.SubmittedAt == 0 {
+		req.SubmittedAt = time.Now().Unix()
+	}
+	data, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	return s.storage.SaveTable(joinRequestsTable, req.JoinNodeID, data)
+}
+
+func (s *Service) ListJoinRequests() ([]JoinRequest, error) {
+	if s == nil || s.storage == nil {
+		return nil, errors.New("distributed service is not initialized")
+	}
+	table, err := s.storage.LoadTable(joinRequestsTable)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]JoinRequest, 0, len(table))
+	for _, raw := range table {
+		var req JoinRequest
+		if err := json.Unmarshal(raw, &req); err == nil {
+			out = append(out, req)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].SubmittedAt < out[j].SubmittedAt
+	})
+	return out, nil
+}
+
+func (s *Service) ApproveJoinRequest(ctx context.Context, nodeID string) (JoinRequest, error) {
+	req, err := s.loadJoinRequest(nodeID)
+	if err != nil {
+		return JoinRequest{}, err
+	}
+	if err := s.acceptJoinRequest(ctx, req); err != nil {
+		return JoinRequest{}, err
+	}
+	_ = s.storage.DeleteFromTable(joinRequestsTable, req.JoinNodeID)
+	return req, nil
+}
+
+func (s *Service) loadJoinRequest(nodeID string) (JoinRequest, error) {
+	if s == nil || s.storage == nil {
+		return JoinRequest{}, errors.New("distributed service is not initialized")
+	}
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		return JoinRequest{}, errors.New("missing join node id")
+	}
+	table, err := s.storage.LoadTable(joinRequestsTable)
+	if err != nil {
+		return JoinRequest{}, err
+	}
+	raw, ok := table[nodeID]
+	if !ok {
+		return JoinRequest{}, errors.New("join request not found")
+	}
+	var req JoinRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return JoinRequest{}, err
+	}
+	return req, nil
+}
+
+func validateJoinRequest(req JoinRequest) error {
+	if strings.TrimSpace(req.TokenID) == "" || strings.TrimSpace(req.Token) == "" {
+		return errors.New("missing join invite token")
+	}
+	if strings.TrimSpace(req.JoinNodeID) == "" || strings.TrimSpace(req.JoinSyncEndpoint) == "" || strings.TrimSpace(req.JoinPublicKey) == "" {
+		return errors.New("missing join node identity")
+	}
+	pub, err := publicKey(req.JoinPublicKey)
+	if err != nil {
+		return err
+	}
+	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(req.Proof))
+	if err != nil {
+		return err
+	}
+	if !ed25519.Verify(pub, joinRequestPayload(req), sig) {
+		return errors.New("invalid join request proof")
+	}
+	return nil
+}
+
+func joinMembershipPatch(req JoinRequest) ([]byte, error) {
+	live := liveConfig()
+	peers := splitCSV(live.Distributed.Peers)
+	peers = appendUnique(peers, req.JoinSyncEndpoint)
+	sort.Strings(peers)
+	peerKeys := map[string]string{}
+	for nodeID, publicKey := range live.Distributed.PeerPublicKeys {
+		peerKeys[nodeID] = publicKey
+	}
+	peerKeys[req.JoinNodeID] = req.JoinPublicKey
+	return json.Marshal(map[string]any{
+		"distributed": map[string]any{
+			"peers":            strings.Join(peers, ","),
+			"peer_public_keys": peerKeys,
+		},
+	})
+}
+
+func JoinRequestPayload(req JoinRequest) []byte {
+	return joinRequestPayload(req)
+}
+
+func joinRequestPayload(req JoinRequest) []byte {
+	return []byte("go53-join-request-v1:" +
+		strings.TrimSpace(req.TokenID) + ":" +
+		strings.TrimSpace(req.JoinNodeID) + ":" +
+		strings.TrimSpace(req.JoinSyncEndpoint) + ":" +
+		strings.TrimSpace(req.JoinPublicKey))
+}
+
+func splitCSV(value string) []string {
+	out := []string{}
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func appendUnique(values []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return values
+	}
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func (s *Service) eventWinsLocked(event Event) bool {

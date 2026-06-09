@@ -357,6 +357,8 @@ func TestRouterAllManagementRoutes(t *testing.T) {
 	expectRoute(t, router, http.MethodPost, "/api/distributed/merkle/repair-events", `{"entities":[]}`, http.StatusOK)
 	expectRoute(t, router, http.MethodPost, "/api/distributed/invites", `{"jti":"route-invite","usage_count":1}`, http.StatusNoContent)
 	expectRoute(t, router, http.MethodPost, "/api/distributed/invites/route-invite/consume", "", http.StatusOK)
+	expectRoute(t, router, http.MethodGet, "/api/distributed/join-requests", "", http.StatusOK)
+	expectRoute(t, router, http.MethodPost, "/api/distributed/join-requests/missing/approve", "", http.StatusConflict)
 
 	expectRoute(t, router, http.MethodDelete, "/api/zones/imported.test.", "", http.StatusNoContent)
 

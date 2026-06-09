@@ -396,7 +396,8 @@
             <tr><td><code>distributed-events/{event-id}</code></td><td>JSON event</td><td>Distributed event log used for vector comparison, replay, and repair.</td></tr>
             <tr><td><code>distributed-vector/{node-id}</code></td><td>JSON integer</td><td>Persisted local vector-clock state for distributed replication.</td></tr>
             <tr><td><code>distributed-entities/{entity}</code></td><td>JSON entity clock</td><td>Per-entity conflict metadata used by distributed event dominance checks.</td></tr>
-            <tr><td><code>distributed_invites/{jti}</code></td><td>JSON invite record</td><td>Stored cluster invite usage state used by <code>go53ctl cluster join</code> one-time or limited-use consume checks.</td></tr>
+            <tr><td><code>distributed_invites/{jti}</code></td><td>JSON invite record</td><td>Stored cluster invite usage state consumed when a pending join is approved, auto-accepted, or manually accepted.</td></tr>
+            <tr><td><code>distributed_join_requests/{node-id}</code></td><td>JSON join request</td><td>Pending self-registration requests submitted over the distributed sync endpoint.</td></tr>
           </tbody>
         </table>
       </section>

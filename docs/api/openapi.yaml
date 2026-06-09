@@ -635,6 +635,33 @@ paths:
       responses:
         "200":
           description: Consumed invite
+  /api/distributed/join-requests:
+    get:
+      tags: [Distributed]
+      summary: List pending distributed join requests
+      responses:
+        "200":
+          description: Pending join requests
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+  /api/distributed/join-requests/{node}/approve:
+    post:
+      tags: [Distributed]
+      summary: Approve a pending distributed join request
+      parameters:
+        - name: node
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Join request approved
 components:
   securitySchemes:
     XAuthKey:

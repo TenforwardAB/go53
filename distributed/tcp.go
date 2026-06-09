@@ -39,6 +39,7 @@ const (
 	frameTypeMerkleLeavesRequest   = "MERKLE_LEAVES_REQUEST"
 	frameTypeMerkleLeaves          = "MERKLE_LEAVES"
 	frameTypeMerkleRepairRequest   = "MERKLE_REPAIR_REQUEST"
+	frameTypeJoinRequest           = "JOIN_REQUEST"
 	frameTypeError                 = "ERROR"
 
 	maxFrameBytes = 16 << 20
@@ -66,6 +67,8 @@ type frame struct {
 	MerkleRoots    map[string]MerkleZoneRoot `json:"merkle_roots,omitempty"`
 	MerkleBranches map[string]MerkleBranch   `json:"merkle_branches,omitempty"`
 	MerkleLeaves   map[string]MerkleLeaf     `json:"merkle_leaves,omitempty"`
+	JoinRequest    *JoinRequest              `json:"join_request,omitempty"`
+	AutoAccept     bool                      `json:"auto_accept,omitempty"`
 	Applied        bool                      `json:"applied,omitempty"`
 	Error          string                    `json:"error,omitempty"`
 }
@@ -140,8 +143,12 @@ func (s *Service) handleTCPConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 	}
-	if err := s.acceptTCPHello(conn); err != nil {
+	ready, err := s.acceptTCPIntro(ctx, conn)
+	if err != nil {
 		log.Printf("distributed: TCP hello failed: %v", err)
+		return
+	}
+	if !ready {
 		return
 	}
 	for {
@@ -386,29 +393,42 @@ func (s *Service) dialTCPHello(conn net.Conn) error {
 	return verifyTLSConnNode(conn, resp.NodeID)
 }
 
-func (s *Service) acceptTCPHello(conn net.Conn) error {
+func (s *Service) acceptTCPIntro(ctx context.Context, conn net.Conn) (bool, error) {
 	req, err := readFrame(conn)
 	if err != nil {
-		return err
+		return false, err
+	}
+	if req.Type == frameTypeJoinRequest {
+		if req.JoinRequest == nil {
+			_ = writeFrame(conn, frame{Type: frameTypeError, Error: "missing join_request"})
+			return false, errors.New("missing join_request")
+		}
+		applied, err := s.SubmitJoinRequest(ctx, *req.JoinRequest, req.AutoAccept)
+		if err != nil {
+			_ = writeFrame(conn, frame{Type: frameTypeError, Error: err.Error()})
+			return false, err
+		}
+		_ = writeFrame(conn, frame{Type: frameTypeAck, Applied: applied})
+		return false, nil
 	}
 	if req.Type != frameTypeHello {
 		_ = writeFrame(conn, frame{Type: frameTypeError, Error: "missing HELLO"})
-		return errors.New("missing HELLO")
+		return false, errors.New("missing HELLO")
 	}
 	if err := verifyHelloFrame(req); err != nil {
 		_ = writeFrame(conn, frame{Type: frameTypeError, Error: err.Error()})
-		return err
+		return false, err
 	}
 	if err := verifyTLSConnNode(conn, req.NodeID); err != nil {
 		_ = writeFrame(conn, frame{Type: frameTypeError, Error: err.Error()})
-		return err
+		return false, err
 	}
 	hello, err := localHelloFrame()
 	if err != nil {
 		_ = writeFrame(conn, frame{Type: frameTypeError, Error: err.Error()})
-		return err
+		return false, err
 	}
-	return writeFrame(conn, hello)
+	return true, writeFrame(conn, hello)
 }
 
 func localHelloFrame() (frame, error) {
@@ -481,8 +501,7 @@ func serverTLSConfig() (*tls.Config, error) {
 	return &tls.Config{
 		MinVersion:               tls.VersionTLS13,
 		Certificates:             []tls.Certificate{cert},
-		ClientAuth:               tls.RequireAnyClientCert,
-		VerifyPeerCertificate:    verifyPeerCertificate,
+		ClientAuth:               tls.RequestClientCert,
 		PreferServerCipherSuites: false,
 	}, nil
 }

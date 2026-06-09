@@ -88,6 +88,8 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 	r.HandleFunc("/api/distributed/merkle/repair-events", handlers.PostDistributedMerkleRepairEventsHandler).Methods("POST")
 	r.HandleFunc("/api/distributed/invites", handlers.PostDistributedInviteHandler).Methods("POST")
 	r.HandleFunc("/api/distributed/invites/{jti}/consume", handlers.PostDistributedInviteConsumeHandler).Methods("POST")
+	r.HandleFunc("/api/distributed/join-requests", handlers.GetDistributedJoinRequestsHandler).Methods("GET")
+	r.HandleFunc("/api/distributed/join-requests/{node}/approve", handlers.PostDistributedJoinRequestApproveHandler).Methods("POST")
 
 	return r
 }

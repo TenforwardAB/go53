@@ -780,19 +780,16 @@ go53ctl api PATCH /api/config '{"default_ttl":120}'</code></pre>
           </tbody>
         </table>
         <div class="warning">
-          <p>The socket grants unauthenticated, full administrative control of the local node to anyone who can open it. Keep <code>go53_admin</code> membership tight and ensure the socket directory is not world-writable. Cluster onboarding that touches remote peers still uses TCP — the socket administers the local node only.</p>
+          <p>The socket grants unauthenticated, full administrative control of the local node to anyone who can open it. Keep <code>go53_admin</code> membership tight and ensure the socket directory is not world-writable. Cluster onboarding is local-first: <code>go53ctl cluster</code> uses the local Unix socket by default and does not require remote admin APIs between nodes.</p>
         </div>
 
         <h3>Cluster Invite</h3>
-        <p><code>go53ctl cluster invite</code> creates an Ed25519-signed JWT invite for a new distributed node. When join flags are omitted, the token acts as a cluster join capability: it contains issuer and existing-cluster data, while the joining node supplies its own reachable endpoints during <code>cluster join</code>. The invite is saved on the issuer through <code>POST /api/distributed/invites</code>, so the running server persists it through its own storage handle.</p>
+        <p><code>go53ctl cluster invite</code> creates an Ed25519-signed JWT invite for a new distributed node. The command runs against the issuer's local admin socket by default, embeds the issuer's pinned sync identity in the token, and saves the invite on the issuer through <code>POST /api/distributed/invites</code>.</p>
         <pre><code>go53ctl cluster invite --usage-count 1</code></pre>
-        <p>For provisioned workflows, the joining node identity and endpoints can still be embedded when the invite is created:</p>
+        <p>For provisioned workflows, the joining node identity and sync endpoint can be embedded when the invite is created:</p>
         <pre><code>go53ctl cluster invite \
-  --api http://10.0.0.10:8053 \
   --join-node-id node-b \
-  --join-api-endpoint http://10.0.0.11:8053 \
-  --join-sync-endpoint tls://10.0.0.11:53530 \
-  --node http://10.0.0.10:8053</code></pre>
+  --join-sync-endpoint tls://10.0.0.11:53530</code></pre>
         <table>
           <thead>
             <tr>
@@ -801,14 +798,13 @@ go53ctl api PATCH /api/config '{"default_ttl":120}'</code></pre>
             </tr>
           </thead>
           <tbody>
-            <tr><td><code>--api</code></td><td>Issuer node API endpoint. Defaults to <code>http://127.0.0.1:8053</code>.</td></tr>
+            <tr><td><code>--socket</code></td><td>Issuer node Unix admin socket. Defaults from <code>GO53_ADMIN_SOCKET</code> or <code>/run/go53/admin.sock</code>.</td></tr>
+            <tr><td><code>--api</code></td><td>Optional TCP API base URL for controlled management networks. Overrides <code>--socket</code>.</td></tr>
             <tr><td><code>--issuer-node</code></td><td>Node ID that signs the invite. Defaults from discovery.</td></tr>
             <tr><td><code>--issuer-private-key</code></td><td>Base64 Ed25519 private key. Defaults from the issuer live config.</td></tr>
             <tr><td><code>--cluster-id</code></td><td>Stable cluster identifier embedded in the token. Defaults to the issuer node ID.</td></tr>
             <tr><td><code>--join-node-id</code></td><td>Optional node ID to configure on the joining node. If omitted, <code>cluster join</code> fills it from local config/discovery or generates one.</td></tr>
-            <tr><td><code>--join-api-endpoint</code></td><td>Optional API endpoint for the joining node. If omitted, <code>cluster join</code> uses its <code>--api</code> value.</td></tr>
             <tr><td><code>--join-sync-endpoint</code></td><td>Optional distributed sync endpoint for the joining node. If omitted, <code>cluster join</code> uses <code>--sync-endpoint</code> or local discovery.</td></tr>
-            <tr><td><code>--node</code></td><td>Existing node API endpoint to include in the invite. Repeat for every current cluster member.</td></tr>
             <tr><td><code>--ttl</code></td><td>Token lifetime. Default is <code>10m</code>.</td></tr>
             <tr><td><code>--usage-count</code></td><td>Allowed consumes for the stored invite. Default is <code>1</code>.</td></tr>
             <tr><td><code>--transport</code></td><td>Distributed transport written into the joining node config. Default is <code>tls</code>.</td></tr>
@@ -819,11 +815,19 @@ go53ctl api PATCH /api/config '{"default_ttl":120}'</code></pre>
           </tbody>
         </table>
         <h3>Cluster Join</h3>
-        <p><code>go53ctl cluster join</code> verifies the invite JWT, uses or generates a local Ed25519 keypair, consumes the invite on the issuer, patches the joining node's local config, and patches existing nodes from the token with the new node's peer endpoint and public key.</p>
+        <p><code>go53ctl cluster join</code> verifies the invite JWT, uses or generates a local Ed25519 keypair, patches the joining node's local config through its local admin socket, and sends a signed self-registration request to the issuer over the issuer's distributed sync endpoint. By default the issuer stores that request as pending. An operator approves it locally on the issuer, which consumes one allowed invite use, pins the joining node's public key, adds its sync endpoint, and replicates that membership update to existing peers.</p>
         <pre><code>go53ctl cluster join \
   --token INVITE_JWT \
-  --api http://10.0.0.11:8053 \
   --sync-endpoint tls://10.0.0.11:53530</code></pre>
+        <pre><code>go53ctl cluster pending
+go53ctl cluster approve node-b</code></pre>
+        <h3>Cluster Accept</h3>
+        <p><code>go53ctl cluster accept</code> is the manual fallback for offline or recovery workflows. It runs locally on an existing cluster node, verifies the same invite token, pins the joining node's public key in <code>distributed.peer_public_keys</code>, and adds the joining node's sync endpoint to <code>distributed.peers</code>. When run on the issuer node, it also consumes the stored invite usage. Operators should compare the printed public key over the same trusted channel used to transfer the invite.</p>
+        <pre><code>go53ctl cluster accept \
+  --token INVITE_JWT \
+  --join-node-id node-b \
+  --join-sync-endpoint tls://10.0.0.11:53530 \
+  --join-public-key PUBLIC_KEY</code></pre>
         <table>
           <thead>
             <tr>
@@ -833,9 +837,17 @@ go53ctl api PATCH /api/config '{"default_ttl":120}'</code></pre>
           </thead>
           <tbody>
             <tr><td><code>--token</code></td><td>JWT invite produced by <code>go53ctl cluster invite</code>.</td></tr>
-            <tr><td><code>--api</code></td><td>Joining node API endpoint. Defaults from the token's <code>join_api_endpoint</code> or <code>http://127.0.0.1:8053</code>.</td></tr>
+            <tr><td><code>--socket</code></td><td>Local Unix admin socket. Defaults from <code>GO53_ADMIN_SOCKET</code> or <code>/run/go53/admin.sock</code>.</td></tr>
+            <tr><td><code>--api</code></td><td>Optional TCP API base URL for controlled management networks. Overrides <code>--socket</code>.</td></tr>
             <tr><td><code>--sync-endpoint</code></td><td>Advertised distributed sync endpoint for the joining node. Required when the local discovery endpoint is not reachable by existing nodes.</td></tr>
-            <tr><td><code>--dry-run</code></td><td>Prints the local config patch and remote patches without consuming or applying the invite.</td></tr>
+            <tr><td><code>--auto-accept</code></td><td>Ask the issuer to approve immediately. Use only when the invite token is handled as a join capability.</td></tr>
+            <tr><td><code>--no-register</code></td><td>Skip self-registration over the issuer sync endpoint and use manual <code>cluster accept</code> instead.</td></tr>
+            <tr><td><code>pending</code></td><td>Lists pending join requests on the local issuer node.</td></tr>
+            <tr><td><code>approve NODE</code></td><td>Approves a pending join request locally on the issuer node.</td></tr>
+            <tr><td><code>--join-node-id</code></td><td>Joining node ID printed by <code>cluster join</code>; used by <code>cluster accept</code>.</td></tr>
+            <tr><td><code>--join-sync-endpoint</code></td><td>Joining node sync endpoint printed by <code>cluster join</code>; used by <code>cluster accept</code>.</td></tr>
+            <tr><td><code>--join-public-key</code></td><td>Joining node Ed25519 public key printed by <code>cluster join</code>; used by <code>cluster accept</code> for public-key pinning.</td></tr>
+            <tr><td><code>--dry-run</code></td><td>Prints generated local config patches without applying them.</td></tr>
           </tbody>
         </table>
         <h3>Storage Inspection</h3>

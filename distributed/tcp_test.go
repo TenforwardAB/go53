@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"net"
 	"testing"
 
@@ -125,13 +126,22 @@ func TestTCPHelloRoundTripOverPipe(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- svc.acceptTCPHello(left)
+		ready, err := svc.acceptTCPIntro(context.Background(), left)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if !ready {
+			errCh <- errors.New("TCP intro did not continue after HELLO")
+			return
+		}
+		errCh <- nil
 	}()
 	if err := svc.dialTCPHello(right); err != nil {
 		t.Fatalf("dialTCPHello: %v", err)
 	}
 	if err := <-errCh; err != nil {
-		t.Fatalf("acceptTCPHello: %v", err)
+		t.Fatalf("acceptTCPIntro: %v", err)
 	}
 }
 

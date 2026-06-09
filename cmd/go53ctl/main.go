@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -19,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"go53/distributed"
 
 	"github.com/dgraph-io/badger/v4"
 )
@@ -65,6 +69,15 @@ func defaultAdminSocket() string {
 		return v
 	}
 	return defaultAdminSocketPath
+}
+
+func configureClusterAdmin(socketPath, apiEndpoint string) string {
+	if strings.TrimSpace(apiEndpoint) != "" {
+		apiClient = http.DefaultClient
+		return strings.TrimRight(apiEndpoint, "/")
+	}
+	apiClient = socketClient(socketPath)
+	return "http://go53-admin-socket"
 }
 
 type repeatedFlag []string
@@ -145,12 +158,12 @@ type jwtHeader struct {
 
 type clusterInviteOptions struct {
 	Nodes            repeatedFlag
+	Socket           string
 	APIEndpoint      string
 	IssuerNode       string
 	IssuerPrivateKey string
 	ClusterID        string
 	JoinNodeID       string
-	JoinAPIEndpoint  string
 	JoinSyncEndpoint string
 	TTL              string
 	Transport        string
@@ -163,9 +176,22 @@ type clusterInviteOptions struct {
 
 type clusterJoinOptions struct {
 	Token        string
+	Socket       string
 	APIEndpoint  string
 	SyncEndpoint string
 	DryRun       bool
+	NoRegister   bool
+	AutoAccept   bool
+}
+
+type clusterAcceptOptions struct {
+	Token            string
+	Socket           string
+	APIEndpoint      string
+	JoinNodeID       string
+	JoinSyncEndpoint string
+	JoinPublicKey    string
+	DryRun           bool
 }
 
 type inviteDiscovery struct {
@@ -174,10 +200,29 @@ type inviteDiscovery struct {
 }
 
 type joinPlan struct {
-	Claims        clusterInviteClaims
-	LocalPatch    map[string]any
-	RemotePatches map[string]map[string]any
-	PublicKey     string
+	Claims     clusterInviteClaims
+	LocalPatch map[string]any
+	Accept     clusterAcceptRequest
+	PublicKey  string
+	PrivateKey string
+	AutoAccept bool
+	Submitted  bool
+	Registered bool
+}
+
+type clusterAcceptRequest struct {
+	Token            string `json:"token"`
+	JoinNodeID       string `json:"join_node_id"`
+	JoinSyncEndpoint string `json:"join_sync_endpoint"`
+	JoinPublicKey    string `json:"join_public_key"`
+}
+
+type syncFrame struct {
+	Type        string                   `json:"type"`
+	JoinRequest *distributed.JoinRequest `json:"join_request,omitempty"`
+	AutoAccept  bool                     `json:"auto_accept,omitempty"`
+	Applied     bool                     `json:"applied,omitempty"`
+	Error       string                   `json:"error,omitempty"`
 }
 
 func main() {
@@ -254,7 +299,8 @@ Commands:
   distributed          Inspect and repair distributed state
   docs                 Fetch OpenAPI docs or Swagger HTML
   cluster invite       Create a JWT invite token for a new distributed node
-  cluster join         Join/configure a distributed node from a JWT invite token`)
+  cluster join         Configure and self-register a new node from a JWT invite token
+  cluster accept       Manually accept a joined node on an existing cluster node`)
 	if help {
 		fmt.Println(`
 Local admin examples (Unix socket, no API token):
@@ -272,7 +318,10 @@ Raw API passthrough:
 
 Cluster examples:
   go53ctl cluster invite
-  go53ctl cluster join --token TOKEN
+  go53ctl cluster join --token TOKEN --sync-endpoint tls://10.0.0.11:53530
+  go53ctl cluster pending
+  go53ctl cluster approve node-b
+  go53ctl cluster join --token TOKEN --sync-endpoint tls://10.0.0.11:53530 --auto-accept
 
 Zone storage tools:
   go53ctl --list-all-zones --count-only
@@ -297,7 +346,7 @@ Examples:
   go53ctl records add example.com. A '{"name":"www","ip":"192.0.2.10"}'
   go53ctl catalog status
   go53ctl cluster invite
-  go53ctl cluster join --token TOKEN --api http://10.0.0.11:8053 --sync-endpoint tls://10.0.0.11:53530
+  go53ctl cluster join --token TOKEN --sync-endpoint tls://10.0.0.11:53530
   go53ctl --list-all-zones --count-only`)
 }
 
@@ -428,6 +477,12 @@ func handleCluster(args []string) {
 		handleClusterInvite(args[1:])
 	case "join":
 		handleClusterJoin(args[1:])
+	case "accept":
+		handleClusterAccept(args[1:])
+	case "pending":
+		handleClusterPending(args[1:])
+	case "approve":
+		handleClusterApprove(args[1:])
 	default:
 		printClusterUsage()
 		os.Exit(1)
@@ -1018,34 +1073,53 @@ func printDocsUsage() {
 func printClusterUsage() {
 	fmt.Println(`Usage:
   go53ctl cluster invite [--usage-count 1]
-  go53ctl cluster join --token TOKEN [--api http://127.0.0.1:8053] [--sync-endpoint tls://HOST:PORT] [--dry-run]
+  go53ctl cluster join --token TOKEN --sync-endpoint tls://HOST:PORT [--dry-run]
+  go53ctl cluster pending
+  go53ctl cluster approve NODE
+  go53ctl cluster accept --token TOKEN --join-node-id NODE --join-sync-endpoint tls://HOST:PORT --join-public-key KEY
 
 cluster invite flags:
-  --api                 Local issuer API endpoint, default http://127.0.0.1:8053
+  --socket              Local issuer Unix admin socket, default from GO53_ADMIN_SOCKET or /run/go53/admin.sock
+  --api                 TCP API base URL; overrides --socket
   --issuer-node         Existing node_id that signs the invite
   --issuer-private-key  Base64 Ed25519 private key for issuer node
   --cluster-id          Stable cluster identifier
   --join-node-id        Optional node ID for the new node; otherwise set during join
-  --join-api-endpoint   Optional API endpoint for the new node; otherwise set during join
   --join-sync-endpoint  Optional distributed sync endpoint for the new node; otherwise set during join
-  --node                Existing node API endpoint. Repeat for every current node.
   --ttl                 Invite lifetime, default 10m
   --usage-count         Number of allowed uses to record for this invite, default 1
   --transport           Distributed transport, default tls
   --sync-bind-host      Local bind host to configure on joining node, default 0.0.0.0
-  --sync-port           Local sync port to configure on joining node, default derived from join sync endpoint or :53530
+  --sync-port           Local sync port to configure on joining node, default derived from join sync endpoint
   --push-timeout-ms     Distributed push timeout, default 2000
   --resync-interval-s   Distributed resync interval, default 30
 
 cluster join flags:
   --token               JWT invite token
-  --api                 Local node API endpoint, default from token join_api_endpoint or http://127.0.0.1:8053
+  --socket              Local joining-node Unix admin socket, default from GO53_ADMIN_SOCKET or /run/go53/admin.sock
+  --api                 TCP API base URL; overrides --socket
   --sync-endpoint       Advertised sync endpoint for this joining node, default from token or local discovery
-  --dry-run             Print generated config and remote patches without applying them`)
+  --auto-accept         Ask issuer to approve immediately instead of storing a pending request
+  --no-register         Do not self-register with the issuer sync endpoint after local join
+  --dry-run             Print generated local config patch and accept request without applying it
+
+cluster pending/approve flags:
+  --socket              Local issuer Unix admin socket, default from GO53_ADMIN_SOCKET or /run/go53/admin.sock
+  --api                 TCP API base URL; overrides --socket
+
+cluster accept flags:
+  --token               JWT invite token
+  --socket              Local existing-node Unix admin socket, default from GO53_ADMIN_SOCKET or /run/go53/admin.sock
+  --api                 TCP API base URL; overrides --socket
+  --join-node-id        Joining node_id printed by cluster join
+  --join-sync-endpoint  Joining node sync endpoint printed by cluster join
+  --join-public-key     Joining node public_key printed by cluster join
+  --dry-run             Print generated local config patch without applying it`)
 }
 
 func handleClusterInvite(args []string) {
 	opts := parseClusterInviteOptions(args)
+	opts.APIEndpoint = configureClusterAdmin(opts.Socket, opts.APIEndpoint)
 	discovery := discoverInviteDefaults(opts.APIEndpoint)
 	opts.applyDefaults(discovery)
 	if err := opts.validate(); err != nil {
@@ -1063,19 +1137,18 @@ func handleClusterInvite(args []string) {
 func parseClusterInviteOptions(args []string) clusterInviteOptions {
 	fs := flag.NewFlagSet("cluster invite", flag.ExitOnError)
 	opts := clusterInviteOptions{}
-	fs.StringVar(&opts.APIEndpoint, "api", "http://127.0.0.1:8053", "Local issuer API endpoint")
+	fs.StringVar(&opts.Socket, "socket", defaultAdminSocket(), "Local issuer Unix admin socket")
+	fs.StringVar(&opts.APIEndpoint, "api", "", "TCP API base URL; overrides --socket")
 	fs.StringVar(&opts.IssuerNode, "issuer-node", "", "Existing node_id that signs the invite")
 	fs.StringVar(&opts.IssuerPrivateKey, "issuer-private-key", "", "Base64 Ed25519 private key for issuer node")
 	fs.StringVar(&opts.ClusterID, "cluster-id", "", "Stable cluster identifier")
 	fs.StringVar(&opts.JoinNodeID, "join-node-id", "", "Node ID for the new node")
-	fs.StringVar(&opts.JoinAPIEndpoint, "join-api-endpoint", "", "API endpoint where existing nodes can reach the new node")
 	fs.StringVar(&opts.JoinSyncEndpoint, "join-sync-endpoint", "", "Distributed sync endpoint for the new node")
-	fs.Var(&opts.Nodes, "node", "Existing node API endpoint. Repeat for every current node.")
 	fs.StringVar(&opts.TTL, "ttl", "10m", "Invite lifetime")
 	fs.IntVar(&opts.UsageCount, "usage-count", 1, "Number of allowed uses to record for this invite")
 	fs.StringVar(&opts.Transport, "transport", "tls", "Distributed transport")
 	fs.StringVar(&opts.SyncBindHost, "sync-bind-host", "0.0.0.0", "Local bind host to configure on joining node")
-	fs.StringVar(&opts.SyncPort, "sync-port", "", "Local sync port to configure on joining node")
+	fs.StringVar(&opts.SyncPort, "sync-port", "", "Local sync port to configure on joining node; defaults from join sync endpoint")
 	fs.IntVar(&opts.PushTimeoutMs, "push-timeout-ms", 2000, "Distributed push timeout")
 	fs.IntVar(&opts.ResyncIntervalS, "resync-interval-s", 30, "Distributed resync interval")
 	_ = fs.Parse(args)
@@ -1111,23 +1184,22 @@ func (opts *clusterInviteOptions) applyDefaults(discovery inviteDiscovery) {
 		opts.ResyncIntervalS = intFromPath(discovery.LocalConfig, "distributed", "resync_interval_s")
 	}
 	if len(opts.Nodes) == 0 && discovery.LocalInfo.NodeID != "" {
-		opts.Nodes = append(opts.Nodes, defaultInviteNodes(opts.APIEndpoint, discovery.LocalConfig)...)
+		opts.Nodes = append(opts.Nodes, defaultInviteNodes(opts.APIEndpoint)...)
 	}
 	if opts.SyncPort == "" {
 		opts.SyncPort = syncPortFromEndpoint(opts.JoinSyncEndpoint)
 	}
 }
 
-func defaultInviteNodes(apiEndpoint string, localConfig map[string]any) []string {
-	nodes := []string{strings.TrimRight(apiEndpoint, "/")}
-	return append(nodes, peerAPIEndpointsFromConfig(localConfig)...)
+func defaultInviteNodes(apiEndpoint string) []string {
+	return []string{strings.TrimRight(apiEndpoint, "/")}
 }
 
 func (opts clusterInviteOptions) validate() error {
 	if opts.UsageCount <= 0 {
 		return errors.New("--usage-count must be greater than zero")
 	}
-	if opts.IssuerNode == "" || opts.IssuerPrivateKey == "" || opts.ClusterID == "" || len(opts.Nodes) == 0 {
+	if opts.IssuerNode == "" || opts.IssuerPrivateKey == "" || opts.ClusterID == "" {
 		return errors.New("missing required invite data; ensure local node is distributed or pass explicit flags")
 	}
 	return nil
@@ -1170,7 +1242,7 @@ func newInviteClaims(opts clusterInviteOptions, issuerPublicKey string, duration
 		TokenID:          tokenID,
 		ClusterID:        opts.ClusterID,
 		JoinNodeID:       opts.JoinNodeID,
-		JoinAPIEndpoint:  strings.TrimRight(opts.JoinAPIEndpoint, "/"),
+		JoinAPIEndpoint:  "",
 		JoinSyncEndpoint: opts.JoinSyncEndpoint,
 		Transport:        strings.ToLower(strings.TrimSpace(opts.Transport)),
 		SyncBindHost:     opts.SyncBindHost,
@@ -1193,7 +1265,6 @@ func populateInviteNodes(claims *clusterInviteClaims, nodes []string, localConfi
 			return fmt.Errorf("node %s discovery is missing node_id, public_key, or sync_endpoint", endpoint)
 		}
 		claims.Nodes[info.NodeID] = clusterNode{
-			APIEndpoint:     strings.TrimRight(endpoint, "/"),
 			SyncEndpoint:    info.SyncEndpoint,
 			PublicKey:       info.PublicKey,
 			Fingerprint:     info.Fingerprint,
@@ -1215,7 +1286,7 @@ func addConfiguredPeerKeys(claims *clusterInviteClaims, localConfig map[string]a
 
 func validateInviteClaims(claims clusterInviteClaims, issuerPublicKey string) error {
 	if _, ok := claims.Nodes[claims.Issuer]; !ok {
-		return fmt.Errorf("issuer-node %q must be included in --node discovery endpoints", claims.Issuer)
+		return fmt.Errorf("issuer-node %q must be included in local discovery", claims.Issuer)
 	}
 	if claims.Nodes[claims.Issuer].PublicKey != issuerPublicKey {
 		return fmt.Errorf("issuer private key does not match public key advertised by %q", claims.Issuer)
@@ -1252,6 +1323,7 @@ func inviteRecord(claims clusterInviteClaims, token string) distributedInviteRec
 
 func handleClusterJoin(args []string) {
 	opts := parseClusterJoinOptions(args)
+	opts.APIEndpoint = configureClusterAdmin(opts.Socket, opts.APIEndpoint)
 	claims, err := verifyInviteJWT(opts.Token)
 	if err != nil {
 		log.Fatal(err)
@@ -1268,6 +1340,14 @@ func handleClusterJoin(args []string) {
 	if err := applyJoinPlan(opts.APIEndpoint, plan); err != nil {
 		log.Fatal(err)
 	}
+	if !opts.NoRegister {
+		applied, err := registerJoinWithIssuer(plan)
+		if err != nil {
+			log.Fatal(err)
+		}
+		plan.Submitted = true
+		plan.Registered = applied
+	}
 	printJoinOutput(plan)
 }
 
@@ -1275,9 +1355,12 @@ func parseClusterJoinOptions(args []string) clusterJoinOptions {
 	fs := flag.NewFlagSet("cluster join", flag.ExitOnError)
 	opts := clusterJoinOptions{}
 	fs.StringVar(&opts.Token, "token", "", "JWT invite token")
-	fs.StringVar(&opts.APIEndpoint, "api", "", "Local node API endpoint")
+	fs.StringVar(&opts.Socket, "socket", defaultAdminSocket(), "Local joining-node Unix admin socket")
+	fs.StringVar(&opts.APIEndpoint, "api", "", "TCP API base URL; overrides --socket")
 	fs.StringVar(&opts.SyncEndpoint, "sync-endpoint", "", "Advertised sync endpoint for this joining node")
-	fs.BoolVar(&opts.DryRun, "dry-run", false, "Print config and remote patches without applying them")
+	fs.BoolVar(&opts.AutoAccept, "auto-accept", false, "Ask issuer to approve immediately instead of storing a pending request")
+	fs.BoolVar(&opts.NoRegister, "no-register", false, "Do not self-register with issuer sync endpoint")
+	fs.BoolVar(&opts.DryRun, "dry-run", false, "Print local config patch and accept request without applying them")
 	_ = fs.Parse(args)
 	if opts.Token == "" {
 		fs.Usage()
@@ -1288,10 +1371,7 @@ func parseClusterJoinOptions(args []string) clusterJoinOptions {
 
 func (opts *clusterJoinOptions) applyDefaults(claims clusterInviteClaims) {
 	if opts.APIEndpoint == "" {
-		opts.APIEndpoint = claims.JoinAPIEndpoint
-	}
-	if opts.APIEndpoint == "" {
-		opts.APIEndpoint = "http://127.0.0.1:8053"
+		opts.APIEndpoint = "http://go53-admin-socket"
 	}
 }
 
@@ -1299,36 +1379,31 @@ func buildJoinPlan(opts clusterJoinOptions, claims clusterInviteClaims) (joinPla
 	localConfig, _ := fetchLiveConfig(opts.APIEndpoint)
 	localInfo, _ := fetchNodeDiscovery(opts.APIEndpoint)
 	claims = completeJoinClaims(claims, opts.APIEndpoint, opts.SyncEndpoint, localConfig, localInfo)
+	if strings.TrimSpace(claims.JoinSyncEndpoint) == "" {
+		return joinPlan{}, errors.New("missing joining node sync endpoint; pass --sync-endpoint tls://HOST:PORT")
+	}
 	privateKey, publicKey, err := joinKeyPair(localConfig)
 	if err != nil {
 		return joinPlan{}, err
 	}
 	return joinPlan{
-		Claims:        claims,
-		LocalPatch:    joinLocalConfig(claims, privateKey),
-		RemotePatches: joinRemotePatches(claims, publicKey),
-		PublicKey:     publicKey,
+		Claims:     claims,
+		LocalPatch: joinLocalConfig(claims, privateKey),
+		Accept:     joinAcceptRequest(opts.Token, claims, publicKey),
+		PublicKey:  publicKey,
+		PrivateKey: privateKey,
+		AutoAccept: opts.AutoAccept,
 	}, nil
 }
 
 func printJoinPlan(plan joinPlan) {
 	printJSON("local config patch", plan.LocalPatch)
-	for endpoint, patch := range plan.RemotePatches {
-		printJSON("remote config patch "+endpoint, patch)
-	}
+	printJSON("local accept request for existing nodes", plan.Accept)
 }
 
 func applyJoinPlan(apiEndpoint string, plan joinPlan) error {
-	if err := consumeDistributedInvite(plan.Claims); err != nil {
-		return fmt.Errorf("consume invite: %w", err)
-	}
 	if err := patchConfig(apiEndpoint, plan.LocalPatch); err != nil {
 		return fmt.Errorf("patch local node %s: %w", apiEndpoint, err)
-	}
-	for endpoint, patch := range plan.RemotePatches {
-		if err := patchConfig(endpoint, patch); err != nil {
-			return fmt.Errorf("patch existing node %s: %w", endpoint, err)
-		}
 	}
 	return nil
 }
@@ -1336,6 +1411,165 @@ func applyJoinPlan(apiEndpoint string, plan joinPlan) error {
 func printJoinOutput(plan joinPlan) {
 	fmt.Printf("joined cluster %s as %s\n", plan.Claims.ClusterID, plan.Claims.JoinNodeID)
 	fmt.Printf("local public_key: %s\n", plan.PublicKey)
+	if !plan.Submitted {
+		fmt.Println("self-registration skipped")
+	} else if plan.AutoAccept && plan.Registered {
+		fmt.Println("self-registration accepted by issuer")
+	} else {
+		fmt.Println("self-registration stored as pending on issuer")
+		fmt.Printf("run on issuer: go53ctl cluster approve %s\n", plan.Claims.JoinNodeID)
+	}
+	fmt.Println("manual fallback command for existing nodes:")
+	fmt.Printf("go53ctl cluster accept --token %s --join-node-id %s --join-sync-endpoint %s --join-public-key %s\n",
+		plan.Accept.Token,
+		plan.Accept.JoinNodeID,
+		plan.Accept.JoinSyncEndpoint,
+		plan.Accept.JoinPublicKey,
+	)
+}
+
+func registerJoinWithIssuer(plan joinPlan) (bool, error) {
+	issuer, ok := plan.Claims.Nodes[plan.Claims.Issuer]
+	if !ok || strings.TrimSpace(issuer.SyncEndpoint) == "" {
+		return false, errors.New("invite does not include issuer sync endpoint; rerun with --no-register and accept manually")
+	}
+	req, err := signedJoinRequest(plan)
+	if err != nil {
+		return false, err
+	}
+	resp, err := roundTripSyncFrame(issuer.SyncEndpoint, issuer.PublicKey, syncFrame{Type: "JOIN_REQUEST", JoinRequest: &req, AutoAccept: plan.AutoAccept})
+	if err != nil {
+		return false, fmt.Errorf("self-register with issuer %s: %w", issuer.SyncEndpoint, err)
+	}
+	if resp.Type == "ERROR" {
+		return false, fmt.Errorf("self-register with issuer %s: %s", issuer.SyncEndpoint, resp.Error)
+	}
+	if resp.Type != "ACK" {
+		return false, fmt.Errorf("self-register with issuer %s: unexpected response %q", issuer.SyncEndpoint, resp.Type)
+	}
+	return resp.Applied, nil
+}
+
+func signedJoinRequest(plan joinPlan) (distributed.JoinRequest, error) {
+	req := distributed.JoinRequest{
+		Token:            plan.Accept.Token,
+		TokenID:          plan.Claims.TokenID,
+		JoinNodeID:       plan.Accept.JoinNodeID,
+		JoinSyncEndpoint: plan.Accept.JoinSyncEndpoint,
+		JoinPublicKey:    plan.Accept.JoinPublicKey,
+	}
+	priv, err := decodeEd25519PrivateKey(plan.PrivateKey)
+	if err != nil {
+		return distributed.JoinRequest{}, err
+	}
+	req.Proof = base64.StdEncoding.EncodeToString(ed25519.Sign(priv, distributed.JoinRequestPayload(req)))
+	return req, nil
+}
+
+func handleClusterAccept(args []string) {
+	opts := parseClusterAcceptOptions(args)
+	opts.APIEndpoint = configureClusterAdmin(opts.Socket, opts.APIEndpoint)
+	claims, err := verifyInviteJWT(opts.Token)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := validateAcceptOptions(claims, opts); err != nil {
+		log.Fatal(err)
+	}
+	localConfig, err := fetchLiveConfig(opts.APIEndpoint)
+	if err != nil {
+		log.Fatal(err)
+	}
+	localInfo, _ := fetchNodeDiscovery(opts.APIEndpoint)
+	patch := acceptLocalConfig(localConfig, opts.JoinNodeID, opts.JoinSyncEndpoint, opts.JoinPublicKey)
+	if opts.DryRun {
+		printJSON("local config patch", patch)
+		return
+	}
+	if localNodeID(localConfig, localInfo) == claims.Issuer {
+		if err := consumeDistributedInvite(opts.APIEndpoint, claims.TokenID); err != nil {
+			log.Fatalf("consume invite: %v", err)
+		}
+	}
+	if err := patchConfig(opts.APIEndpoint, patch); err != nil {
+		log.Fatalf("patch local node %s: %v", opts.APIEndpoint, err)
+	}
+	fmt.Printf("accepted node %s at %s\n", opts.JoinNodeID, opts.JoinSyncEndpoint)
+}
+
+func handleClusterPending(args []string) {
+	fs, opts := newAdminFlagSet("cluster pending", false)
+	_ = fs.Parse(args)
+	mustAdminRequest(*opts, http.MethodGet, "/api/distributed/join-requests", "", "")
+}
+
+func handleClusterApprove(args []string) {
+	fs, opts := newAdminFlagSet("cluster approve", false)
+	_ = fs.Parse(args)
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fmt.Println("Usage: go53ctl cluster approve NODE [--socket PATH|--api URL]")
+		os.Exit(1)
+	}
+	mustAdminRequest(*opts, http.MethodPost, "/api/distributed/join-requests/"+rest[0]+"/approve", "", "")
+}
+
+func parseClusterAcceptOptions(args []string) clusterAcceptOptions {
+	fs := flag.NewFlagSet("cluster accept", flag.ExitOnError)
+	opts := clusterAcceptOptions{}
+	fs.StringVar(&opts.Token, "token", "", "JWT invite token")
+	fs.StringVar(&opts.Socket, "socket", defaultAdminSocket(), "Local existing-node Unix admin socket")
+	fs.StringVar(&opts.APIEndpoint, "api", "", "TCP API base URL; overrides --socket")
+	fs.StringVar(&opts.JoinNodeID, "join-node-id", "", "Joining node ID")
+	fs.StringVar(&opts.JoinSyncEndpoint, "join-sync-endpoint", "", "Joining node sync endpoint")
+	fs.StringVar(&opts.JoinPublicKey, "join-public-key", "", "Joining node public key")
+	fs.BoolVar(&opts.DryRun, "dry-run", false, "Print config without applying it")
+	_ = fs.Parse(args)
+	if opts.Token == "" || opts.JoinNodeID == "" || opts.JoinSyncEndpoint == "" || opts.JoinPublicKey == "" {
+		fs.Usage()
+		os.Exit(1)
+	}
+	return opts
+}
+
+func validateAcceptOptions(claims clusterInviteClaims, opts clusterAcceptOptions) error {
+	if claims.JoinNodeID != "" && claims.JoinNodeID != opts.JoinNodeID {
+		return fmt.Errorf("join-node-id %q does not match invite join_node_id %q", opts.JoinNodeID, claims.JoinNodeID)
+	}
+	if claims.JoinSyncEndpoint != "" && claims.JoinSyncEndpoint != opts.JoinSyncEndpoint {
+		return fmt.Errorf("join-sync-endpoint %q does not match invite join_sync_endpoint %q", opts.JoinSyncEndpoint, claims.JoinSyncEndpoint)
+	}
+	if _, err := decodeEd25519PublicKey(opts.JoinPublicKey); err != nil {
+		return fmt.Errorf("invalid join-public-key: %w", err)
+	}
+	return nil
+}
+
+func joinAcceptRequest(token string, claims clusterInviteClaims, publicKey string) clusterAcceptRequest {
+	return clusterAcceptRequest{
+		Token:            token,
+		JoinNodeID:       claims.JoinNodeID,
+		JoinSyncEndpoint: claims.JoinSyncEndpoint,
+		JoinPublicKey:    publicKey,
+	}
+}
+
+func acceptLocalConfig(localConfig map[string]any, joinNodeID, joinSyncEndpoint, joinPublicKey string) map[string]any {
+	peers := splitCSV(stringFromPath(localConfig, "distributed", "peers"))
+	peers = appendUnique(peers, joinSyncEndpoint)
+	sortStrings(peers)
+	peerKeys := stringMapFromPath(localConfig, "distributed", "peer_public_keys")
+	peerKeys[joinNodeID] = joinPublicKey
+	return map[string]any{
+		"distributed": map[string]any{
+			"peers":            strings.Join(peers, ","),
+			"peer_public_keys": peerKeys,
+		},
+	}
+}
+
+func localNodeID(localConfig map[string]any, localInfo nodeDiscovery) string {
+	return firstNonEmpty(strings.TrimSpace(localInfo.NodeID), stringFromPath(localConfig, "distributed", "node_id"))
 }
 
 func fetchNodeDiscovery(apiEndpoint string) (nodeDiscovery, error) {
@@ -1412,25 +1646,7 @@ func stringMapFromPath(root map[string]any, keys ...string) map[string]string {
 	return out
 }
 
-func peerAPIEndpointsFromConfig(root map[string]any) []string {
-	raw := stringFromPath(root, "distributed", "peers")
-	if raw == "" {
-		return nil
-	}
-	out := []string{}
-	for _, peer := range strings.Split(raw, ",") {
-		peer = strings.TrimSpace(peer)
-		if peer == "" {
-			continue
-		}
-		if strings.HasPrefix(peer, "http://") || strings.HasPrefix(peer, "https://") {
-			out = append(out, strings.TrimRight(peer, "/"))
-		}
-	}
-	return out
-}
-
-func completeJoinClaims(claims clusterInviteClaims, apiEndpoint, syncEndpoint string, localConfig map[string]any, localInfo nodeDiscovery) clusterInviteClaims {
+func completeJoinClaims(claims clusterInviteClaims, _ string, syncEndpoint string, localConfig map[string]any, localInfo nodeDiscovery) clusterInviteClaims {
 	if syncEndpoint != "" {
 		claims.JoinSyncEndpoint = strings.TrimSpace(syncEndpoint)
 		claims.SyncPort = syncPortFromEndpoint(claims.JoinSyncEndpoint)
@@ -1441,12 +1657,10 @@ func completeJoinClaims(claims clusterInviteClaims, apiEndpoint, syncEndpoint st
 		stringFromPath(localConfig, "distributed", "node_id"),
 		"node-"+time.Now().UTC().Format("20060102150405"),
 	)
-	claims.JoinAPIEndpoint = firstNonEmpty(claims.JoinAPIEndpoint, strings.TrimRight(apiEndpoint, "/"))
 	claims.JoinSyncEndpoint = firstNonEmpty(
 		claims.JoinSyncEndpoint,
 		strings.TrimSpace(syncEndpoint),
 		strings.TrimSpace(localInfo.SyncEndpoint),
-		"tls://127.0.0.1"+syncPortOrDefault(claims.SyncPort),
 	)
 	claims.SyncPort = firstNonEmpty(claims.SyncPort, syncPortFromEndpoint(claims.JoinSyncEndpoint))
 	claims.Transport = firstNonEmpty(claims.Transport, "tls")
@@ -1463,6 +1677,30 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func splitCSV(value string) []string {
+	out := []string{}
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func appendUnique(values []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return values
+	}
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func positiveOrDefault(value, fallback int) int {
@@ -1511,56 +1749,6 @@ func joinLocalConfig(claims clusterInviteClaims, privateKey string) map[string]a
 	}
 }
 
-func joinRemotePatches(claims clusterInviteClaims, joinPublicKey string) map[string]map[string]any {
-	allNodes := joinAllNodes(claims, joinPublicKey)
-	out := map[string]map[string]any{}
-	for nodeID, target := range claims.Nodes {
-		if target.APIEndpoint != "" {
-			out[target.APIEndpoint] = remotePatchForNode(nodeID, allNodes)
-		}
-	}
-	return out
-}
-
-func joinAllNodes(claims clusterInviteClaims, joinPublicKey string) map[string]clusterNode {
-	allNodes := make(map[string]clusterNode, len(claims.Nodes)+1)
-	for nodeID, node := range claims.Nodes {
-		allNodes[nodeID] = node
-	}
-	allNodes[claims.JoinNodeID] = clusterNode{
-		APIEndpoint:  claims.JoinAPIEndpoint,
-		SyncEndpoint: claims.JoinSyncEndpoint,
-		PublicKey:    joinPublicKey,
-	}
-	return allNodes
-}
-
-func remotePatchForNode(nodeID string, allNodes map[string]clusterNode) map[string]any {
-	peers, peerKeys := remotePeersForNode(nodeID, allNodes)
-	return map[string]any{
-		"distributed": map[string]any{
-			"peers":            strings.Join(peers, ","),
-			"peer_public_keys": peerKeys,
-		},
-	}
-}
-
-func remotePeersForNode(nodeID string, allNodes map[string]clusterNode) ([]string, map[string]string) {
-	peers := make([]string, 0, len(allNodes)-1)
-	peerKeys := map[string]string{}
-	for peerID, peer := range allNodes {
-		if peerID == nodeID {
-			continue
-		}
-		if peer.SyncEndpoint != "" {
-			peers = append(peers, peer.SyncEndpoint)
-		}
-		peerKeys[peerID] = peer.PublicKey
-	}
-	sortStrings(peers)
-	return peers, peerKeys
-}
-
 func patchConfig(apiEndpoint string, patch map[string]any) error {
 	return requestJSON(http.MethodPatch, strings.TrimRight(apiEndpoint, "/")+"/api/config", patch)
 }
@@ -1569,12 +1757,8 @@ func saveDistributedInviteAPI(apiEndpoint string, record distributedInviteRecord
 	return requestJSON(http.MethodPost, strings.TrimRight(apiEndpoint, "/")+"/api/distributed/invites", record)
 }
 
-func consumeDistributedInvite(claims clusterInviteClaims) error {
-	issuer, ok := claims.Nodes[claims.Issuer]
-	if !ok || issuer.APIEndpoint == "" {
-		return errors.New("invite does not include issuer API endpoint")
-	}
-	return requestNoBody(http.MethodPost, strings.TrimRight(issuer.APIEndpoint, "/")+"/api/distributed/invites/"+claims.TokenID+"/consume")
+func consumeDistributedInvite(apiEndpoint, tokenID string) error {
+	return requestNoBody(http.MethodPost, strings.TrimRight(apiEndpoint, "/")+"/api/distributed/invites/"+tokenID+"/consume")
 }
 
 func requestNoBody(method, url string) error {
@@ -1588,6 +1772,98 @@ func requestNoBody(method, url string) error {
 	}
 	defer resp.Body.Close()
 	return responseError(resp)
+}
+
+func roundTripSyncFrame(endpoint, expectedPublicKey string, req syncFrame) (syncFrame, error) {
+	timeout := 2 * time.Second
+	dialer := net.Dialer{Timeout: timeout}
+	conn, err := dialer.Dial("tcp", syncPeerAddr(endpoint))
+	if err != nil {
+		return syncFrame{}, err
+	}
+	defer conn.Close()
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(endpoint)), "tls://") || strings.HasPrefix(strings.ToLower(strings.TrimSpace(endpoint)), "mtls://") {
+		cfg := &tls.Config{
+			MinVersion:         tls.VersionTLS13,
+			InsecureSkipVerify: true,
+			VerifyConnection: func(state tls.ConnectionState) error {
+				return verifySyncPeerTLSKey(state, expectedPublicKey)
+			},
+		}
+		tlsConn := tls.Client(conn, cfg)
+		if err := tlsConn.Handshake(); err != nil {
+			return syncFrame{}, err
+		}
+		conn = tlsConn
+	}
+	_ = conn.SetDeadline(time.Now().Add(timeout))
+	if err := writeSyncFrame(conn, req); err != nil {
+		return syncFrame{}, err
+	}
+	return readSyncFrame(conn)
+}
+
+func verifySyncPeerTLSKey(state tls.ConnectionState, expectedPublicKey string) error {
+	if strings.TrimSpace(expectedPublicKey) == "" {
+		return errors.New("invite does not include issuer public key")
+	}
+	if len(state.PeerCertificates) == 0 {
+		return errors.New("missing issuer TLS certificate")
+	}
+	expected, err := decodeEd25519PublicKey(expectedPublicKey)
+	if err != nil {
+		return err
+	}
+	actual, ok := state.PeerCertificates[0].PublicKey.(ed25519.PublicKey)
+	if !ok {
+		return errors.New("issuer TLS certificate must use Ed25519")
+	}
+	if !actual.Equal(expected) {
+		return errors.New("issuer TLS certificate does not match invite public key")
+	}
+	return nil
+}
+
+func syncPeerAddr(endpoint string) string {
+	endpoint = strings.TrimSpace(endpoint)
+	endpoint = strings.TrimPrefix(endpoint, "tcp://")
+	endpoint = strings.TrimPrefix(endpoint, "tls://")
+	endpoint = strings.TrimPrefix(endpoint, "mtls://")
+	return endpoint
+}
+
+func writeSyncFrame(w io.Writer, f syncFrame) error {
+	data, err := json.Marshal(f)
+	if err != nil {
+		return err
+	}
+	var hdr [4]byte
+	binary.BigEndian.PutUint32(hdr[:], uint32(len(data)))
+	if _, err := w.Write(hdr[:]); err != nil {
+		return err
+	}
+	_, err = w.Write(data)
+	return err
+}
+
+func readSyncFrame(r io.Reader) (syncFrame, error) {
+	var hdr [4]byte
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
+		return syncFrame{}, err
+	}
+	size := binary.BigEndian.Uint32(hdr[:])
+	if size == 0 || size > 16<<20 {
+		return syncFrame{}, fmt.Errorf("invalid frame size %d", size)
+	}
+	data := make([]byte, size)
+	if _, err := io.ReadFull(r, data); err != nil {
+		return syncFrame{}, err
+	}
+	var out syncFrame
+	if err := json.Unmarshal(data, &out); err != nil {
+		return syncFrame{}, err
+	}
+	return out, nil
 }
 
 func requestJSON(method, url string, value any) error {
@@ -1735,22 +2011,11 @@ func syncPortFromEndpoint(endpoint string) string {
 	endpoint = strings.TrimSpace(endpoint)
 	idx := strings.LastIndex(endpoint, ":")
 	if idx == -1 || idx == len(endpoint)-1 {
-		return ":53530"
+		return ""
 	}
 	port := endpoint[idx+1:]
 	if _, err := strconv.Atoi(port); err != nil {
-		return ":53530"
-	}
-	return ":" + port
-}
-
-func syncPortOrDefault(port string) string {
-	port = strings.TrimSpace(port)
-	if port == "" {
-		return ":53530"
-	}
-	if strings.HasPrefix(port, ":") {
-		return port
+		return ""
 	}
 	return ":" + port
 }
