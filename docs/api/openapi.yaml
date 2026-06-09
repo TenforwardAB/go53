@@ -729,7 +729,7 @@ components:
       in: query
       schema:
         type: string
-      description: Comma-separated DNSSEC digest type numbers. Alias: `digest_type`.
+      description: "Comma-separated DNSSEC digest type numbers. Alias: `digest_type`."
     DeleteSignal:
       name: delete
       in: query
