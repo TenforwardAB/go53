@@ -112,6 +112,45 @@ func TestSavePrivateKeyToStorageAndActiveSigningNames(t *testing.T) {
 	}
 }
 
+func TestImportPrivateKeysPDNSECDSAP256(t *testing.T) {
+	setupSecurityMockStorage(t)
+	data := []byte(`{
+		"format":"go53-dnssec-private-keys",
+		"version":1,
+		"source":"powerdns",
+		"zone":"solutrix.se.",
+		"keys":[{
+			"source_key_id":"5",
+			"role":"CSK",
+			"flags":257,
+			"algorithm":"ECDSAP256SHA256",
+			"algorithm_number":13,
+			"keytag":30798,
+			"private_key_format":"v1.2",
+			"private_algorithm":"13 (ECDSAP256SHA256)",
+			"private_key":"Y/VymWb6trMT7QWKTLz2hbIg8qz5KuBxc4WnCCp2eR4="
+		}]
+	}`)
+
+	result, err := ImportPrivateKeys(data)
+	if err != nil {
+		t.Fatalf("ImportPrivateKeys: %v", err)
+	}
+	if len(result.Imported) != 1 {
+		t.Fatalf("imported keys = %#v", result.Imported)
+	}
+	_, stored, err := LoadPrivateKeyFromStorage(result.Imported[0])
+	if err != nil {
+		t.Fatalf("LoadPrivateKeyFromStorage: %v", err)
+	}
+	if stored.Zone != "solutrix.se" || stored.Algorithm != "ECDSAP256SHA256" || stored.Flags != 257 || stored.KeyTag != 30798 {
+		t.Fatalf("stored key = %#v", stored)
+	}
+	if stored.PublicKey != "UDKBux3OJRYDDGqeIlTo8Zi9HWkDiOIYOCVk0aL44p7UsHuSfhG3HMEO3vs3yG6YwvCIAf7UZqqADvb+SkHqig==" {
+		t.Fatalf("public key = %q", stored.PublicKey)
+	}
+}
+
 func TestPublicKeyToDNSErrorsAndAlgorithmNames(t *testing.T) {
 	if _, err := PublicKeyToDNS(nil, 15); err == nil {
 		t.Fatalf("PublicKeyToDNS accepted nil key")

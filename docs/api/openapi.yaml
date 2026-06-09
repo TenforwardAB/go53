@@ -464,6 +464,14 @@ paths:
       summary: Import a zone file
       parameters:
       - $ref: '#/components/parameters/Zone'
+      - name: dnssec
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - preserve
+        description: Use `preserve` to keep imported DNSSEC records and mark the zone read-only so later mutations cannot invalidate the imported signatures.
       requestBody:
         required: true
         content:
@@ -654,6 +662,54 @@ paths:
         '503':
           $ref: '#/components/responses/SecondaryMode'
       description: Generates the standard DNSSEC key material for a zone. The zone is supplied as a query parameter.
+  /api/dnskeys/import-private:
+    post:
+      tags:
+      - DNSSEC
+      summary: Import DNSSEC private keys
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - format
+              - version
+              - zone
+              - keys
+              properties:
+                format:
+                  type: string
+                  example: go53-dnssec-private-keys
+                version:
+                  type: integer
+                  example: 1
+                source:
+                  type: string
+                  example: powerdns
+                zone:
+                  type: string
+                  example: example.com.
+                keys:
+                  type: array
+                  items:
+                    type: object
+      responses:
+        '201':
+          description: Private keys imported.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  imported:
+                    type: array
+                    items:
+                      type: string
+        '503':
+          $ref: '#/components/responses/SecondaryMode'
+      description: Imports private DNSSEC keys in the go53 JSON key-import format and refreshes DNSSEC key material for affected zones. Current private-key import support covers ECDSA P-256, ECDSA P-384, and ED25519; RSA key generation is supported elsewhere, but RSA private-key import from external systems is not implemented yet.
   /api/dnskeys/rollover:
     post:
       tags:

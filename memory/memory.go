@@ -13,6 +13,7 @@ import (
 	"go53/security"
 	"go53/storage"
 	"go53/types"
+	"go53/zonemeta"
 	"log"
 	"reflect"
 	"sort"
@@ -626,6 +627,9 @@ func (z *InMemoryZoneStore) EnsureSignedRRSet(rrs []dns.RR) ([]dns.RR, error) {
 	zoneName, err := internal.SanitizeFQDN(zoneName)
 	if err != nil {
 		return nil, err
+	}
+	if meta, readOnly := zonemeta.ReadOnly(zoneName); readOnly && meta.DNSSECMode == "preserve" {
+		return nil, nil
 	}
 	typeName := dns.TypeToString[hdr.Rrtype]
 	if typeName == "" {

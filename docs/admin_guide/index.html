@@ -641,6 +641,9 @@ curl http://127.0.0.1:8053/api/ds/example.com.
 curl http://127.0.0.1:8053/api/cds/example.com.
 curl http://127.0.0.1:8053/api/cdnskey/example.com.</code></pre>
         <p>Rollover key generation accepts the DNSSEC algorithm names below. Imported zone files may contain DNSKEY and RRSIG records with other algorithm numbers as data, but go53 can only generate private keys and sign RRsets with the algorithms marked as supported.</p>
+        <div class="note">
+          <p><strong>Private key import limitation:</strong> <code>go53ctl dnskeys import-private</code> currently imports ECDSA P-256, ECDSA P-384, and ED25519 private keys from the go53 key-import JSON format. go53 can generate RSA signing keys, but importing RSA private keys from external systems is not implemented yet because PowerDNS, BIND, and Knot expose different native private-key formats that still need explicit mappers.</p>
+        </div>
         <table>
           <thead>
             <tr>
@@ -898,6 +901,8 @@ go53ctl records delete example.com. A www.example.com.
 # Zone file import/export
 go53ctl zones export example.com. > example.com.zone
 go53ctl zones import example.com. example.com.zone
+go53ctl zones import example.com. signed.zone --dnssec preserve
+go53ctl dnskeys import-private --key-file example.com.key
 
 # Catalog, secondary, notify, and docs
 go53ctl catalog status

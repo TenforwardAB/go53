@@ -8,6 +8,7 @@ import (
 	"go53/security"
 	"go53/types"
 	zonepkg "go53/zone"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -125,6 +126,43 @@ func CreateRolloverDNSKeyHandler(w http.ResponseWriter, r *http.Request) {
 		"keyid": keyID,
 		"key":   key,
 	})
+}
+
+func ImportPrivateDNSKeysHandler(w http.ResponseWriter, r *http.Request) {
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 2<<20))
+	if err != nil {
+		http.Error(w, "failed to read key import body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	result, err := security.ImportPrivateKeys(data)
+	if err != nil {
+		http.Error(w, "private key import failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var zones = map[string]struct{}{}
+	keys, err := security.ListStoredKeys()
+	if err != nil {
+		http.Error(w, "private keys imported but list failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for _, keyID := range result.Imported {
+		key := keys[keyID]
+		zones[key.Zone] = struct{}{}
+		if distributed.Default != nil {
+			if err := distributed.Default.PublishDNSSECKey(keyID, key); err != nil {
+				http.Error(w, "private keys imported but distributed event failed: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+	for zone := range zones {
+		if err := zonepkg.RefreshDNSSECKeyMaterial(zone); err != nil {
+			http.Error(w, "private keys imported but DNSSEC refresh failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 func UpdateDNSKeyLifecycleHandler(w http.ResponseWriter, r *http.Request) {

@@ -17,6 +17,7 @@ import (
 	"go53/storage"
 	"go53/types"
 	"go53/zone/rtypes"
+	"go53/zonemeta"
 )
 
 func TestRecordRequestParsing(t *testing.T) {
@@ -107,6 +108,34 @@ func TestConfigHandlers(t *testing.T) {
 	UpdateLiveConfigHandler(badRec, badReq)
 	if badRec.Code != http.StatusBadRequest {
 		t.Fatalf("bad config status = %d", badRec.Code)
+	}
+}
+
+func TestImportZonePreserveMarksReadOnly(t *testing.T) {
+	setupHandlerTestStore(t)
+	zoneText := `preserve.test. 300 IN SOA ns1.preserve.test. hostmaster.preserve.test. 1 3600 600 86400 300
+preserve.test. 300 IN NS ns1.preserve.test.
+ns1.preserve.test. 300 IN A 192.0.2.53
+www.preserve.test. 300 IN A 192.0.2.10
+`
+	req := httptest.NewRequest(http.MethodPost, "/api/zones/preserve.test./import?dnssec=preserve", strings.NewReader(zoneText))
+	req = mux.SetURLVars(req, map[string]string{"zone": "preserve.test."})
+	rec := httptest.NewRecorder()
+	ImportZoneHandler(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("ImportZoneHandler status = %d body=%q", rec.Code, rec.Body.String())
+	}
+	meta, readOnly := zonemeta.ReadOnly("preserve.test.")
+	if !readOnly || meta.DNSSECMode != "preserve" {
+		t.Fatalf("zone meta = %#v readOnly=%v", meta, readOnly)
+	}
+
+	addReq := httptest.NewRequest(http.MethodPost, "/api/zones/preserve.test./records/A", strings.NewReader(`{"name":"new","ip":"192.0.2.11"}`))
+	addReq = mux.SetURLVars(addReq, map[string]string{"zone": "preserve.test.", "rrtype": "A"})
+	addRec := httptest.NewRecorder()
+	AddRecordHandler(addRec, addReq)
+	if addRec.Code != http.StatusConflict {
+		t.Fatalf("AddRecordHandler status = %d body=%q", addRec.Code, addRec.Body.String())
 	}
 }
 

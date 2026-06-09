@@ -20,6 +20,7 @@ import (
 	"go53/security"
 	"go53/zone"
 	"go53/zone/rtypes"
+	"go53/zonemeta"
 )
 
 type addRecordRequest struct {
@@ -52,6 +53,9 @@ func AddRecordHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	zoneName := vars["zone"]
 	rrtypeStr := vars["rrtype"]
+	if rejectReadOnlyZone(w, zoneName) {
+		return
+	}
 
 	rrtype, err := internal.RRTypeStringToUint16(rrtypeStr)
 	if err != nil {
@@ -88,6 +92,9 @@ func UpdateRecordHandler(w http.ResponseWriter, r *http.Request) {
 	zoneName := vars["zone"]
 	rrtypeStr := vars["rrtype"]
 	name := vars["name"]
+	if rejectReadOnlyZone(w, zoneName) {
+		return
+	}
 
 	rrtype, err := internal.RRTypeStringToUint16(rrtypeStr)
 	if err != nil {
@@ -342,6 +349,9 @@ func DeleteRecordHandler(w http.ResponseWriter, r *http.Request) {
 	zoneName := vars["zone"]
 	rrtypeStr := vars["rrtype"]
 	name := vars["name"]
+	if rejectReadOnlyZone(w, zoneName) {
+		return
+	}
 
 	rrtype, err := internal.RRTypeStringToUint16(rrtypeStr)
 	if err != nil {
@@ -407,6 +417,9 @@ func DeleteZoneHandler(w http.ResponseWriter, r *http.Request) {
 	zoneName, err := internal.SanitizeFQDN(mux.Vars(r)["zone"])
 	if err != nil {
 		http.Error(w, "invalid zone", http.StatusBadRequest)
+		return
+	}
+	if rejectReadOnlyZone(w, zoneName) {
 		return
 	}
 	if err := zone.DeleteZone(zoneName); err != nil {
@@ -486,6 +499,17 @@ func ImportZoneHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid zone", http.StatusBadRequest)
 		return
 	}
+	dnssecMode := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("dnssec")))
+	if dnssecMode == "" {
+		dnssecMode = strings.ToLower(strings.TrimSpace(r.URL.Query().Get("dnssec_mode")))
+	}
+	if dnssecMode != "" && dnssecMode != "preserve" {
+		http.Error(w, "unsupported dnssec import mode", http.StatusBadRequest)
+		return
+	}
+	if dnssecMode != "preserve" && rejectReadOnlyZone(w, zoneName) {
+		return
+	}
 	parser := dns.NewZoneParser(http.MaxBytesReader(w, r.Body, 10<<20), zoneName, "")
 	records := []dns.RR{}
 	hasSOA := false
@@ -507,6 +531,12 @@ func ImportZoneHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "zone import failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if dnssecMode == "preserve" {
+		if err := zonemeta.SetPreserveReadOnly(zoneName, len(records)); err != nil {
+			http.Error(w, "zone imported but read-only metadata failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	if err := dnsutils.EnsureCatalogMember(zoneName); err != nil {
 		http.Error(w, "zone imported but catalog update failed: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -515,7 +545,16 @@ func ImportZoneHandler(w http.ResponseWriter, r *http.Request) {
 		go dnsutils.ScheduleNotify(zoneName)
 	}
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]any{"zone": zoneName, "records": len(records)})
+	_ = json.NewEncoder(w).Encode(map[string]any{"zone": zoneName, "records": len(records), "dnssec_mode": dnssecMode})
+}
+
+func rejectReadOnlyZone(w http.ResponseWriter, zoneName string) bool {
+	meta, readOnly := zonemeta.ReadOnly(zoneName)
+	if !readOnly {
+		return false
+	}
+	http.Error(w, "zone is read-only: "+meta.ReadOnlyReason, http.StatusConflict)
+	return true
 }
 
 func publishDistributedUpsert(zoneName, rrtypeStr, name string, payload map[string]interface{}) error {

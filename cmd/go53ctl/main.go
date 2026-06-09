@@ -707,6 +707,10 @@ func handleAdminZones(args []string) {
 	}
 	withPaging := args[0] == "list"
 	fs, opts := newAdminFlagSet("zones "+args[0], withPaging)
+	dnssecMode := ""
+	if args[0] == "import" {
+		fs.StringVar(&dnssecMode, "dnssec", "", "DNSSEC import mode: preserve")
+	}
 	_ = fs.Parse(args[1:])
 	rest := fs.Args()
 	switch args[0] {
@@ -724,7 +728,11 @@ func handleAdminZones(args []string) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		mustAdminRequest(*opts, http.MethodPost, "/api/zones/"+rest[0]+"/import", string(data), "text/dns")
+		path := "/api/zones/" + rest[0] + "/import"
+		if dnssecMode != "" {
+			path += "?dnssec=" + dnssecMode
+		}
+		mustAdminRequest(*opts, http.MethodPost, path, string(data), "text/dns")
 	default:
 		printZonesUsage()
 		os.Exit(1)
@@ -736,12 +744,13 @@ func printZonesUsage() {
   go53ctl zones list [--limit N] [--offset N] [--socket PATH|--api URL]
   go53ctl zones delete ZONE [--socket PATH|--api URL]
   go53ctl zones export ZONE [--socket PATH|--api URL]
-  go53ctl zones import ZONE FILE [--socket PATH|--api URL]
+  go53ctl zones import ZONE FILE [--dnssec preserve] [--socket PATH|--api URL]
 
 Examples:
   go53ctl zones list --limit 50
   go53ctl zones export example.com. > example.com.zone
-  go53ctl zones import example.com. example.com.zone`)
+  go53ctl zones import example.com. example.com.zone
+  go53ctl zones import example.com. signed.zone --dnssec preserve`)
 }
 
 func handleAdminRecords(args []string) {
@@ -889,6 +898,10 @@ func handleAdminDNSKeys(args []string) {
 		os.Exit(1)
 	}
 	fs, opts := newAdminFlagSet("dnskeys "+args[0], false)
+	keyFile := ""
+	if args[0] == "import-private" {
+		fs.StringVar(&keyFile, "key-file", "", "go53 private-key import JSON file")
+	}
 	_ = fs.Parse(args[1:])
 	rest := fs.Args()
 	switch args[0] {
@@ -907,6 +920,19 @@ func handleAdminDNSKeys(args []string) {
 			body = fmt.Sprintf(`{"zone":%q,"role":%q,"algorithm":%q}`, rest[0], rest[1], rest[2])
 		}
 		mustAdminRequest(*opts, http.MethodPost, "/api/dnskeys/rollover", body, "application/json")
+	case "import-private":
+		if keyFile == "" && len(rest) > 0 {
+			keyFile = rest[0]
+		}
+		if keyFile == "" {
+			printDNSKeysUsage()
+			os.Exit(1)
+		}
+		data, err := os.ReadFile(keyFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		mustAdminRequest(*opts, http.MethodPost, "/api/dnskeys/import-private", string(data), "application/json")
 	case "lifecycle":
 		requireArgs(rest, 2, printDNSKeysUsage)
 		mustAdminRequest(*opts, http.MethodPatch, "/api/dnskeys/"+rest[0]+"/lifecycle", rest[1], "application/json")
@@ -940,6 +966,7 @@ func printDNSKeysUsage() {
   go53ctl dnskeys create ZONE
   go53ctl dnskeys rollover JSON
   go53ctl dnskeys rollover ZONE ROLE ALGORITHM
+  go53ctl dnskeys import-private --key-file FILE
   go53ctl dnskeys lifecycle KEYID JSON
   go53ctl dnskeys retire KEYID [REMOVE_AFTER_DAYS]
   go53ctl dnskeys revoke KEYID [REMOVE_AFTER_DAYS]
