@@ -1,3 +1,7 @@
+## 0.77.3 (June 10, 2026)
+  - fix(dnssec): correct ECDSA signing, full re-sign on key change, TXT chunking; add zone takeover tooling
+  - Updated podman quadliet install script
+
 ## 0.77.2 (June 09, 2026)
   - Feature key import using go53 key format with exporter tools for powerdns
   - Added DNSSEC key support matrix
