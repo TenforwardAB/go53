@@ -1,3 +1,8 @@
+## 0.77.4 (June 10, 2026)
+  - fix(feature) Added x-auth-key api authentaication and config for x-auth
+  - Added (docs) Updated documentation for DNSSEC management and technical details
+  - Release Update
+
 ## 0.77.3 (June 10, 2026)
   - fix(dnssec): correct ECDSA signing, full re-sign on key change, TXT chunking; add zone takeover tooling
   - Updated podman quadliet install script
