@@ -28,6 +28,14 @@ type MerkleLeaf struct {
 	Hash   string `json:"hash"`
 }
 
+type MerkleRecord struct {
+	Entity string `json:"entity"`
+	Zone   string `json:"zone"`
+	RRType string `json:"rrtype"`
+	Name   string `json:"name"`
+	Value  any    `json:"value"`
+}
+
 type zoneMerkleTree struct {
 	Zone     string
 	Root     string
@@ -98,6 +106,41 @@ func (s *Service) merkleZoneLeaves(zone string, prefixes []string) (map[string]M
 
 func (s *Service) MerkleZoneLeaves(zone string, prefixes []string) (map[string]MerkleLeaf, error) {
 	return s.merkleZoneLeaves(zone, prefixes)
+}
+
+func (s *Service) merkleZoneRecords(zone string, entities []string) (map[string]MerkleRecord, error) {
+	if s == nil || s.store == nil {
+		return map[string]MerkleRecord{}, nil
+	}
+	wanted := map[string]bool{}
+	for _, entity := range entities {
+		entity = strings.TrimSpace(entity)
+		if entity != "" {
+			wanted[entity] = true
+		}
+	}
+	out := map[string]MerkleRecord{}
+	snapshot := s.store.ZoneRecordsSnapshot(zone)
+	for rrtype, names := range snapshot {
+		for name, value := range names {
+			entity := entityKey(zone, rrtype, name)
+			if len(wanted) > 0 && !wanted[entity] {
+				continue
+			}
+			out[entity] = MerkleRecord{
+				Entity: entity,
+				Zone:   zone,
+				RRType: strings.ToUpper(strings.TrimSpace(rrtype)),
+				Name:   strings.ToLower(strings.TrimSpace(name)),
+				Value:  value,
+			}
+		}
+	}
+	return out, nil
+}
+
+func (s *Service) MerkleZoneRecords(zone string, entities []string) (map[string]MerkleRecord, error) {
+	return s.merkleZoneRecords(zone, entities)
 }
 
 func (s *Service) merkleZoneTree(zone string) (zoneMerkleTree, error) {

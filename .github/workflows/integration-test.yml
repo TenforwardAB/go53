@@ -52,19 +52,31 @@ jobs:
 
           echo "GO53_PID=$!" >> "$GITHUB_ENV"
 
-          # Wait for API to be ready (up to 15 s).
-          for i in $(seq 1 75); do
-            curl -sf http://127.0.0.1:8053/api/config >/dev/null 2>&1 && break
-            sleep 0.2
-          done
-          curl -sf http://127.0.0.1:8053/api/config >/dev/null || { echo "API never came up"; exit 1; }
-
-          # Wait for admin socket.
+          # Wait for admin socket. The TCP API defaults to auth.mode=disabled, so
+          # readiness and test setup must use the local filesystem-gated socket first.
           for i in $(seq 1 50); do
             [ -S /tmp/go53-run/admin.sock ] && break
             sleep 0.2
           done
           [ -S /tmp/go53-run/admin.sock ] || { echo "Admin socket never appeared"; exit 1; }
+
+          for i in $(seq 1 75); do
+            GO53_ADMIN_SOCKET=/tmp/go53-run/admin.sock /tmp/go53ctl api GET /api/config >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          GO53_ADMIN_SOCKET=/tmp/go53-run/admin.sock /tmp/go53ctl api GET /api/config >/dev/null \
+            || { echo "Admin socket API never came up"; exit 1; }
+
+          # Open the TCP API for the integration tests that intentionally exercise it.
+          GO53_ADMIN_SOCKET=/tmp/go53-run/admin.sock /tmp/go53ctl api PATCH /api/config \
+            '{"auth":{"mode":"none"}}' || { echo "Failed to enable TCP API for tests"; exit 1; }
+
+          # Wait for TCP API to be ready (up to 15 s).
+          for i in $(seq 1 75); do
+            curl -sf http://127.0.0.1:8053/api/config >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -sf http://127.0.0.1:8053/api/config >/dev/null || { echo "TCP API never came up"; exit 1; }
 
           echo "Server and admin socket ready."
 

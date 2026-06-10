@@ -58,3 +58,19 @@ func TestCompleteJoinClaimsDoesNotInventLoopbackSyncEndpoint(t *testing.T) {
 		t.Fatalf("JoinSyncEndpoint = %q, want empty", claims.JoinSyncEndpoint)
 	}
 }
+
+func TestApplyIssuerSyncEndpointOverride(t *testing.T) {
+	claims := clusterInviteClaims{
+		Issuer: "node-a",
+		Nodes: map[string]clusterNode{
+			"node-a": {SyncEndpoint: "tls://127.0.0.1:53530", PublicKey: "pub-a"},
+		},
+	}
+
+	if err := applyIssuerSyncEndpointOverride(&claims, "tls://95.111.210.11:53530"); err != nil {
+		t.Fatalf("applyIssuerSyncEndpointOverride: %v", err)
+	}
+	if got, want := claims.Nodes["node-a"].SyncEndpoint, "tls://95.111.210.11:53530"; got != want {
+		t.Fatalf("issuer SyncEndpoint = %q, want %q", got, want)
+	}
+}

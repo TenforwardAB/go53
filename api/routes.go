@@ -89,6 +89,8 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 	r.HandleFunc("/api/distributed/merkle/branches", handlers.GetDistributedMerkleBranchesHandler).Methods("GET")
 	r.HandleFunc("/api/distributed/merkle/leaves", handlers.PostDistributedMerkleLeavesHandler).Methods("POST")
 	r.HandleFunc("/api/distributed/merkle/repair-events", handlers.PostDistributedMerkleRepairEventsHandler).Methods("POST")
+	r.HandleFunc("/api/distributed/merkle/records", handlers.PostDistributedMerkleRecordsHandler).Methods("POST")
+	r.HandleFunc("/api/distributed/dnssec-keys", handlers.PostDistributedDNSSECKeysHandler).Methods("POST")
 	r.HandleFunc("/api/distributed/invites", handlers.PostDistributedInviteHandler).Methods("POST")
 	r.HandleFunc("/api/distributed/invites/{jti}/consume", handlers.PostDistributedInviteConsumeHandler).Methods("POST")
 	r.HandleFunc("/api/distributed/join-requests", handlers.GetDistributedJoinRequestsHandler).Methods("GET")

@@ -753,13 +753,13 @@ go53ctl zones import example.com. example.com.unsigned.zone</code></pre>
           <tbody>
             <tr><td>Zone records</td><td>Record add/delete events replicate per RRset entity. SOA serial changes are published as SOA events.</td></tr>
             <tr><td>TSIG keys</td><td>TSIG add/update/delete events persist to the peer and refresh the in-memory TSIG cache.</td></tr>
-            <tr><td>DNSSEC keys</td><td>DNSSEC key create/update/delete events persist to the peer, refresh the DNSSEC key cache, and refresh zone DNSSEC key material when applicable.</td></tr>
-            <tr><td>Live config</td><td>Non-distributed live config can replicate. The <code>distributed</code> block itself is stripped so a peer does not overwrite its own identity, private key, peers, or sync listener.</td></tr>
-            <tr><td>Integrity repair</td><td>Periodic sync compares vectors, then Merkle roots per zone. Mismatched branches are narrowed to leaves and repaired from latest signed events.</td></tr>
+            <tr><td>DNSSEC keys</td><td>DNSSEC key create/update/delete events persist to the peer, refresh the DNSSEC key cache, and refresh zone DNSSEC key material when applicable. Repair can also bootstrap pre-existing KSK/ZSK private key material when no historical event exists.</td></tr>
+            <tr><td>Live config</td><td>Non-distributed live config can replicate. Distributed cluster membership (<code>peers</code> and <code>peer_public_keys</code>) can replicate, while node-local distributed identity, private key, listener, timing, and transport settings are stripped.</td></tr>
+            <tr><td>Integrity repair</td><td>Periodic sync compares vectors, then Merkle roots per zone. Mismatched branches are narrowed to leaves and repaired from latest signed events, with current-record and DNSSEC-key snapshot fallback for pre-existing data that has no event history.</td></tr>
           </tbody>
         </table>
         <h3>Frame Protocol</h3>
-        <p>The socket transport uses <code>HELLO</code>, <code>VECTOR_REQUEST</code>/<code>VECTOR</code>, <code>EVENT</code>/<code>ACK</code>, <code>EVENTS_REQUEST</code>/<code>EVENTS</code>, and Merkle frames for roots, branches, leaves, and repair events. <code>HELLO</code> is signed with the node Ed25519 private key. Event payloads are also Ed25519 signed.</p>
+        <p>The socket transport uses <code>HELLO</code>, <code>VECTOR_REQUEST</code>/<code>VECTOR</code>, <code>EVENT</code>/<code>ACK</code>, <code>EVENTS_REQUEST</code>/<code>EVENTS</code>, Merkle frames for roots, branches, leaves, repair events, and current-record fallback, plus DNSSEC-key snapshot frames for onboarding repair. <code>HELLO</code> is signed with the node Ed25519 private key. Event payloads are also Ed25519 signed.</p>
         <h3>Required Ports</h3>
         <p>Each node needs its DNS listener, API listener, and distributed sync listener. The API is used for administration and discovery. Peer-to-peer replication uses <code>distributed.sync_bind_host</code> and <code>distributed.sync_port</code>.</p>
         <table>
@@ -984,7 +984,8 @@ go53ctl api PATCH /api/config '{"default_ttl":120}'</code></pre>
         <p>For provisioned workflows, the joining node identity and sync endpoint can be embedded when the invite is created:</p>
         <pre><code>go53ctl cluster invite \
   --join-node-id node-b \
-  --join-sync-endpoint tls://10.0.0.11:53530</code></pre>
+  --join-sync-endpoint tls://10.0.0.11:53530 \
+  --issuer-sync-endpoint tls://10.0.0.10:53530</code></pre>
         <table>
           <thead>
             <tr>
@@ -997,6 +998,7 @@ go53ctl api PATCH /api/config '{"default_ttl":120}'</code></pre>
             <tr><td><code>--api</code></td><td>Optional TCP API base URL for controlled management networks. Overrides <code>--socket</code>.</td></tr>
             <tr><td><code>--issuer-node</code></td><td>Node ID that signs the invite. Defaults from discovery.</td></tr>
             <tr><td><code>--issuer-private-key</code></td><td>Base64 Ed25519 private key. Defaults from the issuer live config.</td></tr>
+            <tr><td><code>--issuer-sync-endpoint</code></td><td>Public distributed sync endpoint for the issuer node. Use this when discovery would otherwise advertise a bind-local value such as <code>tls://127.0.0.1:53530</code>.</td></tr>
             <tr><td><code>--cluster-id</code></td><td>Stable cluster identifier embedded in the token. Defaults to the issuer node ID.</td></tr>
             <tr><td><code>--join-node-id</code></td><td>Optional node ID to configure on the joining node. If omitted, <code>cluster join</code> fills it from local config/discovery or generates one.</td></tr>
             <tr><td><code>--join-sync-endpoint</code></td><td>Optional distributed sync endpoint for the joining node. If omitted, <code>cluster join</code> uses <code>--sync-endpoint</code> or local discovery.</td></tr>
@@ -1034,6 +1036,7 @@ go53ctl cluster approve node-b</code></pre>
             <tr><td><code>--token</code></td><td>JWT invite produced by <code>go53ctl cluster invite</code>.</td></tr>
             <tr><td><code>--socket</code></td><td>Local Unix admin socket. Defaults from <code>GO53_ADMIN_SOCKET</code> or <code>/run/go53/admin.sock</code>.</td></tr>
             <tr><td><code>--api</code></td><td>Optional TCP API base URL for controlled management networks. Overrides <code>--socket</code>.</td></tr>
+            <tr><td><code>--issuer-sync-endpoint</code></td><td>Override the issuer sync endpoint embedded in the invite token. Useful when an existing invite contains <code>127.0.0.1</code> from local discovery.</td></tr>
             <tr><td><code>--sync-endpoint</code></td><td>Advertised distributed sync endpoint for the joining node. Required when the local discovery endpoint is not reachable by existing nodes.</td></tr>
             <tr><td><code>--auto-accept</code></td><td>Ask the issuer to approve immediately. Use only when the invite token is handled as a join capability.</td></tr>
             <tr><td><code>--no-register</code></td><td>Skip self-registration over the issuer sync endpoint and use manual <code>cluster accept</code> instead.</td></tr>
@@ -1120,6 +1123,8 @@ curl -X DELETE http://127.0.0.1:8053/api/tsig/transfer-key.</code></pre>
             <tr><td><code>GET</code></td><td><code>/api/distributed/merkle/branches?zone=example.com.</code></td><td>Debug/fallback endpoint for one zone's Merkle branches.</td></tr>
             <tr><td><code>POST</code></td><td><code>/api/distributed/merkle/leaves</code></td><td>Debug/fallback endpoint for Merkle leaves. Body fields: <code>zone</code>, <code>prefixes</code>.</td></tr>
             <tr><td><code>POST</code></td><td><code>/api/distributed/merkle/repair-events</code></td><td>Debug/fallback endpoint returning latest signed events for requested entities.</td></tr>
+            <tr><td><code>POST</code></td><td><code>/api/distributed/merkle/records</code></td><td>Debug/fallback endpoint returning current record snapshots for requested entities when no historical event exists.</td></tr>
+            <tr><td><code>POST</code></td><td><code>/api/distributed/dnssec-keys</code></td><td>Debug/fallback endpoint returning current DNSSEC key snapshots, including private key material, for onboarding repair.</td></tr>
             <tr><td><code>POST</code></td><td><code>/api/distributed/invites</code></td><td>Stores a cluster invite record in the running node's persistence backend.</td></tr>
             <tr><td><code>POST</code></td><td><code>/api/distributed/invites/{jti}/consume</code></td><td>Consumes one allowed use for a stored cluster invite.</td></tr>
           </tbody>
@@ -1140,7 +1145,7 @@ curl -X DELETE http://127.0.0.1:8053/api/tsig/transfer-key.</code></pre>
           <li>If DS, CDS, or CDNSKEY output is empty, verify that the zone has an active KSK and that key metadata is loaded.</li>
           <li>If distributed peers do not connect, check that both sides have each other's <code>node_id</code> in <code>peer_public_keys</code>, use matching <code>tls://</code> peer endpoints, and can reach the sync port.</li>
           <li>If TLS handshakes fail, compare <code>public_key</code> and <code>tls_public_key_pin</code> from <code>/.well-known/go53-node.json</code> with the configured peer public key.</li>
-          <li>If vectors match but zone data differs, check <code>/api/distributed/merkle/roots</code>; the background sync loop should repair differing branches from signed events.</li>
+          <li>If vectors match but zone data differs, check <code>/api/distributed/merkle/roots</code>; the background sync loop should repair differing branches from signed events or current-record fallback for pre-existing data.</li>
           <li>If the TCP API returns <code>503</code>, check whether <code>auth.mode</code> is <code>disabled</code>. Use the local admin socket to change it.</li>
           <li>If the TCP API returns <code>403</code> with <code>auth.mode=x-auth-key</code>, verify that <code>auth.x_auth_key</code> is a valid base62 key of at least 48 characters and that clients send <code>X-Auth-Key</code>.</li>
         </ul>

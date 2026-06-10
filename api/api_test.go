@@ -355,6 +355,8 @@ func TestRouterAllManagementRoutes(t *testing.T) {
 	expectRoute(t, router, http.MethodGet, "/api/distributed/merkle/branches?zone=route.test.", "", http.StatusOK)
 	expectRoute(t, router, http.MethodPost, "/api/distributed/merkle/leaves", `{"zone":"route.test.","prefixes":[]}`, http.StatusOK)
 	expectRoute(t, router, http.MethodPost, "/api/distributed/merkle/repair-events", `{"entities":[]}`, http.StatusOK)
+	expectRoute(t, router, http.MethodPost, "/api/distributed/merkle/records", `{"zone":"route.test.","entities":[]}`, http.StatusOK)
+	expectRoute(t, router, http.MethodPost, "/api/distributed/dnssec-keys", `{"zone":"route.test."}`, http.StatusOK)
 	expectRoute(t, router, http.MethodPost, "/api/distributed/invites", `{"jti":"route-invite","usage_count":1}`, http.StatusNoContent)
 	expectRoute(t, router, http.MethodPost, "/api/distributed/invites/route-invite/consume", "", http.StatusOK)
 	expectRoute(t, router, http.MethodGet, "/api/distributed/join-requests", "", http.StatusOK)

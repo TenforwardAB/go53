@@ -159,31 +159,33 @@ type jwtHeader struct {
 }
 
 type clusterInviteOptions struct {
-	Nodes            repeatedFlag
-	Socket           string
-	APIEndpoint      string
-	IssuerNode       string
-	IssuerPrivateKey string
-	ClusterID        string
-	JoinNodeID       string
-	JoinSyncEndpoint string
-	TTL              string
-	Transport        string
-	SyncBindHost     string
-	SyncPort         string
-	PushTimeoutMs    int
-	ResyncIntervalS  int
-	UsageCount       int
+	Nodes              repeatedFlag
+	Socket             string
+	APIEndpoint        string
+	IssuerNode         string
+	IssuerPrivateKey   string
+	IssuerSyncEndpoint string
+	ClusterID          string
+	JoinNodeID         string
+	JoinSyncEndpoint   string
+	TTL                string
+	Transport          string
+	SyncBindHost       string
+	SyncPort           string
+	PushTimeoutMs      int
+	ResyncIntervalS    int
+	UsageCount         int
 }
 
 type clusterJoinOptions struct {
-	Token        string
-	Socket       string
-	APIEndpoint  string
-	SyncEndpoint string
-	DryRun       bool
-	NoRegister   bool
-	AutoAccept   bool
+	Token              string
+	Socket             string
+	APIEndpoint        string
+	IssuerSyncEndpoint string
+	SyncEndpoint       string
+	DryRun             bool
+	NoRegister         bool
+	AutoAccept         bool
 }
 
 type clusterAcceptOptions struct {
@@ -1173,6 +1175,7 @@ cluster invite flags:
   --api                 TCP API base URL; overrides --socket
   --issuer-node         Existing node_id that signs the invite
   --issuer-private-key  Base64 Ed25519 private key for issuer node
+  --issuer-sync-endpoint Public distributed sync endpoint for the issuer node
   --cluster-id          Stable cluster identifier
   --join-node-id        Optional node ID for the new node; otherwise set during join
   --join-sync-endpoint  Optional distributed sync endpoint for the new node; otherwise set during join
@@ -1188,6 +1191,7 @@ cluster join flags:
   --token               JWT invite token
   --socket              Local joining-node Unix admin socket, default from GO53_ADMIN_SOCKET or /run/go53/admin.sock
   --api                 TCP API base URL; overrides --socket
+  --issuer-sync-endpoint Override issuer sync endpoint from the invite token
   --sync-endpoint       Advertised sync endpoint for this joining node, default from token or local discovery
   --auto-accept         Ask issuer to approve immediately instead of storing a pending request
   --no-register         Do not self-register with the issuer sync endpoint after local join
@@ -1231,6 +1235,7 @@ func parseClusterInviteOptions(args []string) clusterInviteOptions {
 	fs.StringVar(&opts.APIEndpoint, "api", "", "TCP API base URL; overrides --socket")
 	fs.StringVar(&opts.IssuerNode, "issuer-node", "", "Existing node_id that signs the invite")
 	fs.StringVar(&opts.IssuerPrivateKey, "issuer-private-key", "", "Base64 Ed25519 private key for issuer node")
+	fs.StringVar(&opts.IssuerSyncEndpoint, "issuer-sync-endpoint", "", "Public distributed sync endpoint for issuer node")
 	fs.StringVar(&opts.ClusterID, "cluster-id", "", "Stable cluster identifier")
 	fs.StringVar(&opts.JoinNodeID, "join-node-id", "", "Node ID for the new node")
 	fs.StringVar(&opts.JoinSyncEndpoint, "join-sync-endpoint", "", "Distributed sync endpoint for the new node")
@@ -1312,6 +1317,9 @@ func buildInviteClaims(opts clusterInviteOptions, localConfig map[string]any) (c
 	if err := populateInviteNodes(&claims, opts.Nodes, localConfig); err != nil {
 		return clusterInviteClaims{}, nil, err
 	}
+	if err := applyIssuerSyncEndpointOverride(&claims, opts.IssuerSyncEndpoint); err != nil {
+		return clusterInviteClaims{}, nil, err
+	}
 	if err := validateInviteClaims(claims, issuerPublicKey); err != nil {
 		return clusterInviteClaims{}, nil, err
 	}
@@ -1372,6 +1380,20 @@ func addConfiguredPeerKeys(claims *clusterInviteClaims, localConfig map[string]a
 		}
 		claims.Nodes[nodeID] = clusterNode{PublicKey: publicKey}
 	}
+}
+
+func applyIssuerSyncEndpointOverride(claims *clusterInviteClaims, endpoint string) error {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return nil
+	}
+	node, ok := claims.Nodes[claims.Issuer]
+	if !ok {
+		return fmt.Errorf("issuer-node %q must be included before overriding issuer sync endpoint", claims.Issuer)
+	}
+	node.SyncEndpoint = endpoint
+	claims.Nodes[claims.Issuer] = node
+	return nil
 }
 
 func validateInviteClaims(claims clusterInviteClaims, issuerPublicKey string) error {
@@ -1447,6 +1469,7 @@ func parseClusterJoinOptions(args []string) clusterJoinOptions {
 	fs.StringVar(&opts.Token, "token", "", "JWT invite token")
 	fs.StringVar(&opts.Socket, "socket", defaultAdminSocket(), "Local joining-node Unix admin socket")
 	fs.StringVar(&opts.APIEndpoint, "api", "", "TCP API base URL; overrides --socket")
+	fs.StringVar(&opts.IssuerSyncEndpoint, "issuer-sync-endpoint", "", "Override issuer sync endpoint from invite token")
 	fs.StringVar(&opts.SyncEndpoint, "sync-endpoint", "", "Advertised sync endpoint for this joining node")
 	fs.BoolVar(&opts.AutoAccept, "auto-accept", false, "Ask issuer to approve immediately instead of storing a pending request")
 	fs.BoolVar(&opts.NoRegister, "no-register", false, "Do not self-register with issuer sync endpoint")
@@ -1469,6 +1492,9 @@ func buildJoinPlan(opts clusterJoinOptions, claims clusterInviteClaims) (joinPla
 	localConfig, _ := fetchLiveConfig(opts.APIEndpoint)
 	localInfo, _ := fetchNodeDiscovery(opts.APIEndpoint)
 	claims = completeJoinClaims(claims, opts.APIEndpoint, opts.SyncEndpoint, localConfig, localInfo)
+	if err := applyIssuerSyncEndpointOverride(&claims, opts.IssuerSyncEndpoint); err != nil {
+		return joinPlan{}, err
+	}
 	if strings.TrimSpace(claims.JoinSyncEndpoint) == "" {
 		return joinPlan{}, errors.New("missing joining node sync endpoint; pass --sync-endpoint tls://HOST:PORT")
 	}
