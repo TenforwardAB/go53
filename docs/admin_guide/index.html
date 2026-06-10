@@ -534,7 +534,7 @@ curl -X POST http://127.0.0.1:8053/api/zones/example.com./records/A \
 
       <section id="runtime">
         <h2>Runtime Config</h2>
-        <p>Runtime config is loaded from storage at startup. Use <code>GET /api/config</code> to inspect the active values and <code>PATCH /api/config</code> to update fields.</p>
+        <p>Runtime config is loaded from storage at startup. Use <code>GET /api/config</code> to inspect the active values and <code>PATCH /api/config</code> to update fields. Secret-bearing fields such as <code>auth.x_auth_key</code> are not returned by <code>GET /api/config</code> and must be managed through the local admin socket.</p>
         <pre><code>curl http://127.0.0.1:8053/api/config
 
 curl -X PATCH http://127.0.0.1:8053/api/config \
@@ -562,6 +562,8 @@ curl -X PATCH http://127.0.0.1:8053/api/config \
             <tr><td><code>allow_axfr</code></td><td><code>false</code></td><td>Enables transfer responses when the client also passes the allowlist and TSIG policy.</td></tr>
             <tr><td><code>default_ns</code></td><td><code>ns1.go53.local.</code></td><td>Default nameserver used by helper logic when a zone does not specify one.</td></tr>
             <tr><td><code>enforce_tsig</code></td><td><code>false</code></td><td>Requires valid TSIG for transfers when enabled.</td></tr>
+            <tr><td><code>auth.mode</code></td><td><code>disabled</code></td><td>Controls TCP API access. <code>disabled</code> returns <code>503</code>, <code>none</code> allows unauthenticated TCP API access, <code>x-auth-key</code> requires a static key, and <code>oidc</code> is reserved.</td></tr>
+            <tr><td><code>auth.x_auth_key</code></td><td><code>""</code></td><td>Static base62 API key for <code>auth.mode=x-auth-key</code>. It must match <code>^[A-Za-z0-9]{48,}$</code>. If unset or invalid, the TCP API returns <code>403</code>.</td></tr>
             <tr><td><code>primary.notify_debounce_ms</code></td><td><code>2000</code></td><td>Delay used to coalesce NOTIFY after record changes.</td></tr>
             <tr><td><code>primary.ip</code></td><td><code>127.0.0.1</code></td><td>Primary DNS address used by secondary nodes.</td></tr>
             <tr><td><code>primary.port</code></td><td><code>53</code></td><td>Primary DNS port used by secondary nodes.</td></tr>
@@ -586,9 +588,6 @@ curl -X PATCH http://127.0.0.1:8053/api/config \
       <section id="records">
         <h2>Zones And Records</h2>
         <p>Records are created through <code>POST /api/zones/{zone}/records/{rrtype}</code>. For all normal types, the JSON body must contain <code>name</code>. The <code>ttl</code> field is optional. SOA records use the zone apex as the owner name and do not require <code>name</code>.</p>
-        <div class="warning">
-          <p><strong>Current behavior:</strong> <code>GET /api/zones</code> expects an authenticated user context, but the router currently does not enable <code>AuthMiddleware</code>. Until auth routing is wired in, this endpoint returns <code>401</code>.</p>
-        </div>
         <table>
           <thead>
             <tr>
@@ -911,6 +910,16 @@ go53ctl config get
 # Change a setting
 go53ctl config patch '{"default_ttl":120}'
 
+# Generate and store a 48-character base62 API key locally
+go53ctl config set xauth_key --generate
+
+# Inspect or set the key explicitly over the local admin socket
+go53ctl config get xauth_key
+go53ctl config set xauth_key abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUV
+
+# Enable x-auth-key on the TCP API after a valid key exists
+go53ctl config patch '{"auth":{"mode":"x-auth-key"}}'
+
 # List zones and records
 go53ctl zones list --limit 50
 go53ctl records list example.com.
@@ -942,6 +951,7 @@ go53ctl config get --api http://127.0.0.1:8053
 # Raw API passthrough remains available
 go53ctl api GET /api/config
 go53ctl api PATCH /api/config '{"default_ttl":120}'</code></pre>
+        <p>When <code>auth.mode=x-auth-key</code>, TCP clients must send <code>X-Auth-Key: VALUE</code>. If the key is unset, shorter than 48 characters, or contains characters outside <code>A-Z</code>, <code>a-z</code>, and <code>0-9</code>, the TCP API returns <code>403</code>. The key cannot be read or changed through <code>GET/PATCH /api/config</code>; use <code>go53ctl config get/set xauth_key</code> over the local admin socket.</p>
         <table>
           <thead>
             <tr>
@@ -1080,7 +1090,9 @@ curl -X DELETE http://127.0.0.1:8053/api/tsig/transfer-key.</code></pre>
           <tbody>
             <tr><td><code>GET</code></td><td><code>/api/config</code></td><td>Read live runtime config.</td></tr>
             <tr><td><code>PATCH</code></td><td><code>/api/config</code></td><td>Patch live runtime config.</td></tr>
-            <tr><td><code>GET</code></td><td><code>/api/zones</code></td><td>Currently requires auth context, but auth middleware is not enabled in the router.</td></tr>
+            <tr><td><code>GET</code></td><td><code>/api/config/auth/x-auth-key</code></td><td>Read the static API key. Local admin socket only; TCP returns <code>403</code>.</td></tr>
+            <tr><td><code>PATCH</code></td><td><code>/api/config/auth/x-auth-key</code></td><td>Set the static API key. Local admin socket only; key must be base62 and at least 48 characters.</td></tr>
+            <tr><td><code>GET</code></td><td><code>/api/zones</code></td><td>List loaded zones.</td></tr>
             <tr><td><code>POST</code></td><td><code>/api/zones/{zone}/records/{rrtype}</code></td><td>Add a record. Disabled in secondary mode.</td></tr>
             <tr><td><code>GET</code></td><td><code>/api/zones/{zone}/records/{rrtype}/{name}</code></td><td>Read one RRset owner name.</td></tr>
             <tr><td><code>DELETE</code></td><td><code>/api/zones/{zone}/records/{rrtype}/{name}</code></td><td>Delete an RRset or selected value.</td></tr>
@@ -1129,7 +1141,8 @@ curl -X DELETE http://127.0.0.1:8053/api/tsig/transfer-key.</code></pre>
           <li>If distributed peers do not connect, check that both sides have each other's <code>node_id</code> in <code>peer_public_keys</code>, use matching <code>tls://</code> peer endpoints, and can reach the sync port.</li>
           <li>If TLS handshakes fail, compare <code>public_key</code> and <code>tls_public_key_pin</code> from <code>/.well-known/go53-node.json</code> with the configured peer public key.</li>
           <li>If vectors match but zone data differs, check <code>/api/distributed/merkle/roots</code>; the background sync loop should repair differing branches from signed events.</li>
-          <li>If <code>GET /api/zones</code> returns <code>401</code>, that matches current router behavior until auth middleware is enabled or the handler is adjusted.</li>
+          <li>If the TCP API returns <code>503</code>, check whether <code>auth.mode</code> is <code>disabled</code>. Use the local admin socket to change it.</li>
+          <li>If the TCP API returns <code>403</code> with <code>auth.mode=x-auth-key</code>, verify that <code>auth.x_auth_key</code> is a valid base62 key of at least 48 characters and that clients send <code>X-Auth-Key</code>.</li>
         </ul>
       </section>
 

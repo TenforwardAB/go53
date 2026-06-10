@@ -7,12 +7,15 @@ import (
 	"log"
 	"os"
 	"reflect"
+	"regexp"
 	"sync"
 
 	"go53/storage"
 
 	"github.com/joho/godotenv"
 )
+
+var xAuthKeyRe = regexp.MustCompile(`^[A-Za-z0-9]{48,}$`)
 
 type BaseConfig struct {
 	BindHost       string
@@ -69,7 +72,7 @@ type DistributedConfig struct {
 
 type AuthConfig struct {
 	Mode         string `json:"mode"`          // none/x-auth-key/oidc
-	XAuthKey     string `json:"x_auth_key"`    // base62, minimum 32 characters when enabled
+	XAuthKey     string `json:"x_auth_key"`    // base62, minimum 48 characters when enabled
 	OIDCIssuer   string `json:"oidc_issuer"`   // future OIDC issuer URL
 	OIDCAudience string `json:"oidc_audience"` // future OIDC audience/client id
 	OIDCJWKSURL  string `json:"oidc_jwks_url"` // future JWKS endpoint override
@@ -401,6 +404,10 @@ func clonePeerPublicKeys(in map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+func ValidXAuthKey(key string) bool {
+	return xAuthKeyRe.MatchString(key)
 }
 
 func MustEnv(key, fallback string) string {

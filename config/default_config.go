@@ -56,7 +56,7 @@ var DefaultLiveConfig = LiveConfig{
 	},
 
 	Auth: AuthConfig{
-		Mode:         "none",
+		Mode:         "disabled",
 		XAuthKey:     "",
 		OIDCIssuer:   "",
 		OIDCAudience: "",

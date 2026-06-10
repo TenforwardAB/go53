@@ -41,6 +41,8 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 
 	r.HandleFunc("/api/config", handlers.UpdateLiveConfigHandler).Methods("PATCH")
 	r.HandleFunc("/api/config", handlers.GetLiveConfigHandler).Methods("GET")
+	r.HandleFunc("/api/config/auth/x-auth-key", localAdminOnly(handlers.GetXAuthKeyHandler)).Methods("GET")
+	r.HandleFunc("/api/config/auth/x-auth-key", localAdminOnly(handlers.SetXAuthKeyHandler)).Methods("PUT", "PATCH")
 	r.HandleFunc("/.well-known/go53-node.json", handlers.GetWellKnownNodeHandler).Methods("GET")
 
 	r.HandleFunc("/api/zones", handlers.GetZonesHandler).Methods("GET")
@@ -108,6 +110,16 @@ func disableSecondary(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if config.AppConfig.GetLive().Mode == "secondary" {
 			http.Error(w, "Zone/record management is disabled in secondary mode", http.StatusServiceUnavailable)
+			return
+		}
+		handler.ServeHTTP(w, r)
+	}
+}
+
+func localAdminOnly(handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !IsLocalAdmin(r.Context()) {
+			http.Error(w, "local admin socket required", http.StatusForbidden)
 			return
 		}
 		handler.ServeHTTP(w, r)

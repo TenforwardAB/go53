@@ -29,6 +29,8 @@ import (
 
 const jwtAudienceClusterJoin = "go53 cluster join"
 
+const base62 = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
 // defaultAdminSocketPath mirrors the server's default ADMIN_SOCKET. The local admin
 // socket is the break-glass path: it serves the full API gated by filesystem
 // permissions (group go53_admin) instead of API tokens, so it stays usable when the
@@ -676,11 +678,50 @@ func handleAdminConfig(args []string) {
 		os.Exit(1)
 	}
 	fs, opts := newAdminFlagSet("config "+args[0], false)
+	generate := false
+	if args[0] == "set" {
+		fs.BoolVar(&generate, "generate", false, "Generate a new value for supported settings")
+	}
 	_ = fs.Parse(args[1:])
 	rest := fs.Args()
 	switch args[0] {
 	case "get":
-		mustAdminRequest(*opts, http.MethodGet, "/api/config", "", "")
+		if len(rest) == 0 {
+			mustAdminRequest(*opts, http.MethodGet, "/api/config", "", "")
+			return
+		}
+		switch normalizeConfigSetting(rest[0]) {
+		case "xauth_key", "x_auth_key", "auth_xauth_key", "auth_x_auth_key":
+			mustAdminRequest(*opts, http.MethodGet, "/api/config/auth/x-auth-key", "", "")
+		default:
+			log.Fatalf("unsupported config setting %q", rest[0])
+		}
+	case "set":
+		requireArgs(rest, 1, printConfigUsage)
+		switch normalizeConfigSetting(rest[0]) {
+		case "xauth_key", "x_auth_key", "auth_xauth_key", "auth_x_auth_key":
+			value := ""
+			if generate {
+				var err error
+				value, err = generateBase62(48)
+				if err != nil {
+					log.Fatal(err)
+				}
+			} else {
+				requireArgs(rest, 2, printConfigUsage)
+				value = rest[1]
+			}
+			body, err := json.Marshal(map[string]string{"x_auth_key": value})
+			if err != nil {
+				log.Fatal(err)
+			}
+			if _, err := adminRequest(*opts, http.MethodPatch, "/api/config/auth/x-auth-key", string(body), "application/json"); err != nil {
+				log.Fatal(err)
+			}
+			fmt.Println(value)
+		default:
+			log.Fatalf("unsupported config setting %q", rest[0])
+		}
 	case "patch":
 		requireArgs(rest, 1, printConfigUsage)
 		mustAdminRequest(*opts, http.MethodPatch, "/api/config", rest[0], "application/json")
@@ -692,12 +733,34 @@ func handleAdminConfig(args []string) {
 
 func printConfigUsage() {
 	fmt.Println(`Usage:
-  go53ctl config get [--socket PATH|--api URL]
+  go53ctl config get [SETTING] [--socket PATH|--api URL]
+  go53ctl config set SETTING VALUE [--socket PATH|--api URL]
+  go53ctl config set xauth_key --generate [--socket PATH|--api URL]
   go53ctl config patch JSON [--socket PATH|--api URL]
 
 Examples:
   go53ctl config get
+  go53ctl config get xauth_key
+  go53ctl config set xauth_key --generate
   go53ctl config patch '{"auth":{"mode":"none"}}'`)
+}
+
+func normalizeConfigSetting(setting string) string {
+	setting = strings.ToLower(strings.TrimSpace(setting))
+	setting = strings.ReplaceAll(setting, "-", "_")
+	setting = strings.ReplaceAll(setting, ".", "_")
+	return setting
+}
+
+func generateBase62(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	for i := range b {
+		b[i] = base62[b[i]%62]
+	}
+	return string(b), nil
 }
 
 func handleAdminZones(args []string) {

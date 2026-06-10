@@ -8,7 +8,7 @@ info:
     The API is intentionally route-based and mirrors the operations exposed by go53ctl: runtime configuration, zone and RRset management, DNSSEC key lifecycle, TSIG keys, secondary refresh, NOTIFY, catalog-zone status, and distributed cluster repair/onboarding.
 
 
-    Authentication modes are configured through `auth.mode`: `none`, `x-auth-key`, or `oidc`. The current implementation supports `none`; `x-auth-key` and `oidc` are reserved configuration modes for future middleware.
+    Authentication modes are configured through `auth.mode`: `disabled`, `none`, `x-auth-key`, or `oidc`. The default `disabled` mode returns `503` from the TCP API. `none` allows unauthenticated TCP API access. `x-auth-key` requires the `X-Auth-Key` header to match the configured static base62 key. `oidc` is reserved for future middleware. The local Unix admin socket bypasses token authentication and is controlled by filesystem permissions.
 
 
     Large list endpoints use `limit` and `offset`. The server clamps `limit` to the documented maximum so clients should always read `total`, `limit`, and `offset` from the response before fetching the next page.'
@@ -111,7 +111,7 @@ paths:
                       transport: tls
                       sync_port: '53530'
                       peers: tls://10.0.0.12:53530
-      description: Reads the live runtime configuration currently used by go53. Secret-bearing fields may be present because this is an administrative API.
+      description: Reads the live runtime configuration currently used by go53. Secret-bearing fields such as `auth.x_auth_key` are redacted from this response.
     patch:
       tags:
       - Config
@@ -139,7 +139,65 @@ paths:
           description: Configuration updated
         '400':
           $ref: '#/components/responses/BadRequest'
-      description: Applies a partial JSON overlay to the live configuration. Fields not included are left unchanged; nested config sections can be patched independently.
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      description: Applies a partial JSON overlay to the live configuration. Fields not included are left unchanged; nested config sections can be patched independently. `auth.x_auth_key` cannot be set through this route; use the local-admin-only auth-key route.
+  /api/config/auth/x-auth-key:
+    get:
+      tags:
+      - Config
+      summary: Read the configured x-auth-key
+      responses:
+        '200':
+          description: Current x-auth-key state. This route is only available over the local admin socket.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/XAuthKeyConfig'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      description: Returns the stored static API key and whether it is valid for `auth.mode=x-auth-key`. The route requires the trusted local admin socket and returns `403` over the TCP API.
+    patch:
+      tags:
+      - Config
+      summary: Set the x-auth-key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/XAuthKeySetRequest'
+            examples:
+              generated:
+                summary: 48-character base62 key
+                value:
+                  x_auth_key: abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUV
+      responses:
+        '204':
+          description: x-auth-key updated
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      description: Sets the static API key used by `auth.mode=x-auth-key`. The key must match `^[A-Za-z0-9]{48,}$`. This route requires the trusted local admin socket and returns `403` over the TCP API.
+    put:
+      tags:
+      - Config
+      summary: Set the x-auth-key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/XAuthKeySetRequest'
+      responses:
+        '204':
+          description: x-auth-key updated
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      description: Same behavior as `PATCH /api/config/auth/x-auth-key`.
   /api/zones:
     get:
       tags:
@@ -1169,8 +1227,8 @@ components:
     XAuthKey:
       type: apiKey
       in: header
-      name: X-AuthKey
-      description: Reserved for `auth.mode=x-auth-key`; static base62 key, minimum 32 characters.
+      name: X-Auth-Key
+      description: Static base62 key used when `auth.mode=x-auth-key`; minimum 48 characters. `X-AuthKey` is also accepted by the server for compatibility.
     OIDC:
       type: http
       scheme: bearer
@@ -1264,6 +1322,12 @@ components:
   responses:
     BadRequest:
       description: Invalid request.
+      content:
+        text/plain:
+          schema:
+            $ref: '#/components/schemas/ErrorText'
+    Forbidden:
+      description: Forbidden.
       content:
         text/plain:
           schema:
@@ -1465,14 +1529,17 @@ components:
         mode:
           type: string
           enum:
+          - disabled
           - none
           - x-auth-key
           - oidc
-          default: none
-          description: Only `none` is implemented by the current middleware.
+          default: disabled
+          description: '`disabled` returns 503 from the TCP API, `none` allows unauthenticated TCP API access, `x-auth-key` requires `X-Auth-Key`, and `oidc` is reserved.'
         x_auth_key:
           type: string
-          description: Reserved static base62 key, minimum 32 characters when enabled.
+          pattern: '^[A-Za-z0-9]{48,}$'
+          writeOnly: true
+          description: Static base62 key for `auth.mode=x-auth-key`. It is redacted from `GET /api/config` and cannot be set through `PATCH /api/config`; use `/api/config/auth/x-auth-key` over the local admin socket.
         oidc_issuer:
           type: string
           description: Reserved OIDC issuer URL.
@@ -1482,6 +1549,26 @@ components:
         oidc_jwks_url:
           type: string
           description: Reserved JWKS endpoint override.
+    XAuthKeyConfig:
+      type: object
+      properties:
+        x_auth_key:
+          type: string
+          pattern: '^[A-Za-z0-9]{48,}$'
+          description: Stored static API key. This is only returned by the local-admin-only auth-key route.
+        configured:
+          type: boolean
+          description: True when the stored key is valid for `auth.mode=x-auth-key`.
+    XAuthKeySetRequest:
+      type: object
+      required:
+      - x_auth_key
+      properties:
+        x_auth_key:
+          type: string
+          pattern: '^[A-Za-z0-9]{48,}$'
+          minLength: 48
+          description: Static base62 API key to store.
     CatalogStatus:
       type: object
       properties:

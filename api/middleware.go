@@ -18,6 +18,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"strings"
 
@@ -31,9 +32,27 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		switch strings.ToLower(strings.TrimSpace(config.AppConfig.GetLive().Auth.Mode)) {
-		case "", "none":
+		case "", "disabled":
+			http.Error(w, "API not available!", http.StatusServiceUnavailable)
+		case "none":
 			next.ServeHTTP(w, r)
-		case "x-auth-key", "oidc":
+		case "x-auth-key":
+			live := config.AppConfig.GetLive()
+			expected := strings.TrimSpace(live.Auth.XAuthKey)
+			if !config.ValidXAuthKey(expected) {
+				http.Error(w, "x-auth-key is not configured", http.StatusForbidden)
+				return
+			}
+			actual := strings.TrimSpace(r.Header.Get("X-Auth-Key"))
+			if actual == "" {
+				actual = strings.TrimSpace(r.Header.Get("X-AuthKey"))
+			}
+			if subtle.ConstantTimeCompare([]byte(actual), []byte(expected)) != 1 {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		case "oidc":
 			http.Error(w, "authentication mode is not implemented", http.StatusNotImplemented)
 		default:
 			http.Error(w, "invalid authentication mode", http.StatusInternalServerError)

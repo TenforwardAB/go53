@@ -69,6 +69,7 @@ func TestConfigHandlers(t *testing.T) {
 	if live.Mode != "secondary" || live.DefaultTTL != 123 {
 		t.Fatalf("live config = %#v", live)
 	}
+	config.AppConfig.Live.Auth.XAuthKey = strings.Repeat("z", 48)
 
 	getReq := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	getRec := httptest.NewRecorder()
@@ -82,6 +83,9 @@ func TestConfigHandlers(t *testing.T) {
 	}
 	if decoded.Mode != "secondary" || decoded.DefaultTTL != 123 {
 		t.Fatalf("decoded live config = %#v", decoded)
+	}
+	if decoded.Auth.XAuthKey != "" {
+		t.Fatalf("GetLiveConfigHandler exposed x_auth_key = %q", decoded.Auth.XAuthKey)
 	}
 
 	// A present false bool must be applied (a struct-merge would silently drop it).
@@ -108,6 +112,13 @@ func TestConfigHandlers(t *testing.T) {
 	UpdateLiveConfigHandler(badRec, badReq)
 	if badRec.Code != http.StatusBadRequest {
 		t.Fatalf("bad config status = %d", badRec.Code)
+	}
+
+	keyReq := httptest.NewRequest(http.MethodPatch, "/api/config", strings.NewReader(`{"auth":{"x_auth_key":"`+strings.Repeat("a", 48)+`"}}`))
+	keyRec := httptest.NewRecorder()
+	UpdateLiveConfigHandler(keyRec, keyReq)
+	if keyRec.Code != http.StatusForbidden {
+		t.Fatalf("x_auth_key config patch status = %d, want 403", keyRec.Code)
 	}
 }
 

@@ -434,8 +434,51 @@ func TestAuthMiddlewareNoneAllowsRequest(t *testing.T) {
 	}
 }
 
+func TestAuthMiddlewareXAuthKey(t *testing.T) {
+	setupAPITest(t)
+	key := strings.Repeat("a", 48)
+	config.AppConfig.Live.Auth.Mode = "x-auth-key"
+	config.AppConfig.Live.Auth.XAuthKey = key
+
+	handler := api.AuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/probe", nil)
+	req.Header.Set("X-Auth-Key", key)
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("AuthMiddleware x-auth-key valid status = %d body=%q", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/probe", nil)
+	req.Header.Set("X-Auth-Key", "wrong")
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("AuthMiddleware x-auth-key wrong status = %d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAuthMiddlewareXAuthKeyRequiresConfiguredKey(t *testing.T) {
+	setupAPITest(t)
+	config.AppConfig.Live.Auth.Mode = "x-auth-key"
+	config.AppConfig.Live.Auth.XAuthKey = strings.Repeat("a", 47)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/probe", nil)
+	api.AuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler should not be reached")
+	})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("AuthMiddleware short x_auth_key status = %d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAuthMiddlewareFutureModesFailClosed(t *testing.T) {
-	for _, mode := range []string{"x-auth-key", "oidc"} {
+	for _, mode := range []string{"oidc"} {
 		t.Run(mode, func(t *testing.T) {
 			setupAPITest(t)
 			config.AppConfig.Live.Auth.Mode = mode
@@ -528,6 +571,7 @@ func createRolloverKeyViaRouter(t *testing.T, router http.Handler) string {
 
 func TestSocketAPI_GetConfig(t *testing.T) {
 	setupAPITest(t)
+	config.AppConfig.Live.Auth.XAuthKey = strings.Repeat("b", 48)
 	client := newSocketServer(t)
 	base := "http://go53-local"
 
@@ -541,6 +585,42 @@ func TestSocketAPI_GetConfig(t *testing.T) {
 	}
 	if cfg.Mode != "primary" {
 		t.Fatalf("mode = %q, want primary", cfg.Mode)
+	}
+	if cfg.Auth.XAuthKey != "" {
+		t.Fatalf("GET /api/config exposed x_auth_key = %q", cfg.Auth.XAuthKey)
+	}
+}
+
+func TestTCPAPI_XAuthKeyRouteRequiresLocalAdmin(t *testing.T) {
+	setupAPITest(t)
+	srv := newTCPServer(t)
+
+	code, _ := get(t, http.DefaultClient, srv.URL, "/api/config/auth/x-auth-key")
+	if code != http.StatusForbidden {
+		t.Fatalf("TCP GET x-auth-key route = %d, want 403", code)
+	}
+}
+
+func TestSocketAPI_XAuthKeyRoute(t *testing.T) {
+	setupAPITest(t)
+	client := newSocketServer(t)
+	base := "http://go53-local"
+	key := strings.Repeat("c", 48)
+
+	code := patch(t, client, base, "/api/config/auth/x-auth-key", `{"x_auth_key":"`+key+`"}`)
+	if code != http.StatusNoContent {
+		t.Fatalf("socket PATCH x-auth-key = %d, want 204", code)
+	}
+	if config.AppConfig.GetLive().Auth.XAuthKey != key {
+		t.Fatalf("stored x_auth_key = %q, want %q", config.AppConfig.GetLive().Auth.XAuthKey, key)
+	}
+
+	code, body := get(t, client, base, "/api/config/auth/x-auth-key")
+	if code != http.StatusOK {
+		t.Fatalf("socket GET x-auth-key = %d; body: %s", code, body)
+	}
+	if !strings.Contains(string(body), key) || !strings.Contains(string(body), `"configured":true`) {
+		t.Fatalf("socket GET x-auth-key body = %s", body)
 	}
 }
 
