@@ -164,7 +164,9 @@ func TestRRToZoneData(t *testing.T) {
 	if got := zd.AAAA["v6"][0].IP; got != "2001:db8::1" {
 		t.Fatalf("AAAA = %q", got)
 	}
-	if got := zd.TXT["@"][0].Text; got != "hello world" {
+	// DNS character-strings are concatenated without a separator, so
+	// {"hello","world"} round-trips to "helloworld" (not "hello world").
+	if got := zd.TXT["@"][0].Text; got != "helloworld" {
 		t.Fatalf("TXT = %q", got)
 	}
 	if got := zd.SOA.Serial; got != 1 {

@@ -16,6 +16,26 @@ import (
 
 type RRBuilder func(name string, data any) []dns.RR
 
+// chunkTXT splits a TXT/SPF rdata string into DNS character-strings of at most
+// 255 bytes each, as required on the wire. Strings of 255 bytes or less are
+// returned unchanged. Consumers concatenate the character-strings without any
+// separator, so long values (e.g. DKIM keys) round-trip correctly.
+func chunkTXT(s string) []string {
+	const maxLen = 255
+	if len(s) <= maxLen {
+		return []string{s}
+	}
+	out := make([]string, 0, len(s)/maxLen+1)
+	for len(s) > maxLen {
+		out = append(out, s[:maxLen])
+		s = s[maxLen:]
+	}
+	if len(s) > 0 {
+		out = append(out, s)
+	}
+	return out
+}
+
 var RRBuilders = map[string]RRBuilder{
 	"A": func(name string, data any) []dns.RR {
 		var rrs []dns.RR
@@ -261,7 +281,7 @@ var RRBuilders = map[string]RRBuilder{
 				ttl := toTTL(rec)
 				rrs = append(rrs, &dns.TXT{
 					Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: ttl},
-					Txt: []string{text},
+					Txt: chunkTXT(text),
 				})
 			}
 		case []interface{}:
@@ -275,12 +295,12 @@ var RRBuilders = map[string]RRBuilder{
 					ttl := toTTL(rec)
 					rrs = append(rrs, &dns.TXT{
 						Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: ttl},
-						Txt: []string{text},
+						Txt: chunkTXT(text),
 					})
 				case types.TXTRecord:
 					rrs = append(rrs, &dns.TXT{
 						Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: rec.TTL},
-						Txt: []string{rec.Text},
+						Txt: chunkTXT(rec.Text),
 					})
 				}
 			}
@@ -288,7 +308,7 @@ var RRBuilders = map[string]RRBuilder{
 			for _, rec := range v {
 				rrs = append(rrs, &dns.TXT{
 					Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: rec.TTL},
-					Txt: []string{rec.Text},
+					Txt: chunkTXT(rec.Text),
 				})
 			}
 		}
@@ -519,7 +539,7 @@ var RRBuilders = map[string]RRBuilder{
 					Class:  dns.ClassINET,
 					Ttl:    v.TTL,
 				},
-				Txt: []string{v.Text},
+				Txt: chunkTXT(v.Text),
 			}}
 		case map[string]interface{}:
 			text := v["text"].(string)
@@ -531,7 +551,7 @@ var RRBuilders = map[string]RRBuilder{
 					Class:  dns.ClassINET,
 					Ttl:    ttl,
 				},
-				Txt: []string{text},
+				Txt: chunkTXT(text),
 			}}
 		default:
 			return nil
@@ -966,7 +986,7 @@ func RRToZoneData(rrs []dns.RR) types.ZoneData {
 		case *dns.NS:
 			zd.NS[name] = append(zd.NS[name], types.NSRecord{NS: strings.TrimSuffix(v.Ns, "."), TTL: v.Hdr.Ttl})
 		case *dns.TXT:
-			zd.TXT[name] = append(zd.TXT[name], types.TXTRecord{Text: strings.Join(v.Txt, " "), TTL: v.Hdr.Ttl})
+			zd.TXT[name] = append(zd.TXT[name], types.TXTRecord{Text: strings.Join(v.Txt, ""), TTL: v.Hdr.Ttl})
 		case *dns.SRV:
 			zd.SRV[name] = append(zd.SRV[name], types.SRVRecord{Priority: v.Priority, Weight: v.Weight, Port: v.Port, Target: strings.TrimSuffix(v.Target, "."), TTL: v.Hdr.Ttl})
 		case *dns.PTR:
@@ -976,7 +996,7 @@ func RRToZoneData(rrs []dns.RR) types.ZoneData {
 		case *dns.DNAME:
 			zd.DNAME[name] = types.DNAMERecord{Target: strings.TrimSuffix(v.Target, "."), TTL: v.Hdr.Ttl}
 		case *dns.SPF:
-			zd.SPF[name] = types.SPFRecord{Text: strings.Join(v.Txt, " "), TTL: v.Hdr.Ttl}
+			zd.SPF[name] = types.SPFRecord{Text: strings.Join(v.Txt, ""), TTL: v.Hdr.Ttl}
 		case *dns.DNSKEY:
 			zd.DNSKEY[name] = append(zd.DNSKEY[name], types.DNSKEYRecord{
 				Flags:     v.Flags,

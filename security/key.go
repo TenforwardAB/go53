@@ -391,7 +391,9 @@ func PublicKeyToDNS(pub crypto.PublicKey, algorithm uint8) ([]byte, error) {
 		yBytes := k.Y.Bytes()
 		xPad := append(make([]byte, 32-len(xBytes)), xBytes...)
 		yPad := append(make([]byte, 32-len(yBytes)), yBytes...)
-		return append([]byte{0x04}, append(xPad, yPad...)...), nil
+		// DNSSEC ECDSA DNSKEY rdata is the raw point x||y, without the SEC1
+		// 0x04 uncompressed-point prefix.
+		return append(xPad, yPad...), nil
 
 	case 14: // ECDSAP384SHA384
 		k, ok := pub.(*ecdsa.PublicKey)
@@ -402,7 +404,9 @@ func PublicKeyToDNS(pub crypto.PublicKey, algorithm uint8) ([]byte, error) {
 		yBytes := k.Y.Bytes()
 		xPad := append(make([]byte, 48-len(xBytes)), xBytes...)
 		yPad := append(make([]byte, 48-len(yBytes)), yBytes...)
-		return append([]byte{0x04}, append(xPad, yPad...)...), nil
+		// DNSSEC ECDSA DNSKEY rdata is the raw point x||y, without the SEC1
+		// 0x04 uncompressed-point prefix.
+		return append(xPad, yPad...), nil
 
 	case 15:
 		if k, ok := pub.(ed25519.PublicKey); ok {

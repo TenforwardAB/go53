@@ -7,11 +7,24 @@ PDNSUTIL="${PDNSUTIL:-pdnsutil}"
 
 usage() {
 	cat >&2 <<'EOF'
-Usage: pdns_export_go53_zone.sh ZONE [OUT_DIR]
+Usage: pdns_export_go53_zone.sh [--dnssec preserve|strip] ZONE [OUT_DIR]
 
 Exports a PowerDNS-hosted zone into files intended for future go53 import:
   OUT_DIR/ZONE.zone  DNS master file from AXFR
   OUT_DIR/ZONE.key   go53 DNSSEC private-key import JSON
+
+Options:
+  --dnssec preserve  (default) Export the full AXFR verbatim, including the
+                     existing DNSSEC material (DNSKEY/RRSIG/NSEC*/CDS/CDNSKEY).
+                     Intended for `go53ctl zones import --dnssec preserve`.
+  --dnssec strip     Drop this zone's own signing material so go53 can take
+                     over signing. Strips DNSKEY, RRSIG, NSEC, NSEC3,
+                     NSEC3PARAM, CDS and CDNSKEY. DS records are KEPT because
+                     they are secure-delegation data for child zones, not this
+                     zone's signing material. Import the resulting file as a
+                     normal zone (without --dnssec preserve) and import the
+                     accompanying .key file; go53 re-signs with the same keys,
+                     so the parent DS stays valid (no rollover needed).
 
 Environment:
   DNS_SERVER   AXFR source server for dig (default: 127.0.0.1)
@@ -20,6 +33,7 @@ Environment:
 
 Examples:
   scripts/pdns_export_go53_zone.sh solutrix.se.
+  scripts/pdns_export_go53_zone.sh --dnssec strip solutrix.se. /tmp/go53-export
   DNS_SERVER=127.0.0.1 scripts/pdns_export_go53_zone.sh solutrix.se. /tmp/go53-export
 EOF
 	exit 1
@@ -40,11 +54,12 @@ zone_file_name() {
 export_zone_data() {
 	local zone="$1"
 	local out="$2"
+	local mode="${3:-preserve}"
 
 	{
 		printf '$ORIGIN %s\n' "$zone"
 		printf '$TTL 3600\n\n'
-		dig @"$DNS_SERVER" "$zone" AXFR +noall +answer | awk -v zone="$zone" '
+		dig @"$DNS_SERVER" "$zone" AXFR +noall +answer | awk -v zone="$zone" -v mode="$mode" '
 BEGIN {
 	soa_seen=0
 }
@@ -52,6 +67,12 @@ BEGIN {
 	name=$1
 	ttl=$2
 	type=$4
+
+	# In strip mode, drop this zone own signing material so go53 can take
+	# over signing. DS is intentionally kept: it is secure-delegation data
+	# for child zones, not this zone signing material.
+	if (mode == "strip" && type ~ /^(DNSKEY|RRSIG|NSEC|NSEC3|NSEC3PARAM|CDS|CDNSKEY)$/)
+		next
 
 	if (type == "SOA") {
 		soa_seen++
@@ -136,6 +157,18 @@ export_key_data() {
 	while read -r role active published size algorithm key_id location keytag; do
 		[[ -n "$key_id" ]] || continue
 
+		if [[ "$role" == "CSK" ]]; then
+			{
+				echo "WARNING: key $key_id is a CSK (combined signing key)."
+				echo "         go53 has no CSK concept: it imports this as a KSK (flags 257) that"
+				echo "         signs ONLY the DNSKEY RRset, so zone data (SOA/NS/MX/TXT/...) will be"
+				echo "         left unsigned. After importing keys + zone, add a separate ZSK so go53"
+				echo "         signs the data (the parent DS keeps pointing at this KSK, stays valid):"
+				echo "             go53ctl dnskeys rollover ${zone} ZSK ${algorithm}"
+				echo "             go53ctl zones import ${zone} <unsigned-zone-file>"
+			} >&2
+		fi
+
 		local exported private_format private_algorithm private_key flags algorithm_number key_json
 		exported="$("$PDNSUTIL" export-zone-key "$zone" "$key_id")"
 		private_format="$(awk -F': *' '$1=="Private-key-format"{print $2}' <<<"$exported")"
@@ -184,9 +217,51 @@ export_key_data() {
 }
 
 main() {
-	local zone="${1:-}"
-	[[ -n "$zone" ]] || usage
-	OUT_DIR="${2:-$OUT_DIR}"
+	local dnssec_mode="preserve"
+	local positional=()
+
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--dnssec)
+			dnssec_mode="${2:-}"
+			shift 2
+			;;
+		--dnssec=*)
+			dnssec_mode="${1#*=}"
+			shift
+			;;
+		-h | --help)
+			usage
+			;;
+		--)
+			shift
+			while [[ $# -gt 0 ]]; do
+				positional+=("$1")
+				shift
+			done
+			;;
+		-*)
+			echo "unknown option: $1" >&2
+			usage
+			;;
+		*)
+			positional+=("$1")
+			shift
+			;;
+		esac
+	done
+
+	case "$dnssec_mode" in
+	preserve | strip) ;;
+	*)
+		echo "invalid --dnssec mode: '$dnssec_mode' (expected 'preserve' or 'strip')" >&2
+		usage
+		;;
+	esac
+
+	[[ ${#positional[@]} -ge 1 ]] || usage
+	local zone="${positional[0]}"
+	OUT_DIR="${positional[1]:-$OUT_DIR}"
 
 	need_cmd dig
 	need_cmd jq
@@ -200,10 +275,10 @@ main() {
 	zone_out="$OUT_DIR/$base.zone"
 	key_out="$OUT_DIR/$base.key"
 
-	export_zone_data "$zone" "$zone_out"
+	export_zone_data "$zone" "$zone_out" "$dnssec_mode"
 	export_key_data "$zone" "$key_out"
 
-	printf 'exported zone: %s\n' "$zone_out"
+	printf 'exported zone: %s (dnssec=%s)\n' "$zone_out" "$dnssec_mode"
 	printf 'exported keys: %s\n' "$key_out"
 }
 

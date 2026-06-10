@@ -733,6 +733,11 @@ func (z *InMemoryZoneStore) RefreshDNSSECKeyMaterial(zone string) error {
 	if err := z.persist(zone); err != nil {
 		return err
 	}
+	// invalidateAllRRSIGsLocked wiped every RRSIG, so re-sign the data RRsets
+	// too, not just the denial chain. Otherwise a key change/rollover (or a
+	// replicated DNSSEC key event in distributed mode) would leave SOA, NS,
+	// MX, TXT, ... unsigned until a manual re-import.
+	go z.signAllDataRRSets(zone)
 	go z.signNSECChain(zone)
 	go z.signNSEC3Chain(zone)
 	return nil
@@ -1315,6 +1320,33 @@ func (z *InMemoryZoneStore) signNSEC3Chain(zone string) {
 
 	for _, name := range names {
 		z.maybeSignRRSet(zone, string(types.TypeNSEC3), name)
+	}
+}
+
+// signAllDataRRSets re-signs every stored data RRset in the zone (everything
+// except the RRSIG/NSEC/NSEC3 denial records, which are handled by the
+// dedicated chain signers). Used after RRSIGs have been invalidated wholesale,
+// e.g. on a key change, so the whole zone ends up signed without a re-import.
+func (z *InMemoryZoneStore) signAllDataRRSets(zone string) {
+	type rrset struct{ rtype, name string }
+	var sets []rrset
+
+	z.mu.RLock()
+	if zoneMap, ok := z.cache["zones"][zone]; ok {
+		for rtype, namesMap := range zoneMap {
+			switch rtype {
+			case string(types.TypeRRSIG), string(types.TypeNSEC), string(types.TypeNSEC3):
+				continue
+			}
+			for name := range namesMap {
+				sets = append(sets, rrset{rtype, name})
+			}
+		}
+	}
+	z.mu.RUnlock()
+
+	for _, s := range sets {
+		z.maybeSignRRSet(zone, s.rtype, s.name)
 	}
 }
 

@@ -610,6 +610,7 @@ curl -X PATCH http://127.0.0.1:8053/api/config \
           </tbody>
         </table>
         <p>For multi-value RRsets such as A, AAAA, NS, MX, TXT, PTR, and SRV, send one value per POST. go53 appends distinct values to the owner name internally. Use <code>GET /api/zones/{zone}/records/{rrtype}/{name}</code> to read one owner name and <code>DELETE /api/zones/{zone}/records/{rrtype}/{name}</code> to delete it. A delete request may include a JSON body when only one value in a multi-value RRset should be removed.</p>
+        <p><strong>Long TXT and SPF values:</strong> pass the full value in a single <code>text</code> field. go53 splits values longer than 255 bytes into 255-byte DNS character-strings on the wire and joins them back without a separator, so long records such as DKIM public keys round-trip correctly.</p>
       </section>
 
       <section id="dnssec">
@@ -667,6 +668,25 @@ curl http://127.0.0.1:8053/api/cdnskey/example.com.</code></pre>
             <tr><td><code>12</code></td><td><code>ECC-GOST</code></td><td>Not supported</td><td>Not implemented in go53's key generation/signing path.</td></tr>
           </tbody>
         </table>
+        <h3>Key Roles: KSK And ZSK</h3>
+        <p>go53 signs with a split key set. A <strong>KSK</strong> (flags <code>257</code>) signs only the DNSKEY RRset, and a <strong>ZSK</strong> (flags <code>256</code>) signs all other zone data (SOA, NS, MX, TXT, NSEC/NSEC3, and so on). A zone must have at least one active KSK <em>and</em> one active ZSK to be fully signed. <code>POST /api/dnskeys?zone=...</code> generates a complete KSK + ZSK set; <code>POST /api/dnskeys/rollover</code> with <code>role</code> set to <code>KSK</code> or <code>ZSK</code> adds a single key of that role.</p>
+        <div class="note">
+          <p><strong>No CSK (combined signing key):</strong> a single key is treated strictly as either a KSK or a ZSK based on its flags &mdash; go53 does not support one key that signs both the DNSKEY RRset and the zone data. If you import a CSK from another server (PowerDNS, for example, commonly uses a CSK), it is stored as a KSK and signs only the DNSKEY RRset, leaving the rest of the zone unsigned until you add a ZSK.</p>
+        </div>
+
+        <h3>Taking Over Signing From Another Server</h3>
+        <p>To migrate an already-signed zone and let go53 own the signing, import the existing private key as the <strong>KSK</strong> so the parent DS keeps validating, then generate a <strong>ZSK</strong> in go53 to sign the zone data. Because the parent DS still points at the imported KSK, no DS change at the registrar is required.</p>
+        <pre><code># 1. import the existing key (stored as the KSK), then add a ZSK
+go53ctl dnskeys import-private --key-file example.com.key
+go53ctl dnskeys rollover example.com. ZSK ECDSAP256SHA256
+
+# 2. import the zone WITHOUT old DNSSEC records so go53 signs it itself
+go53ctl zones import example.com. example.com.unsigned.zone</code></pre>
+        <p>Import the zone data without the source server's DNSSEC records (DNSKEY, RRSIG, NSEC/NSEC3, CDS, CDNSKEY) so go53 builds its own signatures and denial chain. Use <code>--dnssec preserve</code> only when you want to keep the source signatures verbatim; that mode serves the zone read-only. The repository ships helper scripts to prepare an unsigned zone file: <code>scripts/pdns_export_go53_zone.sh</code> (export a PowerDNS zone, with a <code>--dnssec strip</code> mode) and <code>scripts/strip_dnssec_zonefile.sh</code> (strip DNSSEC records from an existing zone file). DS records at delegation points are preserved, since they are child-delegation data rather than this zone's own signing material.</p>
+
+        <h3>NSEC And NSEC3</h3>
+        <p>Authenticated denial defaults to <strong>NSEC</strong>. NSEC3 is enabled per zone by the presence of an <code>NSEC3PARAM</code> record in that zone &mdash; there is no global on/off switch in the <code>dnssec</code> config block. Switching between NSEC and NSEC3 does not affect the parent DS and needs no registrar change.</p>
+
         <p>The DNSSEC key lifecycle API supports pre-publish, activation, retirement, revocation, and removal metadata. Use <code>PATCH /api/dnskeys/{keyid}/lifecycle</code> for explicit lifecycle changes, or the helper endpoints for common operations.</p>
         <table>
           <thead>
