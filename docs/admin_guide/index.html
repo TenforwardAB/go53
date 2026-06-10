@@ -304,6 +304,7 @@
         <li><a href="#routes">API Routes</a></li>
         <li><a href="#operations">Operations</a></li>
       </ul>
+      <p class="subtitle"><a href="../dnssec/">DNSSEC guide</a></p>
       <p class="subtitle"><a href="../config/">Config reference</a></p>
       <p class="subtitle"><a href="../">Back to go53 docs</a></p>
     </nav>
@@ -616,6 +617,9 @@ curl -X PATCH http://127.0.0.1:8053/api/config \
       <section id="dnssec">
         <h2>DNSSEC</h2>
         <p>go53 keeps DNSSEC keys in storage and also uses an in-memory key cache on read-heavy paths. Positive RRsets can be signed at query time and stored RRSIG records are reused as cache until refresh policy says they should be resigned. NSEC and NSEC3 denial material is generated and maintained from zone contents.</p>
+        <div class="note">
+          <p>For the signing flows in depth &mdash; timing, jitter, query-time signing, the RRSIG cache, NSEC/NSEC3 chains, CDS/CDNSKEY, and the key lifecycle, with diagrams &mdash; see the <a href="../dnssec/">DNSSEC Technical Guide</a>.</p>
+        </div>
         <table>
           <thead>
             <tr>

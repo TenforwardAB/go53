@@ -640,8 +640,11 @@ func (z *InMemoryZoneStore) EnsureSignedRRSet(rrs []dns.RR) ([]dns.RR, error) {
 		return cached, nil
 	}
 
-	isDNSKEY := hdr.Rrtype == dns.TypeDNSKEY
-	keyNames, err := security.GetDNSSECKeyNamesForRRSet(zoneName, isDNSKEY)
+	// CDS and CDNSKEY must be signed by the KSK (the key the parent DS
+	// references), like the DNSKEY RRset, per RFC 7344. Everything else is
+	// signed by the ZSK.
+	useKSK := hdr.Rrtype == dns.TypeDNSKEY || hdr.Rrtype == dns.TypeCDS || hdr.Rrtype == dns.TypeCDNSKEY
+	keyNames, err := security.GetDNSSECKeyNamesForRRSet(zoneName, useKSK)
 	if err != nil {
 		return nil, err
 	}
@@ -935,8 +938,11 @@ func (z *InMemoryZoneStore) maybeSignRRSet(zone, rtype, name string) {
 		return
 	}
 
-	isDNSKEY := rtype == string(types.TypeDNSKEY)
-	keyNames, err := security.GetDNSSECKeyNamesForRRSet(zone, isDNSKEY)
+	// CDS and CDNSKEY must be signed by the KSK (the key the parent DS
+	// references), like the DNSKEY RRset, per RFC 7344. Everything else is
+	// signed by the ZSK.
+	useKSK := rtype == string(types.TypeDNSKEY) || rtype == string(types.TypeCDS) || rtype == string(types.TypeCDNSKEY)
+	keyNames, err := security.GetDNSSECKeyNamesForRRSet(zone, useKSK)
 	slog.Crazy("[maybeSignRRSet] keyNames", keyNames)
 	if err != nil {
 		return
