@@ -292,6 +292,7 @@ check_prereqs() {
 	check_host_port_available "$DNS_HOST_PORT" "DNS"
 	check_host_port_available "$API_HOST_PORT" "API"
 	check_host_port_available "$SYNC_HOST_PORT" "distributed sync"
+	ensure_unprivileged_ports
 }
 
 check_image_access() {
@@ -339,6 +340,31 @@ check_host_port_available() {
 	fi
 }
 
+# ensure_unprivileged_ports lets the rootless service user bind a host port below
+# 1024 (e.g. DNS on :53). This lowers net.ipv4.ip_unprivileged_port_start, which is
+# a host-wide threshold: every port from min_port..1023 becomes bindable by any
+# unprivileged user, not just port 53. Acceptable on a dedicated DNS host; for a
+# tighter setup prefer an nftables redirect 53->2053 or socket activation instead.
+ensure_unprivileged_ports() {
+	local min_port current persist_file p
+	min_port="$DNS_HOST_PORT"
+	for p in "$API_HOST_PORT" "$SYNC_HOST_PORT"; do
+		((p < min_port)) && min_port="$p"
+	done
+	((min_port >= 1024)) && return 0
+
+	current="$(sysctl -n net.ipv4.ip_unprivileged_port_start 2>/dev/null || echo 1024)"
+	if ((current <= min_port)); then
+		info "net.ipv4.ip_unprivileged_port_start=${current} already allows rootless bind of :${min_port}"
+		return 0
+	fi
+
+	info "lowering net.ipv4.ip_unprivileged_port_start to ${min_port} so rootless ${SERVICE_USER} can bind host port < 1024 (opens ${min_port}-1023 host-wide)"
+	sudo sysctl -w "net.ipv4.ip_unprivileged_port_start=${min_port}" >/dev/null
+	persist_file="/etc/sysctl.d/99-go53-unprivileged-ports.conf"
+	printf '# Allow rootless go53 to bind host ports >= %s (installed by install_quadlet_distributed.sh)\nnet.ipv4.ip_unprivileged_port_start=%s\n' "$min_port" "$min_port" | sudo tee "$persist_file" >/dev/null
+}
+
 write_quadlet() {
 	if [[ -e "$CONTAINER_FILE" && "$FORCE" != "1" ]]; then
 		fail "$CONTAINER_FILE already exists; set FORCE=1 to replace it"
@@ -362,6 +388,7 @@ Wants=network-online.target
 [Container]
 Image=${IMAGE}
 ContainerName=${CONTAINER_NAME}
+HostName=${NODE_ID}
 PublishPort=${DNS_BIND}:${DNS_HOST_PORT}:2053/udp
 PublishPort=${DNS_BIND}:${DNS_HOST_PORT}:2053/tcp
 PublishPort=${API_BIND}:${API_HOST_PORT}:8053/tcp
@@ -391,6 +418,16 @@ EOF
 	sudo -u "$SERVICE_USER" tee "$VOLUME_FILE" >/dev/null <<EOF
 [Volume]
 EOF
+}
+
+init_data_volume_permissions() {
+  info "initializing data volume permissions"
+  podman_user volume create "systemd-${DATA_VOLUME}" >/dev/null || true
+  podman_user run --rm \
+    --volume "systemd-${DATA_VOLUME}:/var/lib/go53" \
+    --user 0 \
+    "$IMAGE" \
+    sh -c 'mkdir -p /var/lib/go53/badger && chown -R 1000:1000 /var/lib/go53'
 }
 
 start_quadlet() {
@@ -537,6 +574,7 @@ EOF
 
 check_prereqs
 write_quadlet
+init_data_volume_permissions
 start_quadlet
 configure_distributed
 print_summary

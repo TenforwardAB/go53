@@ -4,6 +4,8 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"flag"
+	"strings"
 	"testing"
 )
 
@@ -108,6 +110,100 @@ func TestCompleteJoinClaimsDoesNotInventLoopbackSyncEndpoint(t *testing.T) {
 	claims := completeJoinClaims(clusterInviteClaims{}, "", "", nil, nodeDiscovery{})
 	if claims.JoinSyncEndpoint != "" {
 		t.Fatalf("JoinSyncEndpoint = %q, want empty", claims.JoinSyncEndpoint)
+	}
+}
+
+func TestCompleteJoinClaimsFallsBackToHostnameNotTimestamp(t *testing.T) {
+	host := shortHostname()
+	if host == "" {
+		t.Skip("no usable hostname in test environment")
+	}
+	claims := completeJoinClaims(clusterInviteClaims{}, "", "", nil, nodeDiscovery{})
+	if claims.JoinNodeID != host {
+		t.Fatalf("JoinNodeID = %q, want hostname %q", claims.JoinNodeID, host)
+	}
+}
+
+func TestParseInterspersedFlagsHandlesTrailingFlag(t *testing.T) {
+	cases := map[string][]string{
+		"flag after positional":  {"xauth_key", "--generate"},
+		"flag before positional": {"--generate", "xauth_key"},
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			fs := flag.NewFlagSet("config set", flag.ContinueOnError)
+			generate := false
+			fs.BoolVar(&generate, "generate", false, "")
+			rest := parseInterspersedFlags(fs, args)
+			if !generate {
+				t.Fatalf("--generate not parsed for %v", args)
+			}
+			if len(rest) != 1 || rest[0] != "xauth_key" {
+				t.Fatalf("positionals = %v, want [xauth_key]", rest)
+			}
+		})
+	}
+}
+
+func TestParseInterspersedFlagsValueFlagAfterPositional(t *testing.T) {
+	fs := flag.NewFlagSet("config set", flag.ContinueOnError)
+	var socket string
+	fs.StringVar(&socket, "socket", "", "")
+	rest := parseInterspersedFlags(fs, []string{"xauth_key", "mykey", "--socket", "/tmp/x.sock"})
+	if socket != "/tmp/x.sock" {
+		t.Fatalf("socket = %q, want /tmp/x.sock", socket)
+	}
+	if len(rest) != 2 || rest[0] != "xauth_key" || rest[1] != "mykey" {
+		t.Fatalf("positionals = %v, want [xauth_key mykey]", rest)
+	}
+}
+
+func TestStripCompactFlag(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    []string
+		want    []string
+		compact bool
+	}{
+		{"absent", []string{"go53ctl", "config", "get"}, []string{"go53ctl", "config", "get"}, false},
+		{"bare double dash", []string{"go53ctl", "config", "get", "--compact"}, []string{"go53ctl", "config", "get"}, true},
+		{"bare single dash", []string{"go53ctl", "-compact", "config", "get"}, []string{"go53ctl", "config", "get"}, true},
+		{"equals true", []string{"go53ctl", "--compact=true", "zones", "list"}, []string{"go53ctl", "zones", "list"}, true},
+		{"equals false", []string{"go53ctl", "--compact=false", "zones", "list"}, []string{"go53ctl", "zones", "list"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			compactOutput = false
+			got := stripCompactFlag(tc.args)
+			if compactOutput != tc.compact {
+				t.Fatalf("compactOutput = %v, want %v", compactOutput, tc.compact)
+			}
+			if strings.Join(got, " ") != strings.Join(tc.want, " ") {
+				t.Fatalf("args = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	compactOutput = false
+}
+
+func TestFormatResponse(t *testing.T) {
+	if got, ok := formatResponse([]byte(`{"b":1,"a":2}`), false); !ok || got != "{\n  \"b\": 1,\n  \"a\": 2\n}" {
+		t.Fatalf("pretty JSON = %q ok=%v (key order must be preserved)", got, ok)
+	}
+	if got, ok := formatResponse([]byte(`{"b":1,"a":2}`), true); !ok || got != `{"b":1,"a":2}` {
+		t.Fatalf("compact JSON = %q ok=%v", got, ok)
+	}
+	if got, ok := formatResponse([]byte("plain text\n"), false); !ok || got != "plain text" {
+		t.Fatalf("non-JSON passthrough = %q ok=%v", got, ok)
+	}
+	if _, ok := formatResponse([]byte("\n"), false); ok {
+		t.Fatalf("empty body should not print")
+	}
+}
+
+func TestShortHostnameStripsDomain(t *testing.T) {
+	if got := shortHostname(); got != "" && strings.ContainsRune(got, '.') {
+		t.Fatalf("shortHostname returned non-short value %q", got)
 	}
 }
 

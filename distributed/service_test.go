@@ -204,7 +204,7 @@ func TestSubmitJoinRequestStoresPendingAndApproveAddsPinnedPeer(t *testing.T) {
 		t.Fatalf("privateKey: %v", err)
 	}
 	req.Proof = base64.StdEncoding.EncodeToString(ed25519.Sign(priv, JoinRequestPayload(req)))
-	applied, err := svc.SubmitJoinRequest(context.Background(), req, false)
+	applied, err := svc.SubmitJoinRequest(context.Background(), req)
 	if err != nil {
 		t.Fatalf("SubmitJoinRequest: %v", err)
 	}
@@ -992,6 +992,42 @@ func TestDNSSECKeySnapshotBackfillsKeysWithoutEvents(t *testing.T) {
 	}
 	if len(stored) != 2 {
 		t.Fatalf("stored keys len = %d, want 2", len(stored))
+	}
+}
+
+func TestApplyConfigEventGatesAuthOnAuthSync(t *testing.T) {
+	priv, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair: %v", err)
+	}
+	svc := newTestService(t, "node-a", priv, map[string]string{"node-a": mustPublicKeyFromPrivate(t, priv)})
+
+	const key = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKL" // 48 base62 chars
+	authEvent := Event{
+		EntityType: EntityConfig,
+		Name:       "live",
+		Operation:  OperationUpsert,
+		Value:      []byte(`{"auth":{"x_auth_key":"` + key + `"}}`),
+	}
+
+	// Default (auth_sync unset) replicates the auth block.
+	config.AppConfig.Live.Distributed.AuthSync = nil
+	if err := svc.applyConfigEvent(authEvent); err != nil {
+		t.Fatalf("applyConfigEvent (default): %v", err)
+	}
+	if got := config.AppConfig.GetLive().Auth.XAuthKey; got != key {
+		t.Fatalf("auth not replicated by default: got %q", got)
+	}
+
+	// Opting out keeps the local auth untouched by peer events.
+	config.AppConfig.Live.Auth.XAuthKey = "local-only"
+	off := false
+	config.AppConfig.Live.Distributed.AuthSync = &off
+	if err := svc.applyConfigEvent(authEvent); err != nil {
+		t.Fatalf("applyConfigEvent (auth_sync off): %v", err)
+	}
+	if got := config.AppConfig.GetLive().Auth.XAuthKey; got != "local-only" {
+		t.Fatalf("auth overwritten despite auth_sync=false: got %q", got)
 	}
 }
 

@@ -9,6 +9,20 @@ import (
 	"go53/storage"
 )
 
+func TestDistributedAuthSyncEnabledDefault(t *testing.T) {
+	if !(config.DistributedConfig{}).AuthSyncEnabled() {
+		t.Fatal("auth sync should default to enabled when unset")
+	}
+	on := true
+	if !(config.DistributedConfig{AuthSync: &on}).AuthSyncEnabled() {
+		t.Fatal("auth sync should be enabled when set true")
+	}
+	off := false
+	if (config.DistributedConfig{AuthSync: &off}).AuthSyncEnabled() {
+		t.Fatal("auth sync should be disabled when set false")
+	}
+}
+
 // mockStorage implements storage.Storage
 type mockStorage struct {
 	Zones  map[string][]byte

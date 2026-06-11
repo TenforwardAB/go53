@@ -74,6 +74,37 @@ func TestLoadLiveConfigErrorsAndInitLiveConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestInitLiveConfigRefreshesStaleVersionButKeepsHidden(t *testing.T) {
+	backend := &storage.MockStorage{}
+	if err := backend.Init(); err != nil {
+		t.Fatalf("storage init: %v", err)
+	}
+	storage.Backend = backend
+
+	// A version frozen by an older build must be refreshed to this binary's default.
+	backend.Tables["config"] = map[string][]byte{"version": []byte(`"go53 1.0.1"`)}
+	cm := &ConfigManager{}
+	cm.InitLiveConfig()
+	if got := cm.GetLive().Version; got != DefaultLiveConfig.Version {
+		t.Fatalf("stale version not refreshed: got %q want %q", got, DefaultLiveConfig.Version)
+	}
+	if string(backend.Tables["config"]["version"]) != mustJSONString(t, DefaultLiveConfig.Version) {
+		t.Fatalf("refreshed version not persisted: %s", backend.Tables["config"]["version"])
+	}
+
+	// An explicitly hidden version ("") must stay hidden.
+	backend.Tables["config"]["version"] = []byte(`""`)
+	cm.InitLiveConfig()
+	if got := cm.GetLive().Version; got != "" {
+		t.Fatalf("hidden version was overwritten: got %q", got)
+	}
+}
+
+func mustJSONString(t *testing.T, value string) string {
+	t.Helper()
+	return string(mustJSON(t, value))
+}
+
 func mustJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	data, err := json.Marshal(value)

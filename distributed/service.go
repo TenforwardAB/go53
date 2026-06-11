@@ -91,6 +91,7 @@ type InviteRecord struct {
 	ExpiresAt  int64  `json:"exp"`
 	CreatedAt  int64  `json:"created_at"`
 	LastUsedAt int64  `json:"last_used_at,omitempty"`
+	AutoAccept bool   `json:"auto_accept,omitempty"`
 }
 
 type JoinRequest struct {
@@ -1062,7 +1063,37 @@ func (s *Service) applyConfigEvent(event Event) error {
 	if err != nil {
 		return err
 	}
+	// A node that opted out of auth replication must never have its auth config
+	// (x-auth-key/mode/OIDC) overwritten by a peer event.
+	if !liveConfig().Distributed.AuthSyncEnabled() {
+		var hasRest bool
+		stripped, hasRest, err = dropJSONKey(stripped, "auth")
+		if err != nil {
+			return err
+		}
+		if !hasRest {
+			return nil
+		}
+	}
 	return config.AppConfig.MergeUpdateLiveJSON(stripped)
+}
+
+// dropJSONKey removes a top-level key from a JSON object, returning the re-encoded
+// document and whether any other keys remain.
+func dropJSONKey(raw []byte, key string) ([]byte, bool, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, false, err
+	}
+	delete(fields, key)
+	if len(fields) == 0 {
+		return nil, false, nil
+	}
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
 }
 
 func mergeDistributedMembershipPatch(raw []byte) ([]byte, error) {
@@ -1355,7 +1386,7 @@ func (s *Service) consumeInviteRecord(record InviteRecord) (InviteRecord, error)
 	return record, nil
 }
 
-func (s *Service) SubmitJoinRequest(ctx context.Context, req JoinRequest, autoAccept bool) (bool, error) {
+func (s *Service) SubmitJoinRequest(ctx context.Context, req JoinRequest) (bool, error) {
 	if s == nil || !enabled() {
 		return false, errors.New("distributed mode is disabled")
 	}
@@ -1369,7 +1400,9 @@ func (s *Service) SubmitJoinRequest(ctx context.Context, req JoinRequest, autoAc
 	if strings.TrimSpace(record.JoinNodeID) != "" && record.JoinNodeID != req.JoinNodeID {
 		return false, errors.New("join node id does not match invite")
 	}
-	if autoAccept {
+	// Whether a join is auto-accepted is the issuer's decision, recorded on the
+	// signed invite — never something the joining node can assert in its request.
+	if record.AutoAccept {
 		return true, s.acceptJoinRequest(ctx, req)
 	}
 	if err := s.SaveJoinRequest(req); err != nil {

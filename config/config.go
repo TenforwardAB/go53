@@ -68,6 +68,14 @@ type DistributedConfig struct {
 	PeerPublicKeys  map[string]string `json:"peer_public_keys"`
 	PushTimeoutMs   int               `json:"push_timeout_ms"`
 	ResyncIntervalS int               `json:"resync_interval_s"`
+	AuthSync        *bool             `json:"auth_sync,omitempty"` // replicate auth config across the cluster; nil/true = on
+}
+
+// AuthSyncEnabled reports whether auth config (x-auth-key, mode, OIDC) replicates
+// across the cluster. It defaults to true when unset so existing clusters opt in
+// automatically; set "auth_sync": false under distributed to keep auth node-local.
+func (d DistributedConfig) AuthSyncEnabled() bool {
+	return d.AuthSync == nil || *d.AuthSync
 }
 
 type AuthConfig struct {
@@ -196,6 +204,15 @@ func (cm *ConfigManager) InitLiveConfig() {
 		default:
 			// skip the rests
 		}
+	}
+
+	// version.bind must track the running build, not a value frozen in storage at
+	// first boot. Preserve an explicit "" (version hidden), but always refresh a set
+	// version to this binary's default so upgrades report the correct version.
+	if cfg.Version != "" && cfg.Version != DefaultLiveConfig.Version {
+		log.Printf("  • version %q is stale → refreshing to %q", cfg.Version, DefaultLiveConfig.Version)
+		cfg.Version = DefaultLiveConfig.Version
+		changed = true
 	}
 
 	cm.mu.Lock()

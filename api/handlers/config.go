@@ -90,6 +90,12 @@ func SetXAuthKeyHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to apply config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if distributed.Default != nil && config.AppConfig.GetLive().Distributed.AuthSyncEnabled() {
+		if err := distributed.Default.PublishConfig(body); err != nil {
+			http.Error(w, "x_auth_key updated but distributed event failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }

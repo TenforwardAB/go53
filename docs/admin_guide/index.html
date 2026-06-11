@@ -204,6 +204,10 @@
     pre code {
       font-size: 0.9rem;
       white-space: pre;
+      /* keep the dark pre background even when nested in li/p/td, whose
+         code rules would otherwise paint a light background under light text */
+      background: transparent;
+      padding: 0;
     }
 
     .note {
@@ -418,6 +422,30 @@ journalctl --user -u go53 -f</code></pre>
         <div class="note">
           <p>To keep the service running after you log out, enable lingering for your user: <code>sudo loginctl enable-linger $USER</code>. Because the unit sets <code>AutoUpdate=registry</code>, you can let Podman pull new images automatically with <code>systemctl --user enable --now podman-auto-update.timer</code>, or trigger it on demand with <code>podman auto-update</code>.</p>
         </div>
+
+        <h3>Automated Rootless Quadlet (Distributed Node)</h3>
+        <p>For distributed clusters, <code>scripts/install_quadlet_distributed.sh</code> automates the whole rootless setup: it installs Podman and the rootless helpers, creates the <code>podman_go53</code> service user, writes the <code>.container</code> and <code>.volume</code> quadlet units, enables lingering and the auto-update timer, and patches the node into distributed mode. The node ID defaults to the host's short hostname (<code>hostname -s</code>), matching the container name <code>go53-&lt;hostname&gt;</code>.</p>
+        <pre><code>NODE_ID=a-ns01 \
+DNS_HOST_PORT=2053 \
+SYNC_HOST_PORT=53530 \
+scripts/install_quadlet_distributed.sh</code></pre>
+        <p>The defaults suit a host where another resolver still owns port 53: DNS is published on <code>2053</code>, the API binds to loopback <code>8053</code>, and distributed sync listens on <code>53530</code>. Override any of these with the matching <code>*_HOST_PORT</code> and <code>*_BIND</code> variables.</p>
+        <p>To serve DNS on the privileged host port 53, set both flags:</p>
+        <pre><code>ALLOW_HOST_53=1 DNS_HOST_PORT=53 scripts/install_quadlet_distributed.sh</code></pre>
+        <div class="warning">
+          <p><strong>Heads up &mdash; this opens host ports 53&ndash;1023 to every unprivileged user.</strong> Because the container is rootless, binding a host port below 1024 requires lowering the kernel threshold <code>net.ipv4.ip_unprivileged_port_start</code>. The installer sets it to the lowest published port (53) and persists it to <code>/etc/sysctl.d/99-go53-unprivileged-ports.conf</code>. The threshold is host-wide: afterwards <em>any</em> unprivileged process can bind <em>any</em> port in 53&ndash;1023, not just go53 on 53.</p>
+        </div>
+        <p>If that trade-off is too broad, keep DNS on the high port (<code>2053</code>, the default &mdash; do not set <code>ALLOW_HOST_53</code>) and expose 53 with one of these instead:</p>
+        <ul>
+          <li><strong>A &mdash; nftables redirect (recommended).</strong> Redirect only port 53 to 2053; no sysctl change and the container is untouched.
+            <pre><code>sudo nft add table ip go53
+sudo nft add chain ip go53 prerouting '{ type nat hook prerouting priority dstnat; }'
+sudo nft add rule ip go53 prerouting udp dport 53 redirect to :2053
+sudo nft add rule ip go53 prerouting tcp dport 53 redirect to :2053</code></pre>
+            Persist with <code>sudo nft list ruleset &gt; /etc/nftables.conf</code>. Add a matching <code>OUTPUT</code> rule if local <code>127.0.0.1:53</code> queries must also reach go53.</li>
+          <li><strong>B &mdash; file capability on the port forwarder.</strong> <code>sudo setcap cap_net_bind_service=+ep /usr/bin/pasta</code> (or <code>rootlessport</code>). Scoped to that one binary, but it still permits any port below 1024 and is reset on every Podman/passt upgrade.</li>
+          <li><strong>C &mdash; systemd socket activation.</strong> A privileged <code>.socket</code> unit binds :53 and hands the file descriptor to the rootless container. The cleanest isolation, but the most moving parts.</li>
+        </ul>
 
         <h3>Method 3 &mdash; Install Script (Native Binaries)</h3>
         <p>The install script detects your OS and CPU architecture, downloads the matching release, installs both binaries to <code>/usr/local/bin</code>, creates a <code>go53</code> system user, and installs and enables a systemd service.</p>

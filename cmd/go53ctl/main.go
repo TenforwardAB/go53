@@ -134,6 +134,7 @@ type clusterInviteClaims struct {
 	PushTimeoutMs    int                    `json:"push_timeout_ms"`
 	ResyncIntervalS  int                    `json:"resync_interval_s"`
 	UsageCount       int                    `json:"usage_count"`
+	AutoAccept       bool                   `json:"auto_accept,omitempty"`
 	IssuerPublicKey  string                 `json:"issuer_public_key"`
 	Nodes            map[string]clusterNode `json:"nodes"`
 }
@@ -150,6 +151,7 @@ type distributedInviteRecord struct {
 	ExpiresAt  int64  `json:"exp"`
 	CreatedAt  int64  `json:"created_at"`
 	LastUsedAt int64  `json:"last_used_at,omitempty"`
+	AutoAccept bool   `json:"auto_accept,omitempty"`
 }
 
 type jwtHeader struct {
@@ -175,6 +177,7 @@ type clusterInviteOptions struct {
 	PushTimeoutMs      int
 	ResyncIntervalS    int
 	UsageCount         int
+	AutoAccept         bool
 }
 
 type clusterJoinOptions struct {
@@ -230,6 +233,7 @@ type syncFrame struct {
 }
 
 func main() {
+	os.Args = stripCompactFlag(os.Args)
 	if len(os.Args) > 1 && os.Args[1] == "cluster" {
 		handleCluster(os.Args[2:])
 		return
@@ -325,7 +329,8 @@ Cluster examples:
   go53ctl cluster join --token TOKEN --sync-endpoint tls://10.0.0.11:53530
   go53ctl cluster pending
   go53ctl cluster approve node-b
-  go53ctl cluster join --token TOKEN --sync-endpoint tls://10.0.0.11:53530 --auto-accept
+  go53ctl cluster invite --auto-accept
+  go53ctl cluster join --token TOKEN --sync-endpoint tls://10.0.0.11:53530
 
 Zone storage tools:
   go53ctl --list-all-zones --count-only
@@ -338,6 +343,9 @@ Local admin over Unix socket (break-glass, filesystem-gated):
   go53ctl COMMAND [SUBCOMMAND] [ARGS]    Run 'go53ctl help' for all commands
   go53ctl api METHOD PATH [JSON_BODY]    Raw route passthrough
   Requires root or membership in the admin socket group (default go53_admin).
+
+Global flags:
+  --compact            Print JSON responses on one line instead of pretty-printed (for piping)
 
 Zone storage tools:
   --db PATH            Path to BadgerDB (default: ../data/go53)
@@ -661,9 +669,51 @@ func mustAdminRequest(opts adminOptions, method, path, body, contentType string)
 	printResponse(data)
 }
 
+// compactOutput suppresses pretty-printing of admin responses. It is set by a
+// global --compact flag so machine-readable, single-line output stays available
+// for piping. The raw `go53ctl api` passthrough is unaffected (it prints directly).
+var compactOutput bool
+
+// stripCompactFlag consumes a global --compact/-compact flag from anywhere in the
+// argument list (so it works regardless of subcommand position) and records it in
+// compactOutput. It returns args with the flag removed so per-subcommand flag
+// parsers never see it.
+func stripCompactFlag(args []string) []string {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		switch {
+		case a == "--compact" || a == "-compact":
+			compactOutput = true
+		case strings.HasPrefix(a, "--compact=") || strings.HasPrefix(a, "-compact="):
+			v := a[strings.IndexByte(a, '=')+1:]
+			compactOutput = v == "" || strings.EqualFold(v, "true") || v == "1"
+		default:
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// formatResponse renders an admin response for display: pretty-printed when the
+// body is valid JSON and --compact was not given, otherwise the original bytes.
+// The second return reports whether there is anything to print.
+func formatResponse(data []byte, compact bool) (string, bool) {
+	data = bytes.TrimRight(data, "\n")
+	if len(data) == 0 {
+		return "", false
+	}
+	if !compact {
+		var pretty bytes.Buffer
+		if json.Indent(&pretty, data, "", "  ") == nil {
+			return pretty.String(), true
+		}
+	}
+	return string(data), true
+}
+
 func printResponse(data []byte) {
-	if len(data) > 0 {
-		fmt.Println(strings.TrimRight(string(data), "\n"))
+	if s, ok := formatResponse(data, compactOutput); ok {
+		fmt.Println(s)
 	}
 }
 
@@ -678,6 +728,26 @@ func requireArgs(args []string, n int, usage func()) {
 	}
 }
 
+// parseInterspersedFlags parses flags that may appear before or after positional
+// arguments and returns the positionals. Go's flag package stops at the first
+// positional, so a trailing flag such as `config set xauth_key --generate` would
+// otherwise be swallowed as a literal value instead of toggling the flag.
+func parseInterspersedFlags(fs *flag.FlagSet, args []string) []string {
+	var positionals []string
+	for len(args) > 0 {
+		if err := fs.Parse(args); err != nil {
+			return append(positionals, fs.Args()...)
+		}
+		rem := fs.Args()
+		if len(rem) == 0 {
+			break
+		}
+		positionals = append(positionals, rem[0])
+		args = rem[1:]
+	}
+	return positionals
+}
+
 func handleAdminConfig(args []string) {
 	if len(args) == 0 {
 		printConfigUsage()
@@ -688,8 +758,7 @@ func handleAdminConfig(args []string) {
 	if args[0] == "set" {
 		fs.BoolVar(&generate, "generate", false, "Generate a new value for supported settings")
 	}
-	_ = fs.Parse(args[1:])
-	rest := fs.Args()
+	rest := parseInterspersedFlags(fs, args[1:])
 	switch args[0] {
 	case "get":
 		if len(rest) == 0 {
@@ -1186,6 +1255,7 @@ cluster invite flags:
   --join-sync-endpoint  Optional distributed sync endpoint for the new node; otherwise set during join
   --ttl                 Invite lifetime, default 10m
   --usage-count         Number of allowed uses to record for this invite, default 1
+  --auto-accept         Issuer auto-approves joins using this invite instead of storing them as pending
   --transport           Distributed transport, default tls
   --sync-bind-host      Local bind host to configure on joining node, default 0.0.0.0
   --sync-port           Local sync port to configure on joining node, default derived from join sync endpoint
@@ -1198,7 +1268,7 @@ cluster join flags:
   --api                 TCP API base URL; overrides --socket
   --issuer-sync-endpoint Override issuer sync endpoint from the invite token
   --sync-endpoint       Advertised sync endpoint for this joining node, default from token or local discovery
-  --auto-accept         Ask issuer to approve immediately instead of storing a pending request
+  --auto-accept         Deprecated/no-op: auto-accept is now set by the issuer via 'cluster invite --auto-accept'
   --no-register         Do not self-register with the issuer sync endpoint after local join
   --dry-run             Print generated local config patch and accept request without applying it
 
@@ -1252,6 +1322,7 @@ func parseClusterInviteOptions(args []string) clusterInviteOptions {
 	fs.StringVar(&opts.JoinSyncEndpoint, "join-sync-endpoint", "", "Distributed sync endpoint for the new node")
 	fs.StringVar(&opts.TTL, "ttl", "10m", "Invite lifetime")
 	fs.IntVar(&opts.UsageCount, "usage-count", 1, "Number of allowed uses to record for this invite")
+	fs.BoolVar(&opts.AutoAccept, "auto-accept", false, "Issuer auto-approves joins using this invite instead of storing them as pending")
 	fs.StringVar(&opts.Transport, "transport", "tls", "Distributed transport")
 	fs.StringVar(&opts.SyncBindHost, "sync-bind-host", "0.0.0.0", "Local bind host to configure on joining node")
 	fs.StringVar(&opts.SyncPort, "sync-port", "", "Local sync port to configure on joining node; defaults from join sync endpoint")
@@ -1359,6 +1430,7 @@ func newInviteClaims(opts clusterInviteOptions, issuerPublicKey string, duration
 		PushTimeoutMs:    opts.PushTimeoutMs,
 		ResyncIntervalS:  opts.ResyncIntervalS,
 		UsageCount:       opts.UsageCount,
+		AutoAccept:       opts.AutoAccept,
 		IssuerPublicKey:  issuerPublicKey,
 		Nodes:            map[string]clusterNode{},
 	}, nil
@@ -1441,6 +1513,7 @@ func inviteRecord(claims clusterInviteClaims, token string) distributedInviteRec
 		IssuedAt:   claims.IssuedAt,
 		ExpiresAt:  claims.ExpiresAt,
 		CreatedAt:  time.Now().Unix(),
+		AutoAccept: claims.AutoAccept,
 	}
 }
 
@@ -1482,7 +1555,7 @@ func parseClusterJoinOptions(args []string) clusterJoinOptions {
 	fs.StringVar(&opts.APIEndpoint, "api", "", "TCP API base URL; overrides --socket")
 	fs.StringVar(&opts.IssuerSyncEndpoint, "issuer-sync-endpoint", "", "Override issuer sync endpoint from invite token")
 	fs.StringVar(&opts.SyncEndpoint, "sync-endpoint", "", "Advertised sync endpoint for this joining node")
-	fs.BoolVar(&opts.AutoAccept, "auto-accept", false, "Ask issuer to approve immediately instead of storing a pending request")
+	fs.BoolVar(&opts.AutoAccept, "auto-accept", false, "Deprecated/no-op: auto-accept is set by the issuer via 'cluster invite --auto-accept'")
 	fs.BoolVar(&opts.NoRegister, "no-register", false, "Do not self-register with issuer sync endpoint")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "Print local config patch and accept request without applying them")
 	_ = fs.Parse(args)
@@ -1540,7 +1613,7 @@ func printJoinOutput(plan joinPlan) {
 	fmt.Printf("local public_key: %s\n", plan.PublicKey)
 	if !plan.Submitted {
 		fmt.Println("self-registration skipped")
-	} else if plan.AutoAccept && plan.Registered {
+	} else if plan.Registered {
 		fmt.Println("self-registration accepted by issuer")
 	} else {
 		fmt.Println("self-registration stored as pending on issuer")
@@ -1844,6 +1917,7 @@ func completeJoinClaims(claims clusterInviteClaims, _ string, syncEndpoint strin
 		claims.JoinNodeID,
 		strings.TrimSpace(localInfo.NodeID),
 		stringFromPath(localConfig, "distributed", "node_id"),
+		shortHostname(),
 		"node-"+time.Now().UTC().Format("20060102150405"),
 	)
 	claims.JoinSyncEndpoint = firstNonEmpty(
@@ -1857,6 +1931,21 @@ func completeJoinClaims(claims clusterInviteClaims, _ string, syncEndpoint strin
 	claims.PushTimeoutMs = positiveOrDefault(claims.PushTimeoutMs, 2000)
 	claims.ResyncIntervalS = positiveOrDefault(claims.ResyncIntervalS, 30)
 	return claims
+}
+
+// shortHostname returns the node's short hostname (the part before the first dot),
+// mirroring `hostname -s`. It is the preferred node_id fallback so a node joining
+// with a generic invite is named after its host instead of an opaque timestamp.
+func shortHostname() string {
+	h, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	h = strings.TrimSpace(h)
+	if i := strings.IndexByte(h, '.'); i >= 0 {
+		h = h[:i]
+	}
+	return h
 }
 
 func firstNonEmpty(values ...string) string {

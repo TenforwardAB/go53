@@ -348,6 +348,42 @@ assert_pending_count() {
 	[[ "$got" == "$expected" ]] || fail "pending count = $got, want $expected"
 }
 
+get_xauth_key() {
+	local socket="$1"
+	ctl "$socket" config get xauth_key | jq -r '.x_auth_key // ""'
+}
+
+generate_xauth_key() {
+	# Prints the freshly generated key on stdout.
+	local socket="$1"
+	ctl "$socket" config set xauth_key --generate
+}
+
+set_auth_sync() {
+	local socket="$1"
+	local value="$2" # true|false
+	ctl "$socket" config patch "{\"distributed\":{\"auth_sync\":$value}}" >/dev/null
+}
+
+wait_for_xauth_key() {
+	local socket="$1"
+	local expected="$2"
+	local deadline=$((SECONDS + 30))
+	while ((SECONDS < deadline)); do
+		[[ "$(get_xauth_key "$socket")" == "$expected" ]] && return 0
+		sleep 0.5
+	done
+	fail "$socket did not receive x-auth-key $expected (have: $(get_xauth_key "$socket"))"
+}
+
+assert_xauth_key() {
+	local socket="$1"
+	local expected="$2"
+	local got
+	got="$(get_xauth_key "$socket")"
+	[[ "$got" == "$expected" ]] || fail "x-auth-key on $socket = $got, want $expected"
+}
+
 join_with_retry() {
 	local socket="$1"
 	local token="$2"
@@ -402,8 +438,8 @@ main() {
 
 	log "starting node-c and testing auto-accept join into existing cluster"
 	start_node node-c "$NODE_C_DNS_PORT" "$NODE_C_API_PORT" "$NODE_C_SOCKET"
-	token_c="$(ctl "$NODE_A_SOCKET" cluster invite --usage-count 1 --ttl 15m --join-node-id node-c --sync-bind-host "$LOCAL_HOST" --resync-interval-s 2)"
-	join_with_retry "$NODE_C_SOCKET" "$token_c" "$NODE_C_SYNC" --auto-accept >"${WORK_DIR}/node-c-join.out"
+	token_c="$(ctl "$NODE_A_SOCKET" cluster invite --usage-count 1 --ttl 15m --join-node-id node-c --sync-bind-host "$LOCAL_HOST" --resync-interval-s 2 --auto-accept)"
+	join_with_retry "$NODE_C_SOCKET" "$token_c" "$NODE_C_SYNC" >"${WORK_DIR}/node-c-join.out"
 	assert_node_id "$NODE_C_SOCKET" "node-c"
 	assert_peer "$NODE_C_SOCKET" "node-a" "$NODE_A_SYNC"
 	assert_pending_count 0
@@ -422,6 +458,29 @@ main() {
 	assert_peer "$NODE_C_SOCKET" "node-b" "$NODE_B_SYNC"
 	assert_bootstrap_zone "$NODE_C_SOCKET" "$NODE_C_DNS_PORT"
 	add_live_cluster_record
+
+	local key1 key2 key3
+	log "auth_sync default (true): x-auth-key replicates across the cluster"
+	key1="$(generate_xauth_key "$NODE_A_SOCKET")"
+	[[ -n "$key1" ]] || fail "could not generate x-auth-key on node-a"
+	wait_for_xauth_key "$NODE_B_SOCKET" "$key1"
+	wait_for_xauth_key "$NODE_C_SOCKET" "$key1"
+
+	log "auth_sync=false: opted-out node-c keeps its local x-auth-key"
+	set_auth_sync "$NODE_C_SOCKET" false
+	key2="$(generate_xauth_key "$NODE_A_SOCKET")"
+	[[ -n "$key2" && "$key2" != "$key1" ]] || fail "node-a did not rotate x-auth-key"
+	wait_for_xauth_key "$NODE_B_SOCKET" "$key2"
+	# node-c opted out: give replication time to (not) arrive, then confirm it still holds key1.
+	sleep 3
+	assert_xauth_key "$NODE_C_SOCKET" "$key1"
+
+	log "auth_sync re-enabled (true): node-c resumes replication"
+	set_auth_sync "$NODE_C_SOCKET" true
+	key3="$(generate_xauth_key "$NODE_A_SOCKET")"
+	[[ -n "$key3" && "$key3" != "$key2" ]] || fail "node-a did not rotate x-auth-key again"
+	wait_for_xauth_key "$NODE_B_SOCKET" "$key3"
+	wait_for_xauth_key "$NODE_C_SOCKET" "$key3"
 
 	log "cluster onboarding integration passed"
 }

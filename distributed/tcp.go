@@ -457,7 +457,7 @@ func (s *Service) acceptTCPIntro(ctx context.Context, conn net.Conn) (bool, erro
 			_ = writeFrame(conn, frame{Type: frameTypeError, Error: "missing join_request"})
 			return false, errors.New("missing join_request")
 		}
-		applied, err := s.SubmitJoinRequest(ctx, *req.JoinRequest, req.AutoAccept)
+		applied, err := s.SubmitJoinRequest(ctx, *req.JoinRequest)
 		if err != nil {
 			_ = writeFrame(conn, frame{Type: frameTypeError, Error: err.Error()})
 			return false, err
