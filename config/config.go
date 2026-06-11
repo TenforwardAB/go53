@@ -380,6 +380,7 @@ func (cm *ConfigManager) MergeUpdateLiveJSON(raw []byte) error {
 	merged := cm.Live
 	// Clone nested maps so an in-place unmarshal cannot mutate the live config before commit.
 	merged.Distributed.PeerPublicKeys = clonePeerPublicKeys(cm.Live.Distributed.PeerPublicKeys)
+	prepareReplaceOnlyMapFields(raw, &merged)
 	if err := json.Unmarshal(raw, &merged); err != nil {
 		cm.mu.Unlock()
 		return err
@@ -393,6 +394,24 @@ func (cm *ConfigManager) MergeUpdateLiveJSON(raw []byte) error {
 		return err
 	}
 	return nil
+}
+
+func prepareReplaceOnlyMapFields(raw []byte, cfg *LiveConfig) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &root); err != nil {
+		return
+	}
+	distRaw, ok := root["distributed"]
+	if !ok {
+		return
+	}
+	var dist map[string]json.RawMessage
+	if err := json.Unmarshal(distRaw, &dist); err != nil {
+		return
+	}
+	if _, ok := dist["peer_public_keys"]; ok {
+		cfg.Distributed.PeerPublicKeys = nil
+	}
 }
 
 func clonePeerPublicKeys(in map[string]string) map[string]string {

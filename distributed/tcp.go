@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go53/types"
 )
 
 const (
@@ -39,6 +41,10 @@ const (
 	frameTypeMerkleLeavesRequest   = "MERKLE_LEAVES_REQUEST"
 	frameTypeMerkleLeaves          = "MERKLE_LEAVES"
 	frameTypeMerkleRepairRequest   = "MERKLE_REPAIR_REQUEST"
+	frameTypeMerkleRecordsRequest  = "MERKLE_RECORDS_REQUEST"
+	frameTypeMerkleRecords         = "MERKLE_RECORDS"
+	frameTypeDNSSECKeysRequest     = "DNSSEC_KEYS_REQUEST"
+	frameTypeDNSSECKeys            = "DNSSEC_KEYS"
 	frameTypeJoinRequest           = "JOIN_REQUEST"
 	frameTypeError                 = "ERROR"
 
@@ -52,25 +58,27 @@ var (
 )
 
 type frame struct {
-	Type           string                    `json:"type"`
-	NodeID         string                    `json:"node_id,omitempty"`
-	Nonce          string                    `json:"nonce,omitempty"`
-	Proof          string                    `json:"proof,omitempty"`
-	Event          *Event                    `json:"event,omitempty"`
-	Events         []Event                   `json:"events,omitempty"`
-	Vector         map[string]uint64         `json:"vector,omitempty"`
-	Origin         string                    `json:"origin,omitempty"`
-	After          uint64                    `json:"after,omitempty"`
-	Zone           string                    `json:"zone,omitempty"`
-	Prefixes       []string                  `json:"prefixes,omitempty"`
-	Entities       []string                  `json:"entities,omitempty"`
-	MerkleRoots    map[string]MerkleZoneRoot `json:"merkle_roots,omitempty"`
-	MerkleBranches map[string]MerkleBranch   `json:"merkle_branches,omitempty"`
-	MerkleLeaves   map[string]MerkleLeaf     `json:"merkle_leaves,omitempty"`
-	JoinRequest    *JoinRequest              `json:"join_request,omitempty"`
-	AutoAccept     bool                      `json:"auto_accept,omitempty"`
-	Applied        bool                      `json:"applied,omitempty"`
-	Error          string                    `json:"error,omitempty"`
+	Type           string                     `json:"type"`
+	NodeID         string                     `json:"node_id,omitempty"`
+	Nonce          string                     `json:"nonce,omitempty"`
+	Proof          string                     `json:"proof,omitempty"`
+	Event          *Event                     `json:"event,omitempty"`
+	Events         []Event                    `json:"events,omitempty"`
+	Vector         map[string]uint64          `json:"vector,omitempty"`
+	Origin         string                     `json:"origin,omitempty"`
+	After          uint64                     `json:"after,omitempty"`
+	Zone           string                     `json:"zone,omitempty"`
+	Prefixes       []string                   `json:"prefixes,omitempty"`
+	Entities       []string                   `json:"entities,omitempty"`
+	MerkleRoots    map[string]MerkleZoneRoot  `json:"merkle_roots,omitempty"`
+	MerkleBranches map[string]MerkleBranch    `json:"merkle_branches,omitempty"`
+	MerkleLeaves   map[string]MerkleLeaf      `json:"merkle_leaves,omitempty"`
+	MerkleRecords  map[string]MerkleRecord    `json:"merkle_records,omitempty"`
+	DNSSECKeys     map[string]types.StoredKey `json:"dnssec_keys,omitempty"`
+	JoinRequest    *JoinRequest               `json:"join_request,omitempty"`
+	AutoAccept     bool                       `json:"auto_accept,omitempty"`
+	Applied        bool                       `json:"applied,omitempty"`
+	Error          string                     `json:"error,omitempty"`
 }
 
 func (s *Service) StartTCPListener(ctx context.Context) {
@@ -222,6 +230,18 @@ func (s *Service) handleTCPFrame(ctx context.Context, req frame) frame {
 			return frame{Type: frameTypeError, Error: err.Error()}
 		}
 		return frame{Type: frameTypeEvents, Events: events}
+	case frameTypeMerkleRecordsRequest:
+		records, err := s.merkleZoneRecords(req.Zone, req.Entities)
+		if err != nil {
+			return frame{Type: frameTypeError, Error: err.Error()}
+		}
+		return frame{Type: frameTypeMerkleRecords, Zone: req.Zone, MerkleRecords: records}
+	case frameTypeDNSSECKeysRequest:
+		keys, err := s.dnssecKeysForZone(req.Zone)
+		if err != nil {
+			return frame{Type: frameTypeError, Error: err.Error()}
+		}
+		return frame{Type: frameTypeDNSSECKeys, Zone: req.Zone, DNSSECKeys: keys}
 	default:
 		return frame{Type: frameTypeError, Error: "unknown frame type " + req.Type}
 	}
@@ -335,6 +355,40 @@ func (s *Service) fetchPeerMerkleRepairEventsTCP(ctx context.Context, peer strin
 		return nil, fmt.Errorf("unexpected TCP response %q", resp.Type)
 	}
 	return resp.Events, nil
+}
+
+func (s *Service) fetchPeerMerkleRecordsTCP(ctx context.Context, peer, zone string, entities []string) (map[string]MerkleRecord, error) {
+	resp, err := s.roundTripTCP(ctx, peer, frame{Type: frameTypeMerkleRecordsRequest, Zone: zone, Entities: entities})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Type == frameTypeError {
+		return nil, errors.New(resp.Error)
+	}
+	if resp.Type != frameTypeMerkleRecords {
+		return nil, fmt.Errorf("unexpected TCP response %q", resp.Type)
+	}
+	if resp.MerkleRecords == nil {
+		resp.MerkleRecords = map[string]MerkleRecord{}
+	}
+	return resp.MerkleRecords, nil
+}
+
+func (s *Service) fetchPeerDNSSECKeysTCP(ctx context.Context, peer, zone string) (map[string]types.StoredKey, error) {
+	resp, err := s.roundTripTCP(ctx, peer, frame{Type: frameTypeDNSSECKeysRequest, Zone: zone})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Type == frameTypeError {
+		return nil, errors.New(resp.Error)
+	}
+	if resp.Type != frameTypeDNSSECKeys {
+		return nil, fmt.Errorf("unexpected TCP response %q", resp.Type)
+	}
+	if resp.DNSSECKeys == nil {
+		resp.DNSSECKeys = map[string]types.StoredKey{}
+	}
+	return resp.DNSSECKeys, nil
 }
 
 func (s *Service) roundTripTCP(ctx context.Context, peer string, req frame) (frame, error) {

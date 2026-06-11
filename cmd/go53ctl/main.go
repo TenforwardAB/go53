@@ -159,31 +159,33 @@ type jwtHeader struct {
 }
 
 type clusterInviteOptions struct {
-	Nodes            repeatedFlag
-	Socket           string
-	APIEndpoint      string
-	IssuerNode       string
-	IssuerPrivateKey string
-	ClusterID        string
-	JoinNodeID       string
-	JoinSyncEndpoint string
-	TTL              string
-	Transport        string
-	SyncBindHost     string
-	SyncPort         string
-	PushTimeoutMs    int
-	ResyncIntervalS  int
-	UsageCount       int
+	Nodes              repeatedFlag
+	Socket             string
+	APIEndpoint        string
+	IssuerNode         string
+	IssuerPrivateKey   string
+	IssuerSyncEndpoint string
+	ClusterID          string
+	JoinNodeID         string
+	JoinSyncEndpoint   string
+	TTL                string
+	Transport          string
+	SyncBindHost       string
+	SyncPort           string
+	PushTimeoutMs      int
+	ResyncIntervalS    int
+	UsageCount         int
 }
 
 type clusterJoinOptions struct {
-	Token        string
-	Socket       string
-	APIEndpoint  string
-	SyncEndpoint string
-	DryRun       bool
-	NoRegister   bool
-	AutoAccept   bool
+	Token              string
+	Socket             string
+	APIEndpoint        string
+	IssuerSyncEndpoint string
+	SyncEndpoint       string
+	DryRun             bool
+	NoRegister         bool
+	AutoAccept         bool
 }
 
 type clusterAcceptOptions struct {
@@ -485,6 +487,10 @@ func handleCluster(args []string) {
 		handleClusterPending(args[1:])
 	case "approve":
 		handleClusterApprove(args[1:])
+	case "remove-node":
+		handleClusterRemoveNode(args[1:])
+	case "--remove-node":
+		handleClusterRemoveNode(args[1:])
 	default:
 		printClusterUsage()
 		os.Exit(1)
@@ -1166,6 +1172,7 @@ func printClusterUsage() {
   go53ctl cluster join --token TOKEN --sync-endpoint tls://HOST:PORT [--dry-run]
   go53ctl cluster pending
   go53ctl cluster approve NODE
+  go53ctl cluster remove-node NODE [--peer tls://HOST:PORT] [--dry-run]
   go53ctl cluster accept --token TOKEN --join-node-id NODE --join-sync-endpoint tls://HOST:PORT --join-public-key KEY
 
 cluster invite flags:
@@ -1173,6 +1180,7 @@ cluster invite flags:
   --api                 TCP API base URL; overrides --socket
   --issuer-node         Existing node_id that signs the invite
   --issuer-private-key  Base64 Ed25519 private key for issuer node
+  --issuer-sync-endpoint Public distributed sync endpoint for the issuer node
   --cluster-id          Stable cluster identifier
   --join-node-id        Optional node ID for the new node; otherwise set during join
   --join-sync-endpoint  Optional distributed sync endpoint for the new node; otherwise set during join
@@ -1188,6 +1196,7 @@ cluster join flags:
   --token               JWT invite token
   --socket              Local joining-node Unix admin socket, default from GO53_ADMIN_SOCKET or /run/go53/admin.sock
   --api                 TCP API base URL; overrides --socket
+  --issuer-sync-endpoint Override issuer sync endpoint from the invite token
   --sync-endpoint       Advertised sync endpoint for this joining node, default from token or local discovery
   --auto-accept         Ask issuer to approve immediately instead of storing a pending request
   --no-register         Do not self-register with the issuer sync endpoint after local join
@@ -1196,6 +1205,12 @@ cluster join flags:
 cluster pending/approve flags:
   --socket              Local issuer Unix admin socket, default from GO53_ADMIN_SOCKET or /run/go53/admin.sock
   --api                 TCP API base URL; overrides --socket
+
+cluster remove-node flags:
+  --socket              Local Unix admin socket, default from GO53_ADMIN_SOCKET or /run/go53/admin.sock
+  --api                 TCP API base URL; overrides --socket
+  --peer                Peer sync endpoint to remove. Required when it cannot be inferred safely.
+  --dry-run             Print generated local config patch without applying it
 
 cluster accept flags:
   --token               JWT invite token
@@ -1231,6 +1246,7 @@ func parseClusterInviteOptions(args []string) clusterInviteOptions {
 	fs.StringVar(&opts.APIEndpoint, "api", "", "TCP API base URL; overrides --socket")
 	fs.StringVar(&opts.IssuerNode, "issuer-node", "", "Existing node_id that signs the invite")
 	fs.StringVar(&opts.IssuerPrivateKey, "issuer-private-key", "", "Base64 Ed25519 private key for issuer node")
+	fs.StringVar(&opts.IssuerSyncEndpoint, "issuer-sync-endpoint", "", "Public distributed sync endpoint for issuer node")
 	fs.StringVar(&opts.ClusterID, "cluster-id", "", "Stable cluster identifier")
 	fs.StringVar(&opts.JoinNodeID, "join-node-id", "", "Node ID for the new node")
 	fs.StringVar(&opts.JoinSyncEndpoint, "join-sync-endpoint", "", "Distributed sync endpoint for the new node")
@@ -1312,6 +1328,9 @@ func buildInviteClaims(opts clusterInviteOptions, localConfig map[string]any) (c
 	if err := populateInviteNodes(&claims, opts.Nodes, localConfig); err != nil {
 		return clusterInviteClaims{}, nil, err
 	}
+	if err := applyIssuerSyncEndpointOverride(&claims, opts.IssuerSyncEndpoint); err != nil {
+		return clusterInviteClaims{}, nil, err
+	}
 	if err := validateInviteClaims(claims, issuerPublicKey); err != nil {
 		return clusterInviteClaims{}, nil, err
 	}
@@ -1372,6 +1391,20 @@ func addConfiguredPeerKeys(claims *clusterInviteClaims, localConfig map[string]a
 		}
 		claims.Nodes[nodeID] = clusterNode{PublicKey: publicKey}
 	}
+}
+
+func applyIssuerSyncEndpointOverride(claims *clusterInviteClaims, endpoint string) error {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return nil
+	}
+	node, ok := claims.Nodes[claims.Issuer]
+	if !ok {
+		return fmt.Errorf("issuer-node %q must be included before overriding issuer sync endpoint", claims.Issuer)
+	}
+	node.SyncEndpoint = endpoint
+	claims.Nodes[claims.Issuer] = node
+	return nil
 }
 
 func validateInviteClaims(claims clusterInviteClaims, issuerPublicKey string) error {
@@ -1447,6 +1480,7 @@ func parseClusterJoinOptions(args []string) clusterJoinOptions {
 	fs.StringVar(&opts.Token, "token", "", "JWT invite token")
 	fs.StringVar(&opts.Socket, "socket", defaultAdminSocket(), "Local joining-node Unix admin socket")
 	fs.StringVar(&opts.APIEndpoint, "api", "", "TCP API base URL; overrides --socket")
+	fs.StringVar(&opts.IssuerSyncEndpoint, "issuer-sync-endpoint", "", "Override issuer sync endpoint from invite token")
 	fs.StringVar(&opts.SyncEndpoint, "sync-endpoint", "", "Advertised sync endpoint for this joining node")
 	fs.BoolVar(&opts.AutoAccept, "auto-accept", false, "Ask issuer to approve immediately instead of storing a pending request")
 	fs.BoolVar(&opts.NoRegister, "no-register", false, "Do not self-register with issuer sync endpoint")
@@ -1469,6 +1503,9 @@ func buildJoinPlan(opts clusterJoinOptions, claims clusterInviteClaims) (joinPla
 	localConfig, _ := fetchLiveConfig(opts.APIEndpoint)
 	localInfo, _ := fetchNodeDiscovery(opts.APIEndpoint)
 	claims = completeJoinClaims(claims, opts.APIEndpoint, opts.SyncEndpoint, localConfig, localInfo)
+	if err := applyIssuerSyncEndpointOverride(&claims, opts.IssuerSyncEndpoint); err != nil {
+		return joinPlan{}, err
+	}
 	if strings.TrimSpace(claims.JoinSyncEndpoint) == "" {
 		return joinPlan{}, errors.New("missing joining node sync endpoint; pass --sync-endpoint tls://HOST:PORT")
 	}
@@ -1604,6 +1641,38 @@ func handleClusterApprove(args []string) {
 	mustAdminRequest(*opts, http.MethodPost, "/api/distributed/join-requests/"+rest[0]+"/approve", "", "")
 }
 
+func handleClusterRemoveNode(args []string) {
+	fs, opts := newAdminFlagSet("cluster remove-node", false)
+	peer := ""
+	dryRun := false
+	fs.StringVar(&peer, "peer", "", "Peer sync endpoint to remove")
+	fs.BoolVar(&dryRun, "dry-run", false, "Print config patch without applying it")
+	_ = fs.Parse(args)
+	rest := fs.Args()
+	if len(rest) != 1 {
+		fmt.Println("Usage: go53ctl cluster remove-node NODE [--peer tls://HOST:PORT] [--dry-run] [--socket PATH|--api URL]")
+		os.Exit(1)
+	}
+	client, endpoint := adminEndpoint(*opts)
+	apiClient = client
+	localConfig, err := fetchLiveConfig(endpoint)
+	if err != nil {
+		log.Fatal(err)
+	}
+	patch, err := removeNodeLocalConfig(localConfig, rest[0], peer)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if dryRun {
+		printJSON("local config patch", patch)
+		return
+	}
+	if err := patchConfig(endpoint, patch); err != nil {
+		log.Fatalf("patch local node %s: %v", endpoint, err)
+	}
+	fmt.Printf("removed node %s\n", rest[0])
+}
+
 func parseClusterAcceptOptions(args []string) clusterAcceptOptions {
 	fs := flag.NewFlagSet("cluster accept", flag.ExitOnError)
 	opts := clusterAcceptOptions{}
@@ -1656,6 +1725,36 @@ func acceptLocalConfig(localConfig map[string]any, joinNodeID, joinSyncEndpoint,
 			"peer_public_keys": peerKeys,
 		},
 	}
+}
+
+func removeNodeLocalConfig(localConfig map[string]any, nodeID, peerEndpoint string) (map[string]any, error) {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" {
+		return nil, errors.New("missing node id")
+	}
+	peers := splitCSV(stringFromPath(localConfig, "distributed", "peers"))
+	peerKeys := stringMapFromPath(localConfig, "distributed", "peer_public_keys")
+	if _, ok := peerKeys[nodeID]; !ok {
+		return nil, fmt.Errorf("node %q is not present in distributed.peer_public_keys", nodeID)
+	}
+	delete(peerKeys, nodeID)
+
+	peerEndpoint = strings.TrimSpace(peerEndpoint)
+	switch {
+	case peerEndpoint != "":
+		peers = removeString(peers, peerEndpoint)
+	case len(peerKeys) == 0:
+		peers = nil
+	default:
+		return nil, fmt.Errorf("cannot infer peer endpoint for %q from current config; pass --peer tls://HOST:PORT", nodeID)
+	}
+	sortStrings(peers)
+	return map[string]any{
+		"distributed": map[string]any{
+			"peers":            strings.Join(peers, ","),
+			"peer_public_keys": peerKeys,
+		},
+	}, nil
 }
 
 func localNodeID(localConfig map[string]any, localInfo nodeDiscovery) string {
@@ -1791,6 +1890,17 @@ func appendUnique(values []string, value string) []string {
 		}
 	}
 	return append(values, value)
+}
+
+func removeString(values []string, value string) []string {
+	value = strings.TrimSpace(value)
+	out := values[:0]
+	for _, existing := range values {
+		if existing != value {
+			out = append(out, existing)
+		}
+	}
+	return out
 }
 
 func positiveOrDefault(value, fallback int) int {

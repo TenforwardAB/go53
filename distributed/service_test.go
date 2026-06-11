@@ -3,6 +3,7 @@ package distributed
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"go53/security"
 	"go53/storage"
 	"go53/types"
+	"go53/zone/rtypes"
 )
 
 func TestInitSetsDefaultService(t *testing.T) {
@@ -856,6 +858,143 @@ func TestMerkleRepairDetectsAndRepairsZoneDrift(t *testing.T) {
 	}
 }
 
+func TestMerkleSnapshotRepairBackfillsRecordsWithoutEvents(t *testing.T) {
+	aPriv, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair A: %v", err)
+	}
+	bPriv, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair B: %v", err)
+	}
+
+	aService := newTestService(t, "node-a", aPriv, map[string]string{"node-b": ""})
+	if err := aService.store.PutRecordRaw("bootstrap.test.", "SOA", "bootstrap.test.", map[string]any{
+		"ns":      "ns1.bootstrap.test.",
+		"mbox":    "hostmaster.bootstrap.test.",
+		"serial":  float64(1),
+		"refresh": float64(3600),
+		"retry":   float64(600),
+		"expire":  float64(86400),
+		"minimum": float64(300),
+		"ttl":     float64(300),
+	}); err != nil {
+		t.Fatalf("PutRecordRaw SOA: %v", err)
+	}
+	if err := aService.store.PutRecordRaw("bootstrap.test.", "A", "www", []any{
+		map[string]any{"ip": "192.0.2.44", "ttl": float64(300)},
+	}); err != nil {
+		t.Fatalf("PutRecordRaw A: %v", err)
+	}
+	if events, err := aService.Events("node-a", 0); err != nil {
+		t.Fatalf("Events: %v", err)
+	} else if len(events) != 0 {
+		t.Fatalf("events len = %d, want 0", len(events))
+	}
+
+	bService := newTestService(t, "node-b", bPriv, map[string]string{"node-a": ""})
+	localBranches, err := bService.merkleZoneBranches("bootstrap.test.")
+	if err != nil {
+		t.Fatalf("local branches: %v", err)
+	}
+	peerBranches, err := aService.merkleZoneBranches("bootstrap.test.")
+	if err != nil {
+		t.Fatalf("peer branches: %v", err)
+	}
+	prefixes := merkleDifferingBranches(localBranches, peerBranches)
+	localLeaves, err := bService.merkleZoneLeaves("bootstrap.test.", prefixes)
+	if err != nil {
+		t.Fatalf("local leaves: %v", err)
+	}
+	peerLeaves, err := aService.merkleZoneLeaves("bootstrap.test.", prefixes)
+	if err != nil {
+		t.Fatalf("peer leaves: %v", err)
+	}
+	entities := merkleDifferingEntities(localLeaves, peerLeaves)
+	if len(entities) != 2 {
+		t.Fatalf("entities len = %d, want 2: %#v", len(entities), entities)
+	}
+	repairEvents, err := aService.latestEventsForEntities(entities)
+	if err != nil {
+		t.Fatalf("latestEventsForEntities: %v", err)
+	}
+	if len(repairEvents) != 0 {
+		t.Fatalf("repair events len = %d, want 0", len(repairEvents))
+	}
+	records, err := aService.merkleZoneRecords("bootstrap.test.", entities)
+	if err != nil {
+		t.Fatalf("merkleZoneRecords: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("records len = %d, want 2", len(records))
+	}
+	if err := bService.applyMerkleRecords(records); err != nil {
+		t.Fatalf("applyMerkleRecords: %v", err)
+	}
+	aRoots, err := aService.merkleZoneRoots()
+	if err != nil {
+		t.Fatalf("a merkleZoneRoots: %v", err)
+	}
+	bRoots, err := bService.merkleZoneRoots()
+	if err != nil {
+		t.Fatalf("b merkleZoneRoots: %v", err)
+	}
+	if aRoots["bootstrap.test."].Root != bRoots["bootstrap.test."].Root {
+		t.Fatalf("roots differ after snapshot repair: a=%s b=%s", aRoots["bootstrap.test."].Root, bRoots["bootstrap.test."].Root)
+	}
+	if _, _, _, ok := bService.store.GetRecord("bootstrap.test.", "SOA", "bootstrap.test."); !ok {
+		t.Fatalf("SOA not backfilled")
+	}
+	if _, _, _, ok := bService.store.GetRecord("bootstrap.test.", "A", "www"); !ok {
+		t.Fatalf("A not backfilled")
+	}
+}
+
+func TestDNSSECKeySnapshotBackfillsKeysWithoutEvents(t *testing.T) {
+	privA, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair A: %v", err)
+	}
+	aService := newTestService(t, "node-a", privA, nil)
+	pubKSK, privKSK, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("Generate KSK: %v", err)
+	}
+	pubZSK, privZSK, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("Generate ZSK: %v", err)
+	}
+	if err := security.SavePrivateKeyToStorage("bootstrap.test.", "ksk-bootstrap", "ED25519", privKSK, pubKSK, 257); err != nil {
+		t.Fatalf("SavePrivateKeyToStorage KSK: %v", err)
+	}
+	if err := security.SavePrivateKeyToStorage("bootstrap.test.", "zsk-bootstrap", "ED25519", privZSK, pubZSK, 256); err != nil {
+		t.Fatalf("SavePrivateKeyToStorage ZSK: %v", err)
+	}
+	keys, err := aService.dnssecKeysForZone("bootstrap.test.")
+	if err != nil {
+		t.Fatalf("dnssecKeysForZone: %v", err)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("keys len = %d, want 2", len(keys))
+	}
+
+	privB, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair B: %v", err)
+	}
+	bService := newTestService(t, "node-b", privB, nil)
+	if err := bService.applyDNSSECKeys("bootstrap.test.", keys); err != nil {
+		t.Fatalf("applyDNSSECKeys: %v", err)
+	}
+	stored, err := bService.dnssecKeysForZone("bootstrap.test.")
+	if err != nil {
+		t.Fatalf("dnssecKeysForZone B: %v", err)
+	}
+	if len(stored) != 2 {
+		t.Fatalf("stored keys len = %d, want 2", len(stored))
+	}
+}
+
 func newTestService(t *testing.T, nodeID, privateKey string, peerKeys map[string]string) *Service {
 	t.Helper()
 	mock := &storage.MockStorage{}
@@ -875,6 +1014,7 @@ func newTestService(t *testing.T, nodeID, privateKey string, peerKeys map[string
 	if err != nil {
 		t.Fatalf("NewZoneStore: %v", err)
 	}
+	rtypes.InitMemoryStore(mem)
 	return &Service{
 		store:      mem,
 		storage:    mock,

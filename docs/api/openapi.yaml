@@ -1129,7 +1129,7 @@ paths:
                 summary: One record entity
                 value:
                   entities:
-                  - zone_record:example.com.:A:www.example.com.
+                  - example.com./A/www.example.com.
       responses:
         '200':
           description: Repair events.
@@ -1139,7 +1139,57 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/DistributedEvent'
-      description: Returns the latest stored distributed events for specific entity ids so a peer can repair divergent records.
+      description: Returns the latest stored distributed events for specific entity ids so a peer can repair divergent records. If no event exists for a current peer record, peers fall back to `/api/distributed/merkle/records`.
+  /api/distributed/merkle/records:
+    post:
+      tags:
+      - Distributed
+      summary: Get current records for Merkle entities
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MerkleRecordsRequest'
+            examples:
+              entities:
+                summary: One record entity
+                value:
+                  zone: example.com.
+                  entities:
+                  - example.com./A/www.example.com.
+      responses:
+        '200':
+          description: Current record snapshots.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MerkleRecords'
+      description: Returns current record values for requested Merkle entity ids. This is used as a bootstrap fallback when a joining peer has no historical distributed events for pre-existing zone records.
+  /api/distributed/dnssec-keys:
+    post:
+      tags:
+      - Distributed
+      summary: Get current DNSSEC keys for a zone
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DNSSECKeysRequest'
+            examples:
+              zone:
+                summary: One zone
+                value:
+                  zone: example.com.
+      responses:
+        '200':
+          description: Current DNSSEC key snapshots for the zone.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DNSKeyMap'
+      description: Returns stored DNSSEC keys, including private key material, for a zone. This is used by distributed repair as a bootstrap fallback when a joining peer has no historical distributed events for pre-existing KSK/ZSK material.
   /api/distributed/invites:
     post:
       tags:
@@ -2230,10 +2280,27 @@ components:
       properties:
         entity:
           type: string
-          example: zone_record:example.com.:A:www.example.com.
+          example: example.com./A/www.example.com.
         hash:
           type: string
           example: base64-leaf-hash
+    MerkleRecord:
+      type: object
+      properties:
+        entity:
+          type: string
+          example: example.com./A/www.example.com.
+        zone:
+          type: string
+          example: example.com.
+        rrtype:
+          type: string
+          example: A
+        name:
+          type: string
+          example: www.example.com.
+        value:
+          description: Stored record payload for the entity.
     MerkleRoots:
       type: object
       additionalProperties:
@@ -2246,6 +2313,10 @@ components:
       type: object
       additionalProperties:
         $ref: '#/components/schemas/MerkleLeaf'
+    MerkleRecords:
+      type: object
+      additionalProperties:
+        $ref: '#/components/schemas/MerkleRecord'
     MerkleLeavesRequest:
       type: object
       required:
@@ -2270,7 +2341,30 @@ components:
           items:
             type: string
           example:
-          - zone_record:example.com.:A:www.example.com.
+          - example.com./A/www.example.com.
+    MerkleRecordsRequest:
+      type: object
+      required:
+      - zone
+      properties:
+        zone:
+          type: string
+          example: example.com.
+        entities:
+          type: array
+          items:
+            type: string
+          description: Optional entity ids to return. Empty or omitted returns all records for the zone.
+          example:
+          - example.com./A/www.example.com.
+    DNSSECKeysRequest:
+      type: object
+      required:
+      - zone
+      properties:
+        zone:
+          type: string
+          example: example.com.
     InviteRecord:
       type: object
       required:

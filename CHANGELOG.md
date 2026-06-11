@@ -1,3 +1,8 @@
+## 0.77.5 (June 11, 2026)
+  - (feature)Added cluster remove-node to manage removing nodes from a distributed cluster
+  - (bug) Distributed not syncing all pre eventlist records
+  - New Release v0.77.4
+
 ## 0.77.4 (June 10, 2026)
   - fix(feature) Added x-auth-key api authentaication and config for x-auth
   - Added (docs) Updated documentation for DNSSEC management and technical details

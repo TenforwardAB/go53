@@ -55,14 +55,13 @@ if [ -f VERSION ]; then
         INPUT_STRING=$SUGGESTED_VERSION
     fi
 
-    # Update the version in package.json
-    if [ -f package.json ]; then
-        jq ".version = \"$INPUT_STRING\"" package.json > tmp_package.json && mv tmp_package.json package.json
-        echo -e "${NOTICE_FLAG} Updated package.json version to ${WHITE}$INPUT_STRING"
+    # Update the version in config/default_config.go
+    if [ -f config/default_config.go ]; then
+        sed -i "s/Version:.*\"go53.*\"/Version:           \"go53 v$INPUT_STRING\",/" config/default_config.go
+        echo -e "${NOTICE_FLAG} Updated config/default_config.go version to ${WHITE}go53 v$INPUT_STRING"
     else
-        echo -e "${WARNING_FLAG} Could not find package.json to update."
+        echo -e "${WARNING_FLAG} Could not find config/default_config.go to update."
     fi
-
 
     echo -e "${NOTICE_FLAG} Will set new version to be ${WHITE}$INPUT_STRING"
     echo $INPUT_STRING > VERSION
@@ -75,7 +74,7 @@ if [ -f VERSION ]; then
     echo -e "$ADJUSTMENTS_MSG"
     read
     echo -e "$PUSHING_MSG"
-    git add CHANGELOG.md VERSION package.json
+    git add CHANGELOG.md VERSION config/default_config.go
     git commit -m "Bump version to ${INPUT_STRING}."
     git tag -a -m "Tag version ${INPUT_STRING}." "v$INPUT_STRING"
     git push origin --tags
@@ -96,11 +95,17 @@ else
         git log --pretty=format:"  - %s" >> CHANGELOG.md
         echo "" >> CHANGELOG.md
         echo "" >> CHANGELOG.md
+
+        # Update version in config/default_config.go
+        if [ -f config/default_config.go ]; then
+            sed -i 's/Version:.*"go53.*"/Version:           "go53 v0.1.0",/' config/default_config.go
+        fi
+
         echo -e "$ADJUSTMENTS_MSG"
         read
         echo -e "$PUSHING_MSG"
-        git add VERSION CHANGELOG.md
-        git commit -m "Add VERSION and CHANGELOG.md files, Bump version to v0.1.0."
+        git add VERSION CHANGELOG.md config/default_config.go
+        git commit -m "Add VERSION and CHANGELOG.md files, update config, bump version to v0.1.0."
         git tag -a -m "Tag version 0.1.0." "v0.1.0"
         git push origin --tags
     fi

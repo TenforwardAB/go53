@@ -796,6 +796,68 @@ func (s *Service) fetchPeerMerkleRepairEvents(ctx context.Context, peer string, 
 	return events, nil
 }
 
+func (s *Service) fetchPeerMerkleRecords(ctx context.Context, peer, zone string, entities []string) (map[string]MerkleRecord, error) {
+	if useSocketTransport(peer) {
+		return s.fetchPeerMerkleRecordsTCP(ctx, peer, zone, entities)
+	}
+	body, err := json.Marshal(map[string]any{"zone": zone, "entities": entities})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, peerURL(peer, "/api/distributed/merkle/records"), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("peer merkle records returned %s", resp.Status)
+	}
+	var records map[string]MerkleRecord
+	if err := json.NewDecoder(resp.Body).Decode(&records); err != nil {
+		return nil, err
+	}
+	if records == nil {
+		records = map[string]MerkleRecord{}
+	}
+	return records, nil
+}
+
+func (s *Service) fetchPeerDNSSECKeys(ctx context.Context, peer, zone string) (map[string]types.StoredKey, error) {
+	if useSocketTransport(peer) {
+		return s.fetchPeerDNSSECKeysTCP(ctx, peer, zone)
+	}
+	body, err := json.Marshal(map[string]string{"zone": zone})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, peerURL(peer, "/api/distributed/dnssec-keys"), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("peer dnssec keys returned %s", resp.Status)
+	}
+	var keys map[string]types.StoredKey
+	if err := json.NewDecoder(resp.Body).Decode(&keys); err != nil {
+		return nil, err
+	}
+	if keys == nil {
+		keys = map[string]types.StoredKey{}
+	}
+	return keys, nil
+}
+
 func (s *Service) repairPeerZones(ctx context.Context, peer string) error {
 	peerRoots, err := s.fetchPeerMerkleRoots(ctx, peer)
 	if err != nil {
@@ -854,12 +916,102 @@ func (s *Service) repairPeerZone(ctx context.Context, peer, zone string) error {
 	if err != nil {
 		return err
 	}
+	repaired := map[string]bool{}
 	for _, event := range events {
+		if event.Entity == "" {
+			event.Entity = eventEntityKey(event)
+		}
+		repaired[event.Entity] = true
 		if err := s.applyRepairEvent(ctx, event); err != nil {
 			return err
 		}
 	}
+	missingEventEntities := make([]string, 0, len(entities))
+	for _, entity := range entities {
+		if !repaired[entity] {
+			missingEventEntities = append(missingEventEntities, entity)
+		}
+	}
+	if len(missingEventEntities) == 0 {
+		return s.repairPeerDNSSECKeys(ctx, peer, zone)
+	}
+	records, err := s.fetchPeerMerkleRecords(ctx, peer, zone, missingEventEntities)
+	if err != nil {
+		return err
+	}
+	if err := s.applyMerkleRecords(records); err != nil {
+		return err
+	}
+	return s.repairPeerDNSSECKeys(ctx, peer, zone)
+}
+
+func (s *Service) applyMerkleRecords(records map[string]MerkleRecord) error {
+	for entity, record := range records {
+		if strings.TrimSpace(record.Entity) == "" {
+			record.Entity = entity
+		}
+		if record.Entity != entityKey(record.Zone, record.RRType, record.Name) {
+			return fmt.Errorf("merkle record entity mismatch for %q", record.Entity)
+		}
+		if err := s.store.PutRecordRaw(record.Zone, record.RRType, record.Name, record.Value); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func (s *Service) repairPeerDNSSECKeys(ctx context.Context, peer, zone string) error {
+	keys, err := s.fetchPeerDNSSECKeys(ctx, peer, zone)
+	if err != nil {
+		return err
+	}
+	return s.applyDNSSECKeys(zone, keys)
+}
+
+func (s *Service) applyDNSSECKeys(zone string, keys map[string]types.StoredKey) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	for keyID, key := range keys {
+		data, err := json.Marshal(key)
+		if err != nil {
+			return err
+		}
+		if err := s.storage.SaveTable("dnssec_keys", keyID, data); err != nil {
+			return err
+		}
+	}
+	if err := security.InitDNSSECKeyCache(); err != nil {
+		return err
+	}
+	return zonepkg.RefreshDNSSECKeyMaterial(zone)
+}
+
+func (s *Service) DNSSECKeysForZone(zone string) (map[string]types.StoredKey, error) {
+	return s.dnssecKeysForZone(zone)
+}
+
+func (s *Service) dnssecKeysForZone(zone string) (map[string]types.StoredKey, error) {
+	out := map[string]types.StoredKey{}
+	if s == nil || s.storage == nil {
+		return out, nil
+	}
+	wantZone := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(zone)), ".")
+	table, err := s.storage.LoadTable("dnssec_keys")
+	if err != nil {
+		return out, nil
+	}
+	for keyID, raw := range table {
+		var key types.StoredKey
+		if err := json.Unmarshal(raw, &key); err != nil {
+			continue
+		}
+		keyZone := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(key.Zone)), ".")
+		if keyZone == wantZone {
+			out[keyID] = key
+		}
+	}
+	return out, nil
 }
 
 func (s *Service) applyEventLocked(ctx context.Context, event Event) error {

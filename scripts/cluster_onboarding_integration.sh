@@ -32,6 +32,7 @@ NODE_C_SOCKET="${WORK_DIR}/node-c/admin.sock"
 NODE_A_PID=""
 NODE_B_PID=""
 NODE_C_PID=""
+BOOTSTRAP_ZONE="bootstrap-onboarding.test."
 
 log() {
 	printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"
@@ -166,7 +167,7 @@ configure_issuer() {
 	ctl "$NODE_A_SOCKET" config patch "$(jq -nc \
 		--arg private_key "$key" \
 		--arg sync_port ":${NODE_A_SYNC_PORT}" \
-		'{mode:"distributed", allow_axfr:true, dnssec_enabled:false,
+		'{mode:"distributed", allow_axfr:true, dnssec_enabled:true,
 		  distributed:{node_id:"node-a", transport:"tls", sync_bind_host:"127.0.0.1",
 		  sync_port:$sync_port, peers:"", private_key:$private_key,
 		  peer_public_keys:{}, push_timeout_ms:750, resync_interval_s:2}}')" >/dev/null
@@ -201,6 +202,143 @@ has_peer() {
 		|| return 1
 	jq -e --arg endpoint "$endpoint" '(.distributed.peers // "" | split(",") | index($endpoint)) != null' <<<"$cfg" >/dev/null \
 		|| return 1
+}
+
+add_record() {
+	local socket="$1"
+	local zone="$2"
+	local rrtype="$3"
+	local body="$4"
+	ctl "$socket" records add "$zone" "$rrtype" "$body" >/dev/null
+}
+
+record_exists() {
+	local socket="$1"
+	local zone="$2"
+	local rrtype="$3"
+	local name="$4"
+	ctl "$socket" records get "$zone" "$rrtype" "$name" >/dev/null 2>&1
+}
+
+wait_for_record() {
+	local socket="$1"
+	local zone="$2"
+	local rrtype="$3"
+	local name="$4"
+	local deadline=$((SECONDS + 60))
+	while ((SECONDS < deadline)); do
+		if record_exists "$socket" "$zone" "$rrtype" "$name"; then
+			return 0
+		fi
+		sleep 0.5
+	done
+	fail "$socket did not receive $rrtype $name in $zone"
+}
+
+wait_for_dns_answer() {
+	local port="$1"
+	local name="$2"
+	local rrtype="$3"
+	local pattern="$4"
+	local deadline=$((SECONDS + 60))
+	local out=""
+	while ((SECONDS < deadline)); do
+		out="$(dig @"$LOCAL_HOST" -p "$port" "$name" "$rrtype" +time=1 +tries=1 +short 2>/dev/null || true)"
+		if grep -Eq "$pattern" <<<"$out"; then
+			return 0
+		fi
+		sleep 0.5
+	done
+	fail "DNS ${LOCAL_HOST}:${port} did not answer $rrtype $name with $pattern; output: $out"
+}
+
+wait_for_dns_rrsig() {
+	local port="$1"
+	local name="$2"
+	local rrtype="$3"
+	local deadline=$((SECONDS + 60))
+	local out=""
+	while ((SECONDS < deadline)); do
+		out="$(dig @"$LOCAL_HOST" -p "$port" "$name" "$rrtype" +dnssec +time=1 +tries=1 +noall +answer 2>/dev/null || true)"
+		if grep -Eq "[[:space:]]RRSIG[[:space:]]+$rrtype[[:space:]]" <<<"$out"; then
+			return 0
+		fi
+		sleep 0.5
+	done
+	fail "DNS ${LOCAL_HOST}:${port} did not return RRSIG($rrtype) for $name; output: $out"
+}
+
+assert_dnssec_keys() {
+	local socket="$1"
+	local zone="$2"
+	local zone_nodot="${zone%.}"
+	local keys
+	keys="$(ctl "$socket" dnskeys list)"
+	jq -e --arg zone "$zone" --arg zone_nodot "$zone_nodot" '[.[] | select((.zone == $zone or .zone == $zone_nodot) and .flags == 257)] | length >= 1' <<<"$keys" >/dev/null \
+		|| fail "$socket does not have KSK for $zone"
+	jq -e --arg zone "$zone" --arg zone_nodot "$zone_nodot" '[.[] | select((.zone == $zone or .zone == $zone_nodot) and .flags == 256)] | length >= 1' <<<"$keys" >/dev/null \
+		|| fail "$socket does not have ZSK for $zone"
+	jq -e --arg zone "$zone" --arg zone_nodot "$zone_nodot" '[.[] | select((.zone == $zone or .zone == $zone_nodot) and (.private_pem // "") != "")] | length >= 2' <<<"$keys" >/dev/null \
+		|| fail "$socket does not have private DNSSEC key material for $zone"
+}
+
+create_bootstrap_zone() {
+	local zone="$BOOTSTRAP_ZONE"
+	local ksk_key zsk_key
+	log "creating pre-existing signed bootstrap zone on node-a"
+	add_record "$NODE_A_SOCKET" "$zone" SOA '{"ttl":300,"ns":"ns1.bootstrap-onboarding.test.","mbox":"hostmaster.bootstrap-onboarding.test.","refresh":3600,"retry":600,"expire":86400,"minimum":300}'
+	ksk_key="$(ctl "$NODE_A_SOCKET" dnskeys rollover "$zone" ksk ED25519 | jq -r '.keyid')"
+	zsk_key="$(ctl "$NODE_A_SOCKET" dnskeys rollover "$zone" zsk ED25519 | jq -r '.keyid')"
+	[[ -n "$ksk_key" && "$ksk_key" != "null" ]] || fail "could not create bootstrap KSK"
+	[[ -n "$zsk_key" && "$zsk_key" != "null" ]] || fail "could not create bootstrap ZSK"
+	add_record "$NODE_A_SOCKET" "$zone" DNSKEY "{\"keyid\":\"$ksk_key\",\"ttl\":300}"
+	add_record "$NODE_A_SOCKET" "$zone" DNSKEY "{\"keyid\":\"$zsk_key\",\"ttl\":300}"
+	add_record "$NODE_A_SOCKET" "$zone" NS '{"name":"@","ttl":300,"ns":"ns1.bootstrap-onboarding.test."}'
+	add_record "$NODE_A_SOCKET" "$zone" A '{"name":"ns1","ttl":300,"ip":"192.0.2.10"}'
+	add_record "$NODE_A_SOCKET" "$zone" A '{"name":"www","ttl":300,"ip":"192.0.2.20"}'
+	add_record "$NODE_A_SOCKET" "$zone" AAAA '{"name":"www","ttl":300,"ip":"2001:db8::20"}'
+	add_record "$NODE_A_SOCKET" "$zone" CNAME '{"name":"alias","ttl":300,"target":"www.bootstrap-onboarding.test."}'
+	add_record "$NODE_A_SOCKET" "$zone" MX '{"name":"@","ttl":300,"host":"mail.bootstrap-onboarding.test.","priority":10}'
+	add_record "$NODE_A_SOCKET" "$zone" TXT '{"name":"txt","ttl":300,"text":"cluster onboarding txt"}'
+	add_record "$NODE_A_SOCKET" "$zone" SPF '{"name":"spf","ttl":300,"text":"v=spf1 -all"}'
+	add_record "$NODE_A_SOCKET" "$zone" SRV '{"name":"_sip._tcp","ttl":300,"priority":10,"weight":5,"port":5060,"target":"sip.bootstrap-onboarding.test."}'
+	add_record "$NODE_A_SOCKET" "$zone" PTR '{"name":"ptr","ttl":300,"ptr":"www.bootstrap-onboarding.test."}'
+	assert_bootstrap_zone "$NODE_A_SOCKET" "$NODE_A_DNS_PORT"
+}
+
+assert_bootstrap_zone() {
+	local socket="$1"
+	local port="$2"
+	local zone="$BOOTSTRAP_ZONE"
+	wait_for_record "$socket" "$zone" SOA "$zone"
+	wait_for_record "$socket" "$zone" NS "$zone"
+	wait_for_record "$socket" "$zone" DNSKEY "$zone"
+	wait_for_record "$socket" "$zone" A "www.$zone"
+	wait_for_record "$socket" "$zone" AAAA "www.$zone"
+	wait_for_record "$socket" "$zone" CNAME "alias.$zone"
+	wait_for_record "$socket" "$zone" MX "$zone"
+	wait_for_record "$socket" "$zone" TXT "txt.$zone"
+	wait_for_record "$socket" "$zone" SPF "spf.$zone"
+	wait_for_record "$socket" "$zone" SRV "_sip._tcp.$zone"
+	wait_for_record "$socket" "$zone" PTR "ptr.$zone"
+	assert_dnssec_keys "$socket" "$zone"
+	wait_for_dns_answer "$port" "$zone" SOA "ns1\\.bootstrap-onboarding\\.test\\."
+	wait_for_dns_answer "$port" "www.$zone" A "192\\.0\\.2\\.20"
+	wait_for_dns_answer "$port" "alias.$zone" CNAME "www\\.bootstrap-onboarding\\.test\\."
+	wait_for_dns_answer "$port" "_sip._tcp.$zone" SRV "5060[[:space:]]+sip\\.bootstrap-onboarding\\.test\\."
+	wait_for_dns_answer "$port" "$zone" DNSKEY "257|256"
+	wait_for_dns_rrsig "$port" "www.$zone" A
+}
+
+add_live_cluster_record() {
+	local zone="$BOOTSTRAP_ZONE"
+	log "adding post-join record on node-a"
+	add_record "$NODE_A_SOCKET" "$zone" A '{"name":"after-join","ttl":300,"ip":"192.0.2.55"}'
+	wait_for_record "$NODE_A_SOCKET" "$zone" A "after-join.$zone"
+	wait_for_record "$NODE_B_SOCKET" "$zone" A "after-join.$zone"
+	wait_for_record "$NODE_C_SOCKET" "$zone" A "after-join.$zone"
+	wait_for_dns_answer "$NODE_B_DNS_PORT" "after-join.$zone" A "192\\.0\\.2\\.55"
+	wait_for_dns_answer "$NODE_C_DNS_PORT" "after-join.$zone" A "192\\.0\\.2\\.55"
 }
 
 assert_pending_count() {
@@ -243,6 +381,7 @@ main() {
 	log "starting node-a issuer"
 	start_node node-a "$NODE_A_DNS_PORT" "$NODE_A_API_PORT" "$NODE_A_SOCKET"
 	configure_issuer
+	create_bootstrap_zone
 
 	log "starting node-b and testing pending join"
 	start_node node-b "$NODE_B_DNS_PORT" "$NODE_B_API_PORT" "$NODE_B_SOCKET"
@@ -259,6 +398,7 @@ main() {
 	restart_node node-b
 	assert_node_id "$NODE_B_SOCKET" "node-b"
 	assert_peer "$NODE_B_SOCKET" "node-a" "$NODE_A_SYNC"
+	assert_bootstrap_zone "$NODE_B_SOCKET" "$NODE_B_DNS_PORT"
 
 	log "starting node-c and testing auto-accept join into existing cluster"
 	start_node node-c "$NODE_C_DNS_PORT" "$NODE_C_API_PORT" "$NODE_C_SOCKET"
@@ -280,6 +420,8 @@ main() {
 	done
 	assert_peer "$NODE_B_SOCKET" "node-c" "$NODE_C_SYNC"
 	assert_peer "$NODE_C_SOCKET" "node-b" "$NODE_B_SYNC"
+	assert_bootstrap_zone "$NODE_C_SOCKET" "$NODE_C_DNS_PORT"
+	add_live_cluster_record
 
 	log "cluster onboarding integration passed"
 }

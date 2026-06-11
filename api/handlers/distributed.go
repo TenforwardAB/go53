@@ -193,6 +193,53 @@ func PostDistributedMerkleRepairEventsHandler(w http.ResponseWriter, r *http.Req
 	writeDistributedJSON(w, events)
 }
 
+func PostDistributedMerkleRecordsHandler(w http.ResponseWriter, r *http.Request) {
+	if !distributedServiceReady(w) {
+		return
+	}
+	var req struct {
+		Zone     string   `json:"zone"`
+		Entities []string `json:"entities"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if req.Zone == "" {
+		http.Error(w, "missing zone", http.StatusBadRequest)
+		return
+	}
+	records, err := distributed.Default.MerkleZoneRecords(req.Zone, req.Entities)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeDistributedJSON(w, records)
+}
+
+func PostDistributedDNSSECKeysHandler(w http.ResponseWriter, r *http.Request) {
+	if !distributedServiceReady(w) {
+		return
+	}
+	var req struct {
+		Zone string `json:"zone"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if req.Zone == "" {
+		http.Error(w, "missing zone", http.StatusBadRequest)
+		return
+	}
+	keys, err := distributed.Default.DNSSECKeysForZone(req.Zone)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeDistributedJSON(w, keys)
+}
+
 func PostDistributedInviteHandler(w http.ResponseWriter, r *http.Request) {
 	if !distributedServiceReady(w) {
 		return

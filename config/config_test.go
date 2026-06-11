@@ -296,6 +296,37 @@ func TestMergeUpdateLiveJSONAppliesFalseAndEmpty(t *testing.T) {
 	}
 }
 
+func TestMergeUpdateLiveJSONReplacesPeerPublicKeys(t *testing.T) {
+	setupMockStorage()
+	cm := &config.ConfigManager{}
+	cm.UpdateLive(config.LiveConfig{
+		Mode: "distributed",
+		Distributed: config.DistributedConfig{
+			Peers:          "tls://old:53530",
+			PeerPublicKeys: map[string]string{"old-node": "old-key"},
+		},
+	})
+
+	if err := cm.MergeUpdateLiveJSON([]byte(`{"distributed":{"peers":"","peer_public_keys":{}}}`)); err != nil {
+		t.Fatalf("MergeUpdateLiveJSON clear: %v", err)
+	}
+	live := cm.GetLive()
+	if live.Distributed.Peers != "" {
+		t.Fatalf("expected peers cleared, got %q", live.Distributed.Peers)
+	}
+	if len(live.Distributed.PeerPublicKeys) != 0 {
+		t.Fatalf("expected peer_public_keys cleared, got %#v", live.Distributed.PeerPublicKeys)
+	}
+
+	if err := cm.MergeUpdateLiveJSON([]byte(`{"distributed":{"peer_public_keys":{"new-node":"new-key"}}}`)); err != nil {
+		t.Fatalf("MergeUpdateLiveJSON replace: %v", err)
+	}
+	live = cm.GetLive()
+	if len(live.Distributed.PeerPublicKeys) != 1 || live.Distributed.PeerPublicKeys["new-node"] != "new-key" {
+		t.Fatalf("expected peer_public_keys replaced, got %#v", live.Distributed.PeerPublicKeys)
+	}
+}
+
 func TestMergeUpdateLiveJSONInvalidBody(t *testing.T) {
 	setupMockStorage()
 	cm := &config.ConfigManager{}
