@@ -35,6 +35,7 @@ const (
 	EntityConfig     = "config"
 	EntityTSIGKey    = "tsig_key"
 	EntityDNSSECKey  = "dnssec_key"
+	EntityZone       = "zone"
 
 	eventsTable       = "distributed-events"
 	vectorTable       = "distributed-vector"
@@ -193,6 +194,22 @@ func (s *Service) PublishDelete(zone, rrtype, name string) error {
 		Zone:       zone,
 		RRType:     rrtype,
 		Name:       name,
+		Operation:  OperationDelete,
+	})
+}
+
+// PublishZoneDelete replicates the removal of a whole zone. Callers should also
+// publish a per-record PublishDelete for each record in the zone first: those
+// per-record deletes are the repair-safe tombstones that stop Merkle
+// anti-entropy from resurrecting individual records, while this zone-level event
+// removes the now-empty zone shell on peers via store.DeleteZone.
+func (s *Service) PublishZoneDelete(zone string) error {
+	if s == nil || !enabled() {
+		return nil
+	}
+	return s.publish(Event{
+		EntityType: EntityZone,
+		Zone:       zone,
 		Operation:  OperationDelete,
 	})
 }
@@ -1028,6 +1045,8 @@ func (s *Service) applyEventLocked(ctx context.Context, event Event) error {
 		return s.applyTSIGEvent(event)
 	case EntityDNSSECKey:
 		return s.applyDNSSECKeyEvent(event)
+	case EntityZone:
+		return s.applyZoneEvent(event)
 	}
 	switch event.Operation {
 	case OperationUpsert:
@@ -1043,6 +1062,19 @@ func (s *Service) applyEventLocked(ctx context.Context, event Event) error {
 	default:
 		return fmt.Errorf("unknown distributed operation %q", event.Operation)
 	}
+}
+
+// applyZoneEvent applies a replicated zone-level event. Only DELETE is defined:
+// it removes the whole zone (records + shell) locally. Per-record delete events
+// carry the repair-safe tombstones; this just clears the residual empty zone.
+func (s *Service) applyZoneEvent(event Event) error {
+	if event.Operation != OperationDelete {
+		return fmt.Errorf("unsupported zone operation %q", event.Operation)
+	}
+	if strings.TrimSpace(event.Zone) == "" {
+		return fmt.Errorf("zone delete event missing zone")
+	}
+	return s.store.DeleteZone(event.Zone)
 }
 
 func (s *Service) applyConfigEvent(event Event) error {
@@ -1875,6 +1907,8 @@ func eventEntityKey(event Event) string {
 		return EntityTSIGKey + "/" + strings.ToLower(strings.TrimSpace(event.Name))
 	case EntityDNSSECKey:
 		return EntityDNSSECKey + "/" + strings.TrimSpace(event.Name)
+	case EntityZone:
+		return EntityZone + "/" + strings.ToLower(strings.TrimSpace(event.Zone))
 	default:
 		return entityKey(event.Zone, event.RRType, event.Name)
 	}

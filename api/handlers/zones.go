@@ -422,11 +422,44 @@ func DeleteZoneHandler(w http.ResponseWriter, r *http.Request) {
 	if rejectReadOnlyZone(w, zoneName) {
 		return
 	}
+
+	// Snapshot the zone's records before deleting so the deletion can be
+	// replicated: a per-record delete for each (repair-safe tombstone) plus a
+	// zone-level delete event that clears the empty zone shell on peers.
+	var snapshot map[string]map[string]any
+	if store := rtypes.GetMemStore(); store != nil {
+		snapshot = store.ZoneRecordsSnapshot(zoneName)
+	}
+
 	if err := zone.DeleteZone(zoneName); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	if err := publishDistributedZoneDelete(zoneName, snapshot); err != nil {
+		http.Error(w, "zone deleted but distributed event failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// publishDistributedZoneDelete replicates a whole-zone deletion. It first emits a
+// per-record delete for every record (those are the repair-safe tombstones that
+// stop Merkle anti-entropy from pulling records back from peers), then a single
+// zone-level delete event that removes the now-empty zone shell on peers.
+func publishDistributedZoneDelete(zoneName string, snapshot map[string]map[string]any) error {
+	if distributed.Default == nil || !distributed.Enabled() {
+		return nil
+	}
+	for rrtype, names := range snapshot {
+		for name := range names {
+			if err := distributed.Default.PublishDelete(zoneName, strings.ToUpper(rrtype), name); err != nil {
+				return err
+			}
+		}
+	}
+	return distributed.Default.PublishZoneDelete(zoneName)
 }
 
 func TriggerSecondaryFetchHandler(w http.ResponseWriter, r *http.Request) {

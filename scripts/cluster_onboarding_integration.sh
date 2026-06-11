@@ -348,6 +348,86 @@ assert_pending_count() {
 	[[ "$got" == "$expected" ]] || fail "pending count = $got, want $expected"
 }
 
+zone_listed() {
+	local socket="$1"
+	local zone="$2"
+	ctl "$socket" zones list --limit 500 \
+		| jq -e --arg z "$zone" '((.items // .) // []) | index($z) != null' >/dev/null 2>&1
+}
+
+delete_zone() {
+	local socket="$1"
+	local zone="$2"
+	ctl "$socket" zones delete "$zone" >/dev/null
+}
+
+wait_for_zone_absent() {
+	local socket="$1"
+	local zone="$2"
+	local deadline=$((SECONDS + 60))
+	while ((SECONDS < deadline)); do
+		if ! zone_listed "$socket" "$zone"; then
+			return 0
+		fi
+		sleep 0.5
+	done
+	fail "$socket still lists zone $zone after delete"
+}
+
+assert_zone_absent() {
+	local socket="$1"
+	local zone="$2"
+	if zone_listed "$socket" "$zone"; then
+		fail "$socket unexpectedly lists zone $zone (resurrected?)"
+	fi
+}
+
+assert_dns_zone_absent() {
+	local port="$1"
+	local zone="$2"
+	local out
+	out="$(dig @"$LOCAL_HOST" -p "$port" "$zone" SOA +time=1 +tries=1 +short 2>/dev/null || true)"
+	if grep -Eq "ns1\\.bootstrap-onboarding\\.test\\." <<<"$out"; then
+		fail "DNS ${LOCAL_HOST}:${port} still serves SOA for deleted zone $zone: $out"
+	fi
+}
+
+# Verifies distributed zone deletion: removing a zone on one node must replicate
+# to all peers (records gone AND the empty zone shell removed) and must not be
+# resurrected by Merkle anti-entropy repair.
+delete_bootstrap_zone_and_verify() {
+	local zone="$BOOTSTRAP_ZONE"
+	log "deleting bootstrap zone on node-a and verifying cluster-wide removal"
+	delete_zone "$NODE_A_SOCKET" "$zone"
+
+	wait_for_zone_absent "$NODE_A_SOCKET" "$zone"
+	wait_for_zone_absent "$NODE_B_SOCKET" "$zone"
+	wait_for_zone_absent "$NODE_C_SOCKET" "$zone"
+
+	# The records themselves (not just the shell) must be gone on every node.
+	local socket
+	for socket in "$NODE_A_SOCKET" "$NODE_B_SOCKET" "$NODE_C_SOCKET"; do
+		if record_exists "$socket" "$zone" A "www.$zone"; then
+			fail "$socket still has www A record after zone delete"
+		fi
+		if record_exists "$socket" "$zone" SOA "$zone"; then
+			fail "$socket still has SOA after zone delete"
+		fi
+	done
+
+	# Let anti-entropy run a few cycles (resync_interval_s=2) and confirm the
+	# zone does not come back on any node — this is the regression guard.
+	log "verifying the deleted zone does not resurrect via anti-entropy"
+	sleep 6
+	assert_zone_absent "$NODE_A_SOCKET" "$zone"
+	assert_zone_absent "$NODE_B_SOCKET" "$zone"
+	assert_zone_absent "$NODE_C_SOCKET" "$zone"
+
+	assert_dns_zone_absent "$NODE_A_DNS_PORT" "$zone"
+	assert_dns_zone_absent "$NODE_B_DNS_PORT" "$zone"
+	assert_dns_zone_absent "$NODE_C_DNS_PORT" "$zone"
+}
+
 get_xauth_key() {
 	local socket="$1"
 	ctl "$socket" config get xauth_key | jq -r '.x_auth_key // ""'
@@ -481,6 +561,8 @@ main() {
 	[[ -n "$key3" && "$key3" != "$key2" ]] || fail "node-a did not rotate x-auth-key again"
 	wait_for_xauth_key "$NODE_B_SOCKET" "$key3"
 	wait_for_xauth_key "$NODE_C_SOCKET" "$key3"
+
+	delete_bootstrap_zone_and_verify
 
 	log "cluster onboarding integration passed"
 }

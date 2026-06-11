@@ -1,3 +1,6 @@
+## 0.77.6 (June 11, 2026)
+  - fix(distributed): issuer-controlled auto-accept, auth sync, and CLI/config fixes
+
 ## 0.77.5 (June 11, 2026)
   - (feature)Added cluster remove-node to manage removing nodes from a distributed cluster
   - (bug) Distributed not syncing all pre eventlist records

@@ -1058,3 +1058,81 @@ func newTestService(t *testing.T, nodeID, privateKey string, peerKeys map[string
 		peerQueues: make(map[string]chan Event),
 	}
 }
+
+func zoneListed(zones []string, zone string) bool {
+	for _, z := range zones {
+		if z == zone {
+			return true
+		}
+	}
+	return false
+}
+
+// TestZoneDeleteReplication verifies that deleting a zone propagates to peers:
+// per-record delete events remove the records (repair-safe tombstones) and the
+// zone-level delete event removes the residual empty zone shell.
+func TestZoneDeleteReplication(t *testing.T) {
+	aPriv, aPub, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair A: %v", err)
+	}
+	bPriv, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair B: %v", err)
+	}
+
+	const zone = "zonedelete.test."
+
+	// Origin node deletes the zone: emit a per-record delete for each record,
+	// then the zone-level delete (mirrors DeleteZoneHandler).
+	aService := newTestService(t, "node-a", aPriv, map[string]string{"node-b": ""})
+	if err := aService.PublishDelete(zone, "SOA", "@"); err != nil {
+		t.Fatalf("PublishDelete SOA: %v", err)
+	}
+	if err := aService.PublishDelete(zone, "A", "www"); err != nil {
+		t.Fatalf("PublishDelete A: %v", err)
+	}
+	if err := aService.PublishZoneDelete(zone); err != nil {
+		t.Fatalf("PublishZoneDelete: %v", err)
+	}
+	events, err := aService.Events("node-a", 0)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("events len = %d, want 3", len(events))
+	}
+
+	// Peer still holds the zone (two A values + SOA) before the events arrive.
+	bService := newTestService(t, "node-b", bPriv, map[string]string{"node-a": aPub})
+	if err := bService.store.PutRecordRaw(zone, "SOA", "@", map[string]any{"ns": "ns1." + zone, "ttl": float64(3600)}); err != nil {
+		t.Fatalf("seed SOA: %v", err)
+	}
+	if err := bService.store.PutRecordRaw(zone, "A", "www", []any{
+		map[string]any{"ip": "8.8.4.4", "ttl": float64(3600)},
+		map[string]any{"ip": "8.8.8.8", "ttl": float64(3600)},
+	}); err != nil {
+		t.Fatalf("seed A: %v", err)
+	}
+	if !zoneListed(bService.store.ZoneNamesSnapshot(), zone) {
+		t.Fatalf("precondition: peer should list the zone")
+	}
+
+	for i, e := range events {
+		if _, err := bService.ReceiveEvent(context.Background(), e); err != nil {
+			t.Fatalf("ReceiveEvent[%d]: %v", i, err)
+		}
+	}
+
+	// Records are gone...
+	if _, _, _, ok := bService.store.GetRecord(zone, "A", "www"); ok {
+		t.Fatalf("A record should be deleted on peer")
+	}
+	if _, _, _, ok := bService.store.GetRecord(zone, "SOA", "@"); ok {
+		t.Fatalf("SOA record should be deleted on peer")
+	}
+	// ...and the empty zone shell is removed too.
+	if zoneListed(bService.store.ZoneNamesSnapshot(), zone) {
+		t.Fatalf("zone shell should be removed on peer after zone-delete event")
+	}
+}
