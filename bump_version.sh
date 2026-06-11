@@ -57,7 +57,7 @@ if [ -f VERSION ]; then
 
     # Update the version in config/default_config.go
     if [ -f config/default_config.go ]; then
-        sed -i "s/Version:.*\"go53.*\"/Version:           \"go53 v$INPUT_STRING\",/" config/default_config.go
+        sed -i "s/Version:.*\"go53 v[^\"]*\"/Version:           \"go53 v$INPUT_STRING\"/" config/default_config.go
         echo -e "${NOTICE_FLAG} Updated config/default_config.go version to ${WHITE}go53 v$INPUT_STRING"
     else
         echo -e "${WARNING_FLAG} Could not find config/default_config.go to update."
@@ -98,7 +98,7 @@ else
 
         # Update version in config/default_config.go
         if [ -f config/default_config.go ]; then
-            sed -i 's/Version:.*"go53.*"/Version:           "go53 v0.1.0",/' config/default_config.go
+            sed -i 's/Version:.*"go53 v[^"]*"/Version:           "go53 v0.1.0"/' config/default_config.go
         fi
 
         echo -e "$ADJUSTMENTS_MSG"

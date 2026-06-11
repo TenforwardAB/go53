@@ -6,7 +6,7 @@ var DefaultLiveConfig = LiveConfig{
 	AllowTransfer:     "127.0.0.1",
 	AllowRecursion:    false,
 	DefaultTTL:        3600,
-	Version:           "go53 v0.77.5",,
+	Version:           "go53 v0.77.5",
 	MaxUDPSize:        1232,
 	EnableEDNS:        true,
 	NSID:              "", // empty = NSID disabled, avoids leaking node identity by default
