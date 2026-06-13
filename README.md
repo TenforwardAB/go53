@@ -6,6 +6,21 @@
 
 **go53** is a focused, API-driven authoritative DNS server written in Go. It is designed to be lightweight, fast, and easy to deploy, while offering extensibility and transparency through a well-structured API and modern design principles.
 
+## Try go53 with webadmin
+
+You can try go53 through our browser-based admin UI,
+[go53-webadmin](https://github.com/TenforwardAB/go53-webadmin).
+
+Public demo:
+
+- URL: [https://demo.go53.eu](https://demo.go53.eu)
+- Username: `go53_admin`
+- Password: `go53_admin`
+
+The demo runs go53 with a resettable `go53.demo.` DNSSEC zone and is intended
+for quick evaluation of zone management, records, DNSSEC keys, distributed mode,
+and the webadmin workflow.
+
 ## Why go53?
 
 Many existing DNS solutions attempt to cover both recursive and authoritative functionality, often resulting in bloated systems with steep learning curves or poor automation support. In contrast, `go53` is built from scratch to provide a clean, authoritative-only DNS server that is easy to manage through a structured API.
