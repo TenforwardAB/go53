@@ -3,6 +3,7 @@ package dnsutils
 import (
 	"context"
 	"go53/config"
+	"go53/security"
 	"sync"
 	"testing"
 	"time"
@@ -443,6 +444,97 @@ func TestStartSecondaryRefresh_DisabledWhenPrimaryIpEmpty(t *testing.T) {
 	case z := <-fetchQueue:
 		t.Fatalf("empty Primary.Ip must not enqueue, got %q", z)
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func TestStartSecondaryRefreshUsesCatalogPrimaryWhenPrimaryIpEmpty(t *testing.T) {
+	setupCatalogTestStore(t, "secondary")
+	config.AppConfig.Live.Primary.Ip = ""
+	config.AppConfig.Live.Secondary.RefreshIntervalSec = 0
+	addCatalogBaseForTest(t)
+	addCatalogPTR(t, "m1.zones", "member.test.")
+	addCatalogA(t, "ns1.primaries.ext", "192.0.2.53")
+
+	StartSecondaryRefresh(context.Background())
+
+	got := collectQueued(1, time.Second)
+	if !got["member.test."] {
+		t.Fatalf("startup sweep enqueued %v, want member.test.", got)
+	}
+}
+
+func TestTransferPrimariesPreferCatalogOverConfig(t *testing.T) {
+	setupCatalogTestStore(t, "secondary")
+	config.AppConfig.Live.Primary.Ip = "127.0.0.1"
+	config.AppConfig.Live.Primary.Port = 15353
+	addCatalogBaseForTest(t)
+	addCatalogPTR(t, "m1.zones", "member.test.")
+	addCatalogA(t, "ns1.primaries.ext.m1.zones", "192.0.2.99")
+
+	got := transferPrimariesForZone("member.test.")
+	if len(got) != 1 || got[0].addr() != "192.0.2.99:53" {
+		t.Fatalf("transfer primaries = %#v, want catalog primary only", got)
+	}
+}
+
+func TestTransferPrimariesDoNotFallbackWhenCatalogPrimaryUnusable(t *testing.T) {
+	setupCatalogTestStore(t, "secondary")
+	config.AppConfig.Live.Primary.Ip = "127.0.0.1"
+	config.AppConfig.Live.Primary.Port = 15353
+	addCatalogBaseForTest(t)
+	addCatalogPTR(t, "m1.zones", "member.test.")
+	addCatalogA(t, "ns1.primaries.ext.m1.zones", "192.0.2.99")
+	addCatalogTXT(t, "ns1.primaries.ext.m1.zones", "missing-key.")
+
+	if got := transferPrimariesForZone("member.test."); len(got) != 0 {
+		t.Fatalf("unusable catalog primary must not fall back to config primary: %#v", got)
+	}
+	if hasTransferPrimaryForZone("member.test.", config.AppConfig.Live) {
+		t.Fatalf("unusable catalog primary should not count as a transfer primary")
+	}
+}
+
+func TestTransferPrimariesFallbackToConfig(t *testing.T) {
+	setupCatalogTestStore(t, "secondary")
+	config.AppConfig.Live.Primary.Ip = "127.0.0.1"
+	config.AppConfig.Live.Primary.Port = 15353
+
+	got := transferPrimariesForZone("legacy.test.")
+	if len(got) != 1 || got[0].addr() != "127.0.0.1:15353" {
+		t.Fatalf("transfer primaries = %#v, want configured primary", got)
+	}
+}
+
+func TestApplyTransferTSIGUsesCatalogPrimaryKey(t *testing.T) {
+	security.TSIGSecrets = nil
+	security.SetTSIGKey("catalog-key.", security.TSIGKey{Algorithm: dns.HmacSHA512, Secret: "YWJjMTIz"})
+	t.Cleanup(func() { security.TSIGSecrets = nil })
+
+	req := new(dns.Msg)
+	client := &dns.Client{}
+	ok := applyTransferTSIG(req, client, catalogPrimary{IP: "192.0.2.53", Port: 53, TSIGKeyName: "catalog-key."}, "[test]")
+	if !ok {
+		t.Fatalf("applyTransferTSIG returned false")
+	}
+	if req.IsTsig() == nil || req.IsTsig().Hdr.Name != "catalog-key." || req.IsTsig().Algorithm != dns.HmacSHA512 {
+		t.Fatalf("TSIG RR = %#v", req.IsTsig())
+	}
+	if client.TsigSecret["catalog-key."] != "YWJjMTIz" {
+		t.Fatalf("client TsigSecret = %#v", client.TsigSecret)
+	}
+}
+
+func TestApplyTransferTSIGSkipsMissingCatalogPrimaryKey(t *testing.T) {
+	security.TSIGSecrets = nil
+	t.Cleanup(func() { security.TSIGSecrets = nil })
+
+	req := new(dns.Msg)
+	client := &dns.Client{}
+	if applyTransferTSIG(req, client, catalogPrimary{IP: "192.0.2.53", Port: 53, TSIGKeyName: "missing-key."}, "[test]") {
+		t.Fatalf("applyTransferTSIG accepted missing catalog key")
+	}
+	if req.IsTsig() != nil || len(client.TsigSecret) != 0 {
+		t.Fatalf("missing key should not sign request: tsig=%#v secrets=%#v", req.IsTsig(), client.TsigSecret)
 	}
 }
 

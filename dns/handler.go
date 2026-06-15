@@ -27,7 +27,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			return
 		}
 
-		if !strings.HasPrefix(remoteIP, live.Primary.Ip) {
+		if !notifySourceAllowed(r, remoteIP, live) {
 			log.Println("Refusing NOTIFY from unknown IP:", remoteIP)
 			return
 		}
@@ -321,6 +321,16 @@ func finalizeResponse(req *dns.Msg, resp *dns.Msg, tcp bool) {
 	if maxSize > 0 {
 		resp.Truncate(maxSize)
 	}
+}
+
+func notifySourceAllowed(r *dns.Msg, remoteIP string, live config.LiveConfig) bool {
+	if live.Primary.Ip != "" && strings.HasPrefix(remoteIP, live.Primary.Ip) {
+		return true
+	}
+	if len(r.Question) == 0 {
+		return false
+	}
+	return dnsutils.NotifyAllowedFromCatalogPrimary(r.Question[0].Name, remoteIP)
 }
 
 func responseIsTCP(w dns.ResponseWriter) bool {

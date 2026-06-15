@@ -11,7 +11,6 @@ import (
 	"log"
 	"math/rand"
 	"net"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -230,9 +229,16 @@ func localZoneSerial(lzone string) (uint32, error) {
 // Parameters:
 //   - zone: The zone name to check.
 func checkSOA(zone string) bool {
+	for _, primary := range transferPrimariesForZone(zone) {
+		if checkSOAFromPrimary(zone, primary) {
+			return true
+		}
+	}
+	return false
+}
 
-	primaryIP := config.AppConfig.GetLive().Primary.Ip
-	addr := net.JoinHostPort(primaryIP, strconv.Itoa(config.AppConfig.GetLive().Primary.Port))
+func checkSOAFromPrimary(zone string, primary catalogPrimary) bool {
+	addr := primary.addr()
 
 	// 2) build the query
 	m := new(dns.Msg)
@@ -242,6 +248,9 @@ func checkSOA(zone string) bool {
 
 	c := &dns.Client{
 		Timeout: 3 * time.Second,
+	}
+	if !applyTransferTSIG(m, c, primary, "[checkSOA]") {
+		return false
 	}
 
 	resp, _, err := c.Exchange(m, addr)
@@ -338,37 +347,27 @@ func handleNotify(zone string) {
 // Parameters:
 //   - zoneName: The name of the zone to fetch.
 func fetchZone(zoneName string) bool {
-	live := config.AppConfig.GetLive()
-	primaryIP := live.Primary.Ip
-	port := live.Primary.Port
-	if port == 0 {
-		port = 53
+	for _, primary := range transferPrimariesForZone(zoneName) {
+		if fetchZoneFromPrimary(zoneName, primary) {
+			return true
+		}
 	}
-	addr := net.JoinHostPort(primaryIP, strconv.Itoa(port))
+	return false
+}
 
+func fetchZoneFromPrimary(zoneName string, primary catalogPrimary) bool {
+	addr := primary.addr()
 	req := new(dns.Msg)
 	fqdn, _ := internal.SanitizeFQDN(zoneName)
 	req.SetAxfr(fqdn)
-
-	tsigKeyName, _ := internal.SanitizeFQDN("xxfr-key")
 
 	tran := &dns.Transfer{
 		DialTimeout:  5 * time.Second,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 5 * time.Second,
 	}
-
-	if config.AppConfig.GetLive().EnforceTSIG {
-		tsigKey, ok := security.GetTSIGKey(tsigKeyName)
-		if !ok {
-			log.Printf("[fetchZone] TSIG is enforced but key %s is not loaded", tsigKeyName)
-			return false
-		}
-
-		req.SetTsig(tsigKeyName, dns.HmacSHA256, 300, time.Now().Unix())
-		tran.TsigSecret = map[string]string{
-			tsigKeyName: tsigKey.Secret,
-		}
+	if !applyTransferTSIG(req, tran, primary, "[fetchZone]") {
+		return false
 	}
 
 	log.Printf("[fetchZone] starting AXFR of %s from %s", zoneName, addr)
@@ -407,6 +406,58 @@ func fetchZone(zoneName string) bool {
 
 	log.Printf("[fetchZone] got %d records for %s", len(records), zoneName)
 	return true
+}
+
+func applyTransferTSIG(msg *dns.Msg, target any, primary catalogPrimary, logPrefix string) bool {
+	tsigKeyName := primary.TSIGKeyName
+	if tsigKeyName == "" && config.AppConfig.GetLive().EnforceTSIG {
+		tsigKeyName, _ = internal.SanitizeFQDN("xxfr-key")
+	}
+	if tsigKeyName == "" {
+		return true
+	}
+	tsigKey, ok := security.GetTSIGKey(tsigKeyName)
+	if !ok {
+		log.Printf("%s TSIG key %s is not loaded", logPrefix, tsigKeyName)
+		return false
+	}
+	algorithm := dns.CanonicalName(tsigKey.Algorithm)
+	if algorithm == "." {
+		algorithm = dns.HmacSHA256
+	}
+	msg.SetTsig(tsigKeyName, algorithm, 300, time.Now().Unix())
+	switch t := target.(type) {
+	case *dns.Client:
+		t.TsigSecret = map[string]string{tsigKeyName: tsigKey.Secret}
+	case *dns.Transfer:
+		t.TsigSecret = map[string]string{tsigKeyName: tsigKey.Secret}
+	default:
+		log.Printf("%s unsupported TSIG target %T", logPrefix, target)
+		return false
+	}
+	return true
+}
+
+func transferPrimariesForZone(zoneName string) []catalogPrimary {
+	if primaries, found := catalogPrimariesForZoneWithPresence(zoneName); found {
+		return primaries
+	}
+	live := config.AppConfig.GetLive()
+	if strings.TrimSpace(live.Primary.Ip) == "" {
+		return nil
+	}
+	port := live.Primary.Port
+	if port == 0 {
+		port = 53
+	}
+	return []catalogPrimary{{IP: live.Primary.Ip, Port: port}}
+}
+
+func hasTransferPrimaryForZone(zoneName string, live config.LiveConfig) bool {
+	if primaries, found := catalogPrimariesForZoneWithPresence(zoneName); found {
+		return len(primaries) > 0
+	}
+	return strings.TrimSpace(live.Primary.Ip) != ""
 }
 
 // ProcessFetchQueue starts an infinite loop to process zone fetches
@@ -492,7 +543,8 @@ func refreshZoneUnion() []string {
 }
 
 // StartSecondaryRefresh runs a one-shot startup sweep and then the periodic refresh
-// ticker. It is a no-op unless secondary mode is active and Primary.Ip is configured.
+// ticker. It is a no-op unless secondary mode is active and at least one transfer
+// primary is configured or discoverable from the catalog.
 // The startup sweep enqueues the zone union once
 // through the guarded enqueueFetch path, so ProcessFetchQueue's SOA-gate decides whether
 // an AXFR is actually needed. NOTIFY remains the fast-path signal on top of this.
@@ -503,8 +555,8 @@ func StartSecondaryRefresh(ctx context.Context) {
 	if !secondaryEnabled(live) {
 		return
 	}
-	if strings.TrimSpace(live.Primary.Ip) == "" {
-		log.Printf("[secondary-refresh] disabled: Primary.Ip is empty")
+	if !hasAnyTransferPrimary(live) {
+		log.Printf("[secondary-refresh] disabled: no primary is configured")
 		return
 	}
 
@@ -512,7 +564,9 @@ func StartSecondaryRefresh(ctx context.Context) {
 		zones := refreshZoneUnion()
 		log.Printf("[secondary-refresh] startup sweep: %d zones", len(zones))
 		for _, z := range zones {
-			enqueueFetch(z)
+			if hasTransferPrimaryForZone(z, config.AppConfig.GetLive()) {
+				enqueueFetch(z)
+			}
 		}
 		runRefreshTicker(ctx)
 	}()
@@ -536,7 +590,7 @@ func runRefreshTicker(ctx context.Context) {
 			return
 		case <-ticker.C:
 			live := config.AppConfig.GetLive()
-			if !secondaryEnabled(live) || strings.TrimSpace(live.Primary.Ip) == "" {
+			if !secondaryEnabled(live) || !hasAnyTransferPrimary(live) {
 				continue
 			}
 			sweepOnce(ctx, live)
@@ -557,13 +611,25 @@ func sweepOnce(ctx context.Context, live config.LiveConfig) {
 			zz := z
 			time.AfterFunc(time.Duration(rand.Int63n(int64(jitterMax)+1)), func() {
 				live := config.AppConfig.GetLive()
-				if ctx.Err() != nil || !secondaryEnabled(live) || strings.TrimSpace(live.Primary.Ip) == "" {
+				if ctx.Err() != nil || !secondaryEnabled(live) || !hasTransferPrimaryForZone(zz, live) {
 					return
 				}
 				enqueueFetch(zz)
 			})
-		} else {
+		} else if hasTransferPrimaryForZone(z, live) {
 			enqueueFetch(z)
 		}
 	}
+}
+
+func hasAnyTransferPrimary(live config.LiveConfig) bool {
+	if strings.TrimSpace(live.Primary.Ip) != "" {
+		return true
+	}
+	for _, z := range refreshZoneUnion() {
+		if len(catalogPrimariesForZone(z)) > 0 {
+			return true
+		}
+	}
+	return false
 }

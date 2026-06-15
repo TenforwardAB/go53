@@ -7,6 +7,7 @@ import (
 
 	"go53/config"
 	"go53/memory"
+	"go53/security"
 	"go53/storage"
 	"go53/zone"
 	"go53/zone/rtypes"
@@ -35,6 +36,7 @@ func setupCatalogTestStore(t *testing.T, mode string) {
 	stateMu.Lock()
 	zoneStates = make(map[string]*zoneState)
 	stateMu.Unlock()
+	security.TSIGSecrets = nil
 }
 
 func TestEnsureCatalogMemberCreatesRFC9432Catalog(t *testing.T) {
@@ -113,6 +115,96 @@ func TestPruneRemovedCatalogMembersKeepsConfiguredZones(t *testing.T) {
 	}
 }
 
+func TestCatalogPrimariesParsesGlobalAAndAAAA(t *testing.T) {
+	setupCatalogTestStore(t, "secondary")
+	addCatalogBaseForTest(t)
+	addCatalogA(t, "ns1.primaries.ext", "192.0.2.53")
+	addCatalogAAAA(t, "ns2.primaries.ext", "2001:db8::53")
+
+	got := catalogPrimariesForZone("member.example.")
+	want := map[string]bool{"192.0.2.53:53": true, "[2001:db8::53]:53": true}
+	if len(got) != len(want) {
+		t.Fatalf("catalog primaries = %#v, want %d entries", got, len(want))
+	}
+	for _, primary := range got {
+		if !want[primary.addr()] {
+			t.Fatalf("unexpected primary %s in %#v", primary.addr(), got)
+		}
+	}
+}
+
+func TestCatalogPrimariesMastersSynonym(t *testing.T) {
+	setupCatalogTestStore(t, "secondary")
+	addCatalogBaseForTest(t)
+	addCatalogA(t, "legacy.masters.ext", "192.0.2.54")
+
+	got := catalogPrimariesForZone("member.example.")
+	if len(got) != 1 || got[0].addr() != "192.0.2.54:53" {
+		t.Fatalf("masters primaries = %#v, want 192.0.2.54:53", got)
+	}
+}
+
+func TestCatalogPrimariesMemberOverride(t *testing.T) {
+	setupCatalogTestStore(t, "secondary")
+	addCatalogBaseForTest(t)
+	addCatalogPTR(t, "m1.zones", "member.example.")
+	addCatalogA(t, "global.primaries.ext", "192.0.2.53")
+	addCatalogA(t, "member.primaries.ext.m1.zones", "192.0.2.99")
+
+	got := catalogPrimariesForZone("member.example.")
+	if len(got) != 1 || got[0].addr() != "192.0.2.99:53" {
+		t.Fatalf("member override primaries = %#v, want only 192.0.2.99:53", got)
+	}
+}
+
+func TestCatalogPrimariesIgnoresUnknownMemberLabel(t *testing.T) {
+	setupCatalogTestStore(t, "secondary")
+	addCatalogBaseForTest(t)
+	addCatalogPTR(t, "m1.zones", "member.example.")
+	addCatalogA(t, "orphan.primaries.ext.other.zones", "192.0.2.99")
+
+	if got := catalogPrimariesForZone("member.example."); len(got) != 0 {
+		t.Fatalf("unexpected primaries for unknown member label: %#v", got)
+	}
+}
+
+func TestCatalogPrimariesAssociatesTSIGKeyName(t *testing.T) {
+	setupCatalogTestStore(t, "secondary")
+	security.SetTSIGKey("xfr-key.", security.TSIGKey{Algorithm: dns.HmacSHA256, Secret: "YWJjMTIz"})
+	addCatalogBaseForTest(t)
+	addCatalogA(t, "ns1.primaries.ext", "192.0.2.53")
+	addCatalogTXT(t, "ns1.primaries.ext", "xfr-key.")
+
+	got := catalogPrimariesForZone("member.example.")
+	if len(got) != 1 || got[0].addr() != "192.0.2.53:53" || got[0].TSIGKeyName != "xfr-key." {
+		t.Fatalf("catalog TSIG primaries = %#v, want xfr-key primary", got)
+	}
+}
+
+func TestCatalogPrimariesSkipsMissingTSIGKey(t *testing.T) {
+	setupCatalogTestStore(t, "secondary")
+	addCatalogBaseForTest(t)
+	addCatalogA(t, "ns1.primaries.ext", "192.0.2.53")
+	addCatalogTXT(t, "ns1.primaries.ext", "missing-key.")
+
+	if got := catalogPrimariesForZone("member.example."); len(got) != 0 {
+		t.Fatalf("missing-key TSIG primary should be skipped: %#v", got)
+	}
+}
+
+func TestCatalogPrimariesSkipsInvalidTSIGTXT(t *testing.T) {
+	setupCatalogTestStore(t, "secondary")
+	security.SetTSIGKey("xfr-key.", security.TSIGKey{Algorithm: dns.HmacSHA256, Secret: "YWJjMTIz"})
+	addCatalogBaseForTest(t)
+	addCatalogA(t, "ns1.primaries.ext", "192.0.2.53")
+	addCatalogTXT(t, "ns1.primaries.ext", "xfr-key.")
+	addCatalogTXT(t, "ns1.primaries.ext", "other-key.")
+
+	if got := catalogPrimariesForZone("member.example."); len(got) != 0 {
+		t.Fatalf("multi-TXT TSIG primary should be skipped: %#v", got)
+	}
+}
+
 func addTestSOA(t *testing.T, name string) {
 	t.Helper()
 	if err := zone.AddRecord(dns.TypeSOA, name, name, map[string]interface{}{
@@ -125,5 +217,45 @@ func addTestSOA(t *testing.T, name string) {
 		"ttl":     float64(300),
 	}, nil); err != nil {
 		t.Fatalf("add SOA %s: %v", name, err)
+	}
+}
+
+func addCatalogBaseForTest(t *testing.T) {
+	t.Helper()
+	ttl := uint32(300)
+	if err := ensureCatalogBase("_catalog.go53.", ttl); err != nil {
+		t.Fatalf("ensure catalog base: %v", err)
+	}
+}
+
+func addCatalogA(t *testing.T, name, ip string) {
+	t.Helper()
+	ttl := uint32(300)
+	if err := zone.AddRecord(dns.TypeA, "_catalog.go53.", name, map[string]interface{}{"ip": ip}, &ttl); err != nil {
+		t.Fatalf("add catalog A %s: %v", name, err)
+	}
+}
+
+func addCatalogAAAA(t *testing.T, name, ip string) {
+	t.Helper()
+	ttl := uint32(300)
+	if err := zone.AddRecord(dns.TypeAAAA, "_catalog.go53.", name, map[string]interface{}{"ip": ip}, &ttl); err != nil {
+		t.Fatalf("add catalog AAAA %s: %v", name, err)
+	}
+}
+
+func addCatalogPTR(t *testing.T, name, ptr string) {
+	t.Helper()
+	ttl := uint32(300)
+	if err := zone.AddRecord(dns.TypePTR, "_catalog.go53.", name, map[string]interface{}{"ptr": ptr}, &ttl); err != nil {
+		t.Fatalf("add catalog PTR %s: %v", name, err)
+	}
+}
+
+func addCatalogTXT(t *testing.T, name, text string) {
+	t.Helper()
+	ttl := uint32(300)
+	if err := zone.AddRecord(dns.TypeTXT, "_catalog.go53.", name, map[string]interface{}{"text": text}, &ttl); err != nil {
+		t.Fatalf("add catalog TXT %s: %v", name, err)
 	}
 }
