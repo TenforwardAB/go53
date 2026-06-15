@@ -1,3 +1,11 @@
+## 0.78.0 (June 15, 2026)
+  - Merge pull request #33 from TenforwardAB/feature/multiprimaries
+  - Fix #Issue-31 DNSSEC wildcard responses fail strict validationbugSomething isn't working
+  - Feature/multiprimaries (#32)
+  - Add catalog primary TSIG support
+  - Add catalog multiprimaries
+  - Better documentation and refernce to demo.go53.eu
+
 ## 0.77.6 (June 11, 2026)
   - fix(distributed): issuer-controlled auto-accept, auth sync, and CLI/config fixes
 
