@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+cp /etc/bind/zones-src/db.catalog-member-a.test /zones/db.catalog-member-a.test
+
 named -g -c /etc/bind/named.conf &
 named_pid="$!"
 

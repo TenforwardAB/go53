@@ -6,3 +6,4 @@ version IN TXT "2"
 m1.zones IN PTR catalog-member-a.test.
 bad.primaries.ext.m1.zones IN A 10.53.0.54
 ns1.primaries.ext.m1.zones IN A 10.53.0.60
+ns1.primaries.ext.m1.zones IN TXT "catalog-key."

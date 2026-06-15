@@ -17,7 +17,8 @@ services:
     volumes:
       - ./catalog_primaries/bind-member/named.conf:/etc/bind/named.conf:ro
       - ./catalog_primaries/bind-member/run-member.sh:/etc/bind/run-member.sh:ro
-      - ./catalog_primaries/bind-member/zones:/etc/bind/zones:rw
+      - ./catalog_primaries/bind-member/zones:/etc/bind/zones-src:ro
+      - bind-member-zones:/zones
       - bind-member-control:/control
     networks:
       catalog_primaries:
@@ -51,7 +52,7 @@ services:
     volumes:
       - go53-data:/var/lib/go53
       - ./catalog_primaries/run.sh:/work/run.sh:ro
-      - ./catalog_primaries/bind-member/zones:/member-zones:rw
+      - bind-member-zones:/member-zones
       - bind-member-control:/control
     command: ["/work/run.sh"]
     networks:
@@ -67,3 +68,4 @@ networks:
 volumes:
   go53-data:
   bind-member-control:
+  bind-member-zones:

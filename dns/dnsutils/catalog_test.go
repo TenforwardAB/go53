@@ -7,6 +7,7 @@ import (
 
 	"go53/config"
 	"go53/memory"
+	"go53/security"
 	"go53/storage"
 	"go53/zone"
 	"go53/zone/rtypes"
@@ -35,6 +36,7 @@ func setupCatalogTestStore(t *testing.T, mode string) {
 	stateMu.Lock()
 	zoneStates = make(map[string]*zoneState)
 	stateMu.Unlock()
+	security.TSIGSecrets = nil
 }
 
 func TestEnsureCatalogMemberCreatesRFC9432Catalog(t *testing.T) {
@@ -166,6 +168,43 @@ func TestCatalogPrimariesIgnoresUnknownMemberLabel(t *testing.T) {
 	}
 }
 
+func TestCatalogPrimariesAssociatesTSIGKeyName(t *testing.T) {
+	setupCatalogTestStore(t, "secondary")
+	security.SetTSIGKey("xfr-key.", security.TSIGKey{Algorithm: dns.HmacSHA256, Secret: "YWJjMTIz"})
+	addCatalogBaseForTest(t)
+	addCatalogA(t, "ns1.primaries.ext", "192.0.2.53")
+	addCatalogTXT(t, "ns1.primaries.ext", "xfr-key.")
+
+	got := catalogPrimariesForZone("member.example.")
+	if len(got) != 1 || got[0].addr() != "192.0.2.53:53" || got[0].TSIGKeyName != "xfr-key." {
+		t.Fatalf("catalog TSIG primaries = %#v, want xfr-key primary", got)
+	}
+}
+
+func TestCatalogPrimariesSkipsMissingTSIGKey(t *testing.T) {
+	setupCatalogTestStore(t, "secondary")
+	addCatalogBaseForTest(t)
+	addCatalogA(t, "ns1.primaries.ext", "192.0.2.53")
+	addCatalogTXT(t, "ns1.primaries.ext", "missing-key.")
+
+	if got := catalogPrimariesForZone("member.example."); len(got) != 0 {
+		t.Fatalf("missing-key TSIG primary should be skipped: %#v", got)
+	}
+}
+
+func TestCatalogPrimariesSkipsInvalidTSIGTXT(t *testing.T) {
+	setupCatalogTestStore(t, "secondary")
+	security.SetTSIGKey("xfr-key.", security.TSIGKey{Algorithm: dns.HmacSHA256, Secret: "YWJjMTIz"})
+	addCatalogBaseForTest(t)
+	addCatalogA(t, "ns1.primaries.ext", "192.0.2.53")
+	addCatalogTXT(t, "ns1.primaries.ext", "xfr-key.")
+	addCatalogTXT(t, "ns1.primaries.ext", "other-key.")
+
+	if got := catalogPrimariesForZone("member.example."); len(got) != 0 {
+		t.Fatalf("multi-TXT TSIG primary should be skipped: %#v", got)
+	}
+}
+
 func addTestSOA(t *testing.T, name string) {
 	t.Helper()
 	if err := zone.AddRecord(dns.TypeSOA, name, name, map[string]interface{}{
@@ -210,5 +249,13 @@ func addCatalogPTR(t *testing.T, name, ptr string) {
 	ttl := uint32(300)
 	if err := zone.AddRecord(dns.TypePTR, "_catalog.go53.", name, map[string]interface{}{"ptr": ptr}, &ttl); err != nil {
 		t.Fatalf("add catalog PTR %s: %v", name, err)
+	}
+}
+
+func addCatalogTXT(t *testing.T, name, text string) {
+	t.Helper()
+	ttl := uint32(300)
+	if err := zone.AddRecord(dns.TypeTXT, "_catalog.go53.", name, map[string]interface{}{"text": text}, &ttl); err != nil {
+		t.Fatalf("add catalog TXT %s: %v", name, err)
 	}
 }

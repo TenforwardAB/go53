@@ -249,6 +249,9 @@ func checkSOAFromPrimary(zone string, primary catalogPrimary) bool {
 	c := &dns.Client{
 		Timeout: 3 * time.Second,
 	}
+	if !applyTransferTSIG(m, c, primary, "[checkSOA]") {
+		return false
+	}
 
 	resp, _, err := c.Exchange(m, addr)
 	if err != nil {
@@ -358,25 +361,13 @@ func fetchZoneFromPrimary(zoneName string, primary catalogPrimary) bool {
 	fqdn, _ := internal.SanitizeFQDN(zoneName)
 	req.SetAxfr(fqdn)
 
-	tsigKeyName, _ := internal.SanitizeFQDN("xxfr-key")
-
 	tran := &dns.Transfer{
 		DialTimeout:  5 * time.Second,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 5 * time.Second,
 	}
-
-	if config.AppConfig.GetLive().EnforceTSIG {
-		tsigKey, ok := security.GetTSIGKey(tsigKeyName)
-		if !ok {
-			log.Printf("[fetchZone] TSIG is enforced but key %s is not loaded", tsigKeyName)
-			return false
-		}
-
-		req.SetTsig(tsigKeyName, dns.HmacSHA256, 300, time.Now().Unix())
-		tran.TsigSecret = map[string]string{
-			tsigKeyName: tsigKey.Secret,
-		}
+	if !applyTransferTSIG(req, tran, primary, "[fetchZone]") {
+		return false
 	}
 
 	log.Printf("[fetchZone] starting AXFR of %s from %s", zoneName, addr)
@@ -417,8 +408,38 @@ func fetchZoneFromPrimary(zoneName string, primary catalogPrimary) bool {
 	return true
 }
 
+func applyTransferTSIG(msg *dns.Msg, target any, primary catalogPrimary, logPrefix string) bool {
+	tsigKeyName := primary.TSIGKeyName
+	if tsigKeyName == "" && config.AppConfig.GetLive().EnforceTSIG {
+		tsigKeyName, _ = internal.SanitizeFQDN("xxfr-key")
+	}
+	if tsigKeyName == "" {
+		return true
+	}
+	tsigKey, ok := security.GetTSIGKey(tsigKeyName)
+	if !ok {
+		log.Printf("%s TSIG key %s is not loaded", logPrefix, tsigKeyName)
+		return false
+	}
+	algorithm := dns.CanonicalName(tsigKey.Algorithm)
+	if algorithm == "." {
+		algorithm = dns.HmacSHA256
+	}
+	msg.SetTsig(tsigKeyName, algorithm, 300, time.Now().Unix())
+	switch t := target.(type) {
+	case *dns.Client:
+		t.TsigSecret = map[string]string{tsigKeyName: tsigKey.Secret}
+	case *dns.Transfer:
+		t.TsigSecret = map[string]string{tsigKeyName: tsigKey.Secret}
+	default:
+		log.Printf("%s unsupported TSIG target %T", logPrefix, target)
+		return false
+	}
+	return true
+}
+
 func transferPrimariesForZone(zoneName string) []catalogPrimary {
-	if primaries := catalogPrimariesForZone(zoneName); len(primaries) > 0 {
+	if primaries, found := catalogPrimariesForZoneWithPresence(zoneName); found {
 		return primaries
 	}
 	live := config.AppConfig.GetLive()
@@ -433,10 +454,10 @@ func transferPrimariesForZone(zoneName string) []catalogPrimary {
 }
 
 func hasTransferPrimaryForZone(zoneName string, live config.LiveConfig) bool {
-	if strings.TrimSpace(live.Primary.Ip) != "" {
-		return true
+	if primaries, found := catalogPrimariesForZoneWithPresence(zoneName); found {
+		return len(primaries) > 0
 	}
-	return len(catalogPrimariesForZone(zoneName)) > 0
+	return strings.TrimSpace(live.Primary.Ip) != ""
 }
 
 // ProcessFetchQueue starts an infinite loop to process zone fetches

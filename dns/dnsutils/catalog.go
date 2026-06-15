@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"go53/config"
 	"go53/internal"
+	"go53/security"
 	"go53/zone"
 	"go53/zone/rtypes"
 	"log"
@@ -20,8 +21,9 @@ import (
 const catalogVersion = "2"
 
 type catalogPrimary struct {
-	IP   string
-	Port int
+	IP          string
+	Port        int
+	TSIGKeyName string
 }
 
 func catalogZoneName() (string, bool) {
@@ -171,7 +173,8 @@ func CatalogStatus() map[string]any {
 	primaries := []string{}
 	if ok {
 		members = catalogMembers()
-		for _, primary := range globalCatalogPrimaries(catalog) {
+		globalPrimaries, _ := globalCatalogPrimaries(catalog)
+		for _, primary := range globalPrimaries {
 			primaries = append(primaries, primary.addr())
 		}
 	}
@@ -225,19 +228,24 @@ func catalogMembersFromRecords(records []dns.RR, catalog string) []string {
 }
 
 func catalogPrimariesForZone(zoneName string) []catalogPrimary {
+	primaries, _ := catalogPrimariesForZoneWithPresence(zoneName)
+	return primaries
+}
+
+func catalogPrimariesForZoneWithPresence(zoneName string) ([]catalogPrimary, bool) {
 	catalog, ok := catalogZoneName()
 	if !ok {
-		return nil
+		return nil, false
 	}
 	member, err := internal.SanitizeFQDN(zoneName)
 	if err != nil || member == "" || member == catalog {
-		return nil
+		return nil, false
 	}
 	members := catalogMemberLabels(catalog)
 	memberLabels := members[member]
-	specific := memberCatalogPrimaries(catalog, memberLabels)
-	if len(specific) > 0 {
-		return specific
+	specific, specificFound := memberCatalogPrimaries(catalog, memberLabels)
+	if specificFound {
+		return specific, true
 	}
 	return globalCatalogPrimaries(catalog)
 }
@@ -261,7 +269,7 @@ func NotifyAllowedFromCatalogPrimary(zoneName, remoteIP string) bool {
 	return catalogNotifyAllowed(zoneName, remoteIP)
 }
 
-func globalCatalogPrimaries(catalog string) []catalogPrimary {
+func globalCatalogPrimaries(catalog string) ([]catalogPrimary, bool) {
 	suffixes := []string{
 		".primaries.ext." + catalog,
 		".masters.ext." + catalog,
@@ -269,9 +277,9 @@ func globalCatalogPrimaries(catalog string) []catalogPrimary {
 	return primariesWithSuffix(catalog, suffixes)
 }
 
-func memberCatalogPrimaries(catalog string, labels []string) []catalogPrimary {
+func memberCatalogPrimaries(catalog string, labels []string) ([]catalogPrimary, bool) {
 	if len(labels) == 0 {
-		return nil
+		return nil, false
 	}
 	suffixes := make([]string, 0, len(labels)*2)
 	for _, label := range labels {
@@ -283,22 +291,36 @@ func memberCatalogPrimaries(catalog string, labels []string) []catalogPrimary {
 	return primariesWithSuffix(catalog, suffixes)
 }
 
-func primariesWithSuffix(catalog string, suffixes []string) []catalogPrimary {
+func primariesWithSuffix(catalog string, suffixes []string) ([]catalogPrimary, bool) {
 	store := zoneStore()
 	if store == nil {
-		return nil
+		return nil, false
 	}
 	snapshot := store.ZoneRecordsSnapshot(catalog)
 	seen := map[string]struct{}{}
 	var out []catalogPrimary
+	found := false
 	for _, rrtype := range []string{"A", "AAAA"} {
 		for name := range snapshot[rrtype] {
 			owner := catalogOwnerName(name, catalog)
 			if !hasAnySuffix(owner, suffixes) {
 				continue
 			}
+			found = true
 			for _, primary := range primaryRecords(owner, rrtype) {
-				key := primary.addr()
+				tsigName, valid := catalogPrimaryTSIGKeyName(owner)
+				if !valid {
+					log.Printf("[catalog] ignoring primary %s: invalid TSIG TXT metadata at %s", primary.addr(), owner)
+					continue
+				}
+				if tsigName != "" {
+					if _, ok := security.GetTSIGKey(tsigName); !ok {
+						log.Printf("[catalog] ignoring primary %s: TSIG key %s is not configured", primary.addr(), tsigName)
+						continue
+					}
+					primary.TSIGKeyName = tsigName
+				}
+				key := primary.identity()
 				if _, ok := seen[key]; ok {
 					continue
 				}
@@ -310,7 +332,26 @@ func primariesWithSuffix(catalog string, suffixes []string) []catalogPrimary {
 	sort.SliceStable(out, func(i, j int) bool {
 		return out[i].addr() < out[j].addr()
 	})
-	return out
+	return out, found
+}
+
+func catalogPrimaryTSIGKeyName(owner string) (string, bool) {
+	txts, ok := zone.LookupRecord(dns.TypeTXT, owner)
+	if !ok || len(txts) == 0 {
+		return "", true
+	}
+	if len(txts) != 1 {
+		return "", false
+	}
+	txt, ok := txts[0].(*dns.TXT)
+	if !ok || len(txt.Txt) != 1 || strings.TrimSpace(txt.Txt[0]) == "" {
+		return "", false
+	}
+	keyName, err := internal.SanitizeFQDN(txt.Txt[0])
+	if err != nil || keyName == "" {
+		return "", false
+	}
+	return keyName, true
 }
 
 func catalogMemberLabels(catalog string) map[string][]string {
@@ -407,6 +448,10 @@ func (p catalogPrimary) addr() string {
 		port = 53
 	}
 	return net.JoinHostPort(p.IP, strconv.Itoa(port))
+}
+
+func (p catalogPrimary) identity() string {
+	return p.addr() + "|" + strings.ToLower(p.TSIGKeyName)
 }
 
 func pruneRemovedCatalogMembers(oldMembers, newMembers []string) {

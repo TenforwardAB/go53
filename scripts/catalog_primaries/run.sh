@@ -88,6 +88,7 @@ wait_for_dns 10.53.0.10 2053 version.bind TXT
 wait_for_admin_socket
 
 echo "configuring go53 secondary with catalog bootstrap primary only"
+api POST /api/tsig/catalog-key '{"algorithm":"hmac-sha256.","secret":"YWJjMTIz"}' >/dev/null
 api PATCH /api/config '{
   "mode": "secondary",
   "allow_axfr": true,
