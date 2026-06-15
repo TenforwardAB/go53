@@ -62,9 +62,34 @@ func TestSignRRSetWildcardLabelsExcludeWildcardOwner(t *testing.T) {
 	}
 }
 
+func TestSignRRSetApexWildcardLabelsExcludeWildcardOwner(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr := &dns.A{
+		Hdr: dns.RR_Header{Name: "*.bind-dnssec.test.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 3600},
+		A:   []byte{192, 0, 2, 1},
+	}
+	sig, err := SignRRSet([]dns.RR{rr}, priv, 12345, "bind-dnssec.test.", dns.ED25519)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if sig.Labels != 2 {
+		t.Fatalf("wildcard RRSIG labels = %d, want 2", sig.Labels)
+	}
+}
+
 func TestRRSIGLabelCountNonWildcard(t *testing.T) {
 	if got := rrsigLabelCount("www.example.test."); got != 3 {
 		t.Fatalf("rrsigLabelCount = %d, want 3", got)
+	}
+}
+
+func TestRRSIGLabelCountApexWildcard(t *testing.T) {
+	if got := rrsigLabelCount("*.bind-dnssec.test."); got != 2 {
+		t.Fatalf("rrsigLabelCount = %d, want 2", got)
 	}
 }
 

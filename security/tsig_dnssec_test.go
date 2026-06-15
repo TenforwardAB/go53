@@ -76,6 +76,10 @@ func TestDNSSECUtilities(t *testing.T) {
 	if err != nil || len(rrs) != 1 {
 		t.Fatalf("ToRRSet = %#v err=%v", rrs, err)
 	}
+	wildcardRRs, err := ToRRSet("*.example.test.", "A", []types.ARecord{{IP: "192.0.2.42", TTL: 300}})
+	if err != nil || len(wildcardRRs) != 1 || wildcardRRs[0].Header().Name != "*.example.test." {
+		t.Fatalf("ToRRSet wildcard = %#v err=%v", wildcardRRs, err)
+	}
 	if _, err := ToRRSet("www.example.test.", "NOPE", nil); err == nil {
 		t.Fatalf("ToRRSet accepted unknown type")
 	}

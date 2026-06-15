@@ -86,6 +86,17 @@ func SanitizeFQDN(fqdn string) (string, error) {
 		return "", errors.New("FQDN cannot be empty")
 	}
 
+	if strings.HasPrefix(fqdn, "*.") {
+		rest, err := SanitizeFQDN(strings.TrimPrefix(fqdn, "*."))
+		if err != nil {
+			return "", err
+		}
+		if rest == "@" {
+			return "", errors.New("wildcard FQDN cannot target @")
+		}
+		return "*." + rest, nil
+	}
+
 	if !validFQDN.MatchString(fqdn) {
 		return "", errors.New("FQDN contains invalid characters")
 	}
