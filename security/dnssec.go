@@ -34,7 +34,10 @@ func ToRRSet(name string, rtype string, raw any) ([]dns.RR, error) {
 		return nil, fmt.Errorf("no RRBuilder for rtype %q", rtype)
 	}
 
-	fqdn, _ := internal.SanitizeFQDN(name)
+	fqdn, err := internal.SanitizeFQDN(name)
+	if err != nil {
+		return nil, err
+	}
 	rrs := builder(fqdn, raw)
 	slog.Crazy("[ToRRSet] name2 is:", fqdn)
 	slog.Crazy("[ToRRSet] rrs is:", rrs)
