@@ -1,0 +1,8 @@
+$TTL 300
+@ IN SOA ns1.catalog.go53. hostmaster.catalog.go53. (
+	1 3600 600 86400 300 )
+@ IN NS invalid.
+version IN TXT "2"
+m1.zones IN PTR catalog-member-a.test.
+bad.primaries.ext.m1.zones IN A 10.53.0.54
+ns1.primaries.ext.m1.zones IN A 10.53.0.60

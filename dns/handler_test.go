@@ -14,7 +14,8 @@ import (
 )
 
 type captureResponseWriter struct {
-	msg *mdns.Msg
+	msg        *mdns.Msg
+	remoteAddr net.Addr
 }
 
 func (w *captureResponseWriter) LocalAddr() net.Addr {
@@ -22,6 +23,9 @@ func (w *captureResponseWriter) LocalAddr() net.Addr {
 }
 
 func (w *captureResponseWriter) RemoteAddr() net.Addr {
+	if w.remoteAddr != nil {
+		return w.remoteAddr
+	}
 	return &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 5353}
 }
 
@@ -190,6 +194,36 @@ func TestHandleRequestUnknownZoneRefused(t *testing.T) {
 	}
 	if w.msg.Authoritative {
 		t.Fatalf("unknown-zone response must not be authoritative")
+	}
+}
+
+func TestHandleRequestAcceptsNotifyFromCatalogPrimary(t *testing.T) {
+	setupDNSHandlerTestStore(t)
+	config.AppConfig.Live.Mode = "secondary"
+	config.AppConfig.Live.Primary.Ip = ""
+	config.AppConfig.Live.Secondary.CatalogEnabled = true
+	config.AppConfig.Live.Secondary.CatalogZone = "_catalog.go53."
+	ttl := uint32(300)
+	if err := zone.AddRecord(mdns.TypeSOA, "_catalog.go53.", "@", map[string]interface{}{"ns": "invalid.", "mbox": "hostmaster.go53.", "refresh": float64(3600), "retry": float64(600), "expire": float64(86400), "minimum": float64(300)}, &ttl); err != nil {
+		t.Fatalf("add catalog SOA: %v", err)
+	}
+	if err := zone.AddRecord(mdns.TypeTXT, "_catalog.go53.", "version", map[string]interface{}{"text": "2"}, &ttl); err != nil {
+		t.Fatalf("add catalog version: %v", err)
+	}
+	if err := zone.AddRecord(mdns.TypePTR, "_catalog.go53.", "m1.zones", map[string]interface{}{"ptr": "member.test."}, &ttl); err != nil {
+		t.Fatalf("add catalog member: %v", err)
+	}
+	if err := zone.AddRecord(mdns.TypeA, "_catalog.go53.", "ns1.primaries.ext.m1.zones", map[string]interface{}{"ip": "192.0.2.53"}, &ttl); err != nil {
+		t.Fatalf("add catalog primary: %v", err)
+	}
+
+	req := new(mdns.Msg)
+	req.SetNotify("member.test.")
+	w := &captureResponseWriter{remoteAddr: &net.UDPAddr{IP: net.ParseIP("192.0.2.53"), Port: 5353}}
+	handleRequest(w, req)
+
+	if w.msg == nil || w.msg.Rcode != mdns.RcodeSuccess {
+		t.Fatalf("notify response = %#v, want success", w.msg)
 	}
 }
 

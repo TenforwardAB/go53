@@ -1,0 +1,69 @@
+services:
+  bind-catalog:
+    image: docker.io/internetsystemsconsortium/bind9:9.18
+    entrypoint: ["/bin/sh", "-lc"]
+    command: ["named -g -c /etc/bind/named.conf"]
+    volumes:
+      - ./catalog_primaries/bind-catalog/named.conf:/etc/bind/named.conf:ro
+      - ./catalog_primaries/bind-catalog/zones:/etc/bind/zones:ro
+    networks:
+      catalog_primaries:
+        ipv4_address: 10.53.0.53
+
+  bind-member:
+    image: docker.io/internetsystemsconsortium/bind9:9.18
+    entrypoint: ["/bin/sh", "-lc"]
+    command: ["/etc/bind/run-member.sh"]
+    volumes:
+      - ./catalog_primaries/bind-member/named.conf:/etc/bind/named.conf:ro
+      - ./catalog_primaries/bind-member/run-member.sh:/etc/bind/run-member.sh:ro
+      - ./catalog_primaries/bind-member/zones:/etc/bind/zones:rw
+      - bind-member-control:/control
+    networks:
+      catalog_primaries:
+        ipv4_address: 10.53.0.60
+
+  go53:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      BIND_HOST: 0.0.0.0
+      DNS_PORT: :2053
+      API_PORT: :8053
+      ADMIN_SOCKET: /var/lib/go53/admin.sock
+      ADMIN_SOCKET_GROUP: ""
+      STORAGE_BACKEND: badger
+    volumes:
+      - go53-data:/var/lib/go53
+    networks:
+      catalog_primaries:
+        ipv4_address: 10.53.0.10
+
+  runner:
+    build:
+      context: ./catalog_primaries
+      dockerfile: runner.Containerfile
+    depends_on:
+      - bind-catalog
+      - bind-member
+      - go53
+    volumes:
+      - go53-data:/var/lib/go53
+      - ./catalog_primaries/run.sh:/work/run.sh:ro
+      - ./catalog_primaries/bind-member/zones:/member-zones:rw
+      - bind-member-control:/control
+    command: ["/work/run.sh"]
+    networks:
+      catalog_primaries:
+        ipv4_address: 10.53.0.90
+
+networks:
+  catalog_primaries:
+    ipam:
+      config:
+        - subnet: 10.53.0.0/24
+
+volumes:
+  go53-data:
+  bind-member-control:

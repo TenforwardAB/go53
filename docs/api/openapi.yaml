@@ -1644,6 +1644,14 @@ components:
         version:
           type: string
           example: '2'
+        global_primaries:
+          type: array
+          items:
+            type: string
+          description: Catalog-level BIND-style primaries/masters addresses currently parsed for member-zone transfer fallback.
+          example:
+          - 192.0.2.53:53
+          - '[2001:db8::53]:53'
     TSIGKey:
       type: object
       required:

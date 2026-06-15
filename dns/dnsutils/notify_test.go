@@ -446,6 +446,47 @@ func TestStartSecondaryRefresh_DisabledWhenPrimaryIpEmpty(t *testing.T) {
 	}
 }
 
+func TestStartSecondaryRefreshUsesCatalogPrimaryWhenPrimaryIpEmpty(t *testing.T) {
+	setupCatalogTestStore(t, "secondary")
+	config.AppConfig.Live.Primary.Ip = ""
+	config.AppConfig.Live.Secondary.RefreshIntervalSec = 0
+	addCatalogBaseForTest(t)
+	addCatalogPTR(t, "m1.zones", "member.test.")
+	addCatalogA(t, "ns1.primaries.ext", "192.0.2.53")
+
+	StartSecondaryRefresh(context.Background())
+
+	got := collectQueued(1, time.Second)
+	if !got["member.test."] {
+		t.Fatalf("startup sweep enqueued %v, want member.test.", got)
+	}
+}
+
+func TestTransferPrimariesPreferCatalogOverConfig(t *testing.T) {
+	setupCatalogTestStore(t, "secondary")
+	config.AppConfig.Live.Primary.Ip = "127.0.0.1"
+	config.AppConfig.Live.Primary.Port = 15353
+	addCatalogBaseForTest(t)
+	addCatalogPTR(t, "m1.zones", "member.test.")
+	addCatalogA(t, "ns1.primaries.ext.m1.zones", "192.0.2.99")
+
+	got := transferPrimariesForZone("member.test.")
+	if len(got) != 1 || got[0].addr() != "192.0.2.99:53" {
+		t.Fatalf("transfer primaries = %#v, want catalog primary only", got)
+	}
+}
+
+func TestTransferPrimariesFallbackToConfig(t *testing.T) {
+	setupCatalogTestStore(t, "secondary")
+	config.AppConfig.Live.Primary.Ip = "127.0.0.1"
+	config.AppConfig.Live.Primary.Port = 15353
+
+	got := transferPrimariesForZone("legacy.test.")
+	if len(got) != 1 || got[0].addr() != "127.0.0.1:15353" {
+		t.Fatalf("transfer primaries = %#v, want configured primary", got)
+	}
+}
+
 func TestRunRefreshTicker_PeriodicEnqueue(t *testing.T) {
 	clearFetchQueue()
 	stateMu.Lock()
