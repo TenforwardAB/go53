@@ -1,3 +1,5 @@
+//go:build ignore
+
 package main
 
 import (
@@ -77,7 +79,7 @@ func main() {
 		}
 	}
 
-	fmt.Printf("\nDNS benchmark for %d queries (%d parallel)\n", runs, worker)
+	fmt.Printf("\nDNS benchmark for %d queries (%d parallel)\n", runs, workers)
 	fmt.Printf("Avg:  %.2f ms\n", float64(sum.Microseconds())/1000/float64(len(times)))
 	fmt.Printf("Min:  %.2f ms\n", float64(min.Microseconds())/1000)
 	fmt.Printf("Max:  %.2f ms\n", float64(max.Microseconds())/1000)

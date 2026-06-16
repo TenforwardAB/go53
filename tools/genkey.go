@@ -1,3 +1,5 @@
+//go:build ignore
+
 // This file is part of the go53 project.
 //
 // This file is licensed under the European Union Public License (EUPL) v1.2.
