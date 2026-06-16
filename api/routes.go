@@ -43,6 +43,11 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 	r.HandleFunc("/api/config", handlers.GetLiveConfigHandler).Methods("GET")
 	r.HandleFunc("/api/config/auth/x-auth-key", localAdminOnly(handlers.GetXAuthKeyHandler)).Methods("GET")
 	r.HandleFunc("/api/config/auth/x-auth-key", localAdminOnly(handlers.SetXAuthKeyHandler)).Methods("PUT", "PATCH")
+	r.HandleFunc("/api/backup", localAdminOnly(handlers.ExportBackupHandler)).Methods("GET")
+	r.HandleFunc("/api/backup/wal", localAdminOnly(handlers.ExportWALHandler)).Methods("GET")
+	r.HandleFunc("/api/backup/wal/status", localAdminOnly(handlers.GetWALStatusHandler)).Methods("GET")
+	r.HandleFunc("/api/restore", localAdminOnly(handlers.RestoreBackupHandler)).Methods("POST")
+	r.HandleFunc("/api/restore/wal", localAdminOnly(handlers.RestoreWALHandler)).Methods("POST")
 	r.HandleFunc("/.well-known/go53-node.json", handlers.GetWellKnownNodeHandler).Methods("GET")
 
 	r.HandleFunc("/api/zones", handlers.GetZonesHandler).Methods("GET")

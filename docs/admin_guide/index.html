@@ -304,11 +304,13 @@
         <li><a href="#transfers">Transfers</a></li>
         <li><a href="#distributed">Distributed Mode</a></li>
         <li><a href="#go53ctl">go53ctl</a></li>
+        <li><a href="#backup">Backup And WAL</a></li>
         <li><a href="#tsig">TSIG</a></li>
         <li><a href="#routes">API Routes</a></li>
         <li><a href="#operations">Operations</a></li>
       </ul>
       <p class="subtitle"><a href="../dnssec/">DNSSEC guide</a></p>
+      <p class="subtitle"><a href="../backup/">Backup guide</a></p>
       <p class="subtitle"><a href="../config/">Config reference</a></p>
       <p class="subtitle"><a href="../">Back to go53 docs</a></p>
     </nav>
@@ -995,6 +997,7 @@ go53ctl api PATCH /api/config '{"default_ttl":120}'</code></pre>
             <tr><td><code>secondary</code></td><td>Queue explicit secondary fetches.</td></tr>
             <tr><td><code>notify</code></td><td>Schedule DNS NOTIFY for a zone.</td></tr>
             <tr><td><code>tsig</code></td><td>List, add, and delete TSIG keys.</td></tr>
+            <tr><td><code>backup</code>, <code>restore</code></td><td>Create full backups, archive binary WAL, and restore over the local admin socket.</td></tr>
             <tr><td><code>dnskeys</code></td><td>Manage DNSSEC key creation, rollover, lifecycle, retire, revoke, and delete operations.</td></tr>
             <tr><td><code>ds</code>, <code>cds</code>, <code>cdnskey</code></td><td>Generate parent-signaling records.</td></tr>
             <tr><td><code>distributed</code></td><td>Inspect vectors, events, Merkle state, invites, and node discovery.</td></tr>
@@ -1089,6 +1092,22 @@ go53ctl --db /data/go53 --list-zone example.com.
 go53ctl --db /data/go53 --list-zone example.com. --count-only</code></pre>
       </section>
 
+      <section id="backup">
+        <h2>Backup, WAL, And Point-In-Time Restore</h2>
+        <p>go53 backup and restore operations are local-first administrative workflows. <code>go53ctl</code> uses the Unix admin socket by default, so operators can create full backups, archive WAL, and restore a node without exposing these operations on the TCP API.</p>
+        <pre><code># Create a full tar backup.
+go53ctl backup create --out /backup/go53/base.tar
+
+# Continuously archive binary WAL segments.
+go53ctl backup wal-follow --dir /backup/go53/wal --interval-sec 60
+
+# Restore a base backup and replay archived WAL.
+go53ctl restore backup /backup/go53/base.tar
+go53ctl restore wal /backup/go53/wal/go53-wal-00000000000000000124-00000000000000000180.g53wal</code></pre>
+        <p>Each backup manifest records <code>snapshot_start_seq</code> and <code>snapshot_end_seq</code>. For normal recovery, archive and replay WAL events after <code>snapshot_end_seq</code>. The runtime setting <code>wal_retention_days</code> controls how long internal WAL events are retained in go53 storage; external WAL files written by <code>wal-follow</code> are operator-managed archives.</p>
+        <p>See the dedicated <a href="../backup/">backup and WAL guide</a> for retention, format, and point-in-time restore details.</p>
+      </section>
+
       <section id="tsig">
         <h2>TSIG</h2>
         <p>TSIG keys are stored separately from DNSSEC keys. Add shared TSIG secrets before enforcing TSIG for transfers.</p>
@@ -1129,6 +1148,11 @@ curl -X DELETE http://127.0.0.1:8053/api/tsig/transfer-key.</code></pre>
             <tr><td><code>PATCH</code></td><td><code>/api/config</code></td><td>Patch live runtime config.</td></tr>
             <tr><td><code>GET</code></td><td><code>/api/config/auth/x-auth-key</code></td><td>Read the static API key. Local admin socket only; TCP returns <code>403</code>.</td></tr>
             <tr><td><code>PATCH</code></td><td><code>/api/config/auth/x-auth-key</code></td><td>Set the static API key. Local admin socket only; key must be base62 and at least 48 characters.</td></tr>
+            <tr><td><code>GET</code></td><td><code>/api/backup</code></td><td>Stream a full tar backup. Local admin socket only.</td></tr>
+            <tr><td><code>GET</code></td><td><code>/api/backup/wal</code></td><td>Stream exported binary WAL events. Local admin socket only; optional <code>after</code> query.</td></tr>
+            <tr><td><code>GET</code></td><td><code>/api/backup/wal/status</code></td><td>Return the latest WAL sequence. Local admin socket only.</td></tr>
+            <tr><td><code>POST</code></td><td><code>/api/restore</code></td><td>Restore a full backup into the running node. Local admin socket only.</td></tr>
+            <tr><td><code>POST</code></td><td><code>/api/restore/wal</code></td><td>Replay an exported WAL file into the running node. Local admin socket only.</td></tr>
             <tr><td><code>GET</code></td><td><code>/api/zones</code></td><td>List loaded zones.</td></tr>
             <tr><td><code>POST</code></td><td><code>/api/zones/{zone}/records/{rrtype}</code></td><td>Add a record. Disabled in secondary mode.</td></tr>
             <tr><td><code>GET</code></td><td><code>/api/zones/{zone}/records/{rrtype}/{name}</code></td><td>Read one RRset owner name.</td></tr>

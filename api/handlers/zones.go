@@ -18,6 +18,7 @@ import (
 	"go53/dns/dnsutils"
 	"go53/internal"
 	"go53/security"
+	"go53/wal"
 	"go53/zone"
 	"go53/zone/rtypes"
 	"go53/zonemeta"
@@ -74,6 +75,10 @@ func AddRecordHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if err := appendWALRecord(wal.OpUpsert, zoneName, rrtypeStr, req.name, req.value); err != nil {
+		http.Error(w, "record stored but WAL append failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	if err := afterRecordUpsert(zoneName, rrtypeStr, rrtype, req.name, req.value); err != nil {
 		http.Error(w, "record stored but distributed event failed: "+err.Error(), http.StatusInternalServerError)
@@ -119,6 +124,10 @@ func UpdateRecordHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := zone.AddRecord(rrtype, zoneName, req.name, req.value, req.ttlPtr); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := appendWALRecord(wal.OpUpsert, zoneName, rrtypeStr, req.name, req.value); err != nil {
+		http.Error(w, "record updated but WAL append failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if err := afterRecordUpsert(zoneName, rrtypeStr, rrtype, req.name, req.value); err != nil {
@@ -374,6 +383,10 @@ func DeleteRecordHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if err := appendWALRecord(wal.OpDelete, zoneName, rrtypeStr, name, nil); err != nil {
+		http.Error(w, "record deleted but WAL append failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	if rrtype != dns.TypeSOA {
 		if err := dnsutils.UpdateSOASerial(zoneName); err != nil {
@@ -433,6 +446,10 @@ func DeleteZoneHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err := zone.DeleteZone(zoneName); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if _, err := wal.Append(wal.KindZone, wal.OpDelete, zoneName, "", "", "", "", nil); err != nil {
+		http.Error(w, "zone deleted but WAL append failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -543,7 +560,12 @@ func ImportZoneHandler(w http.ResponseWriter, r *http.Request) {
 	if dnssecMode != "preserve" && rejectReadOnlyZone(w, zoneName) {
 		return
 	}
-	parser := dns.NewZoneParser(http.MaxBytesReader(w, r.Body, 10<<20), zoneName, "")
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 10<<20))
+	if err != nil {
+		http.Error(w, "failed to read zone file: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	parser := dns.NewZoneParser(strings.NewReader(string(body)), zoneName, "")
 	records := []dns.RR{}
 	hasSOA := false
 	for rr, ok := parser.Next(); ok; rr, ok = parser.Next() {
@@ -562,6 +584,10 @@ func ImportZoneHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := dnsutils.ImportRecords("", zoneName, records); err != nil {
 		http.Error(w, "zone import failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if _, err := wal.Append(wal.KindZone, wal.OpImport, zoneName, "", "", "", "", body); err != nil {
+		http.Error(w, "zone imported but WAL append failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if dnssecMode == "preserve" {
@@ -618,6 +644,19 @@ func publishDistributedDelete(zoneName, rrtypeStr, name string) error {
 		return nil
 	}
 	return distributed.Default.PublishDelete(zoneName, strings.ToUpper(rrtypeStr), canonicalRecordName(zoneName, rrtypeStr, name))
+}
+
+func appendWALRecord(op, zoneName, rrtypeStr, name string, value any) error {
+	var raw []byte
+	var err error
+	if value != nil {
+		raw, err = json.Marshal(value)
+		if err != nil {
+			return err
+		}
+	}
+	_, err = wal.Append(wal.KindZoneRecord, op, zoneName, rrtypeStr, name, "", "", raw)
+	return err
 }
 
 func pageParams(r *http.Request) (int, int) {
