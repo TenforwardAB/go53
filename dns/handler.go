@@ -1,6 +1,12 @@
 package dns
 
 import (
+	"encoding/hex"
+	"log"
+	"net"
+	"strconv"
+	"strings"
+
 	"github.com/TenforwardAB/slog"
 	"github.com/miekg/dns"
 	"go53/config"
@@ -8,10 +14,6 @@ import (
 	"go53/internal"
 	"go53/security"
 	"go53/zone"
-	"log"
-	"net"
-	"strconv"
-	"strings"
 )
 
 func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
@@ -84,6 +86,13 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 	if opt != nil && opt.Version() != 0 {
 		m.SetRcode(r, dns.RcodeBadVers)
+		m.Authoritative = false
+		writeResponse(w, r, m)
+		return
+	}
+
+	if malformedEDNSCookie(opt) {
+		m.SetRcode(r, dns.RcodeFormatError)
 		m.Authoritative = false
 		writeResponse(w, r, m)
 		return
@@ -274,6 +283,27 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 	dnsutils.ApplyNSID(m, r)
 	writeResponse(w, r, m)
+}
+
+func malformedEDNSCookie(opt *dns.OPT) bool {
+	if opt == nil {
+		return false
+	}
+	for _, option := range opt.Option {
+		cookie, ok := option.(*dns.EDNS0_COOKIE)
+		if !ok {
+			continue
+		}
+		raw, err := hex.DecodeString(cookie.Cookie)
+		if err != nil {
+			return true
+		}
+		length := len(raw)
+		if length != 8 && (length < 16 || length > 40) {
+			return true
+		}
+	}
+	return false
 }
 
 func writeResponse(w dns.ResponseWriter, req *dns.Msg, resp *dns.Msg) {
