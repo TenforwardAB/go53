@@ -271,6 +271,46 @@ func TestHandleRequestEDNSBadVersion(t *testing.T) {
 	}
 }
 
+func TestHandleRequestRejectsMalformedEDNSCookie(t *testing.T) {
+	resetDNSHandlerTestConfig()
+	tests := []struct {
+		name   string
+		cookie string
+	}{
+		{name: "empty", cookie: ""},
+		{name: "short client cookie", cookie: "00010203040506"},
+		{name: "between client and server cookie", cookie: "000102030405060708"},
+		{name: "short server cookie", cookie: "000102030405060708090a0b0c0d0e"},
+		{name: "too long", cookie: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728"},
+		{name: "not hex", cookie: "not-hex"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := new(mdns.Msg)
+			req.SetQuestion("example.test.", mdns.TypeA)
+			req.SetEdns0(1232, false)
+			req.IsEdns0().Option = append(req.IsEdns0().Option, &mdns.EDNS0_COOKIE{
+				Code:   mdns.EDNS0COOKIE,
+				Cookie: tt.cookie,
+			})
+
+			w := &captureResponseWriter{}
+			handleRequest(w, req)
+
+			if w.msg == nil {
+				t.Fatalf("expected response")
+			}
+			if w.msg.Rcode != mdns.RcodeFormatError {
+				t.Fatalf("rcode = %s, want FORMERR", mdns.RcodeToString[w.msg.Rcode])
+			}
+			if w.msg.Authoritative {
+				t.Fatalf("malformed COOKIE FORMERR must not be authoritative")
+			}
+		})
+	}
+}
+
 func TestFinalizeResponseCapsUDPSizeAndTruncates(t *testing.T) {
 	resetDNSHandlerTestConfig()
 	config.AppConfig.Live.MaxUDPSize = 512
