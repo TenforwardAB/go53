@@ -92,6 +92,14 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 
+	if multipleOPTRecords(r) {
+		slog.Warn("Refusing DNS request carrying more than one OPT record (RFC 6891 §6.1.1)")
+		m.SetRcode(r, dns.RcodeFormatError)
+		m.Authoritative = false
+		writeResponse(w, r, m)
+		return
+	}
+
 	if malformedEDNSCookie(opt) {
 		m.SetRcode(r, dns.RcodeFormatError)
 		m.Authoritative = false
@@ -284,6 +292,19 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 	dnsutils.ApplyNSID(m, r)
 	writeResponse(w, r, m)
+}
+
+func multipleOPTRecords(r *dns.Msg) bool {
+	count := 0
+	for _, rr := range r.Extra {
+		if rr.Header().Rrtype == dns.TypeOPT {
+			count++
+			if count > 1 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func malformedEDNSCookie(opt *dns.OPT) bool {

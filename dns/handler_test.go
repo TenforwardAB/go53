@@ -311,6 +311,32 @@ func TestHandleRequestRejectsMalformedEDNSCookie(t *testing.T) {
 	}
 }
 
+func TestHandleRequestRejectsMultipleOPTRecords(t *testing.T) {
+	resetDNSHandlerTestConfig()
+	req := new(mdns.Msg)
+	req.SetQuestion("example.test.", mdns.TypeA)
+	req.SetEdns0(1232, false)
+
+	secondOPT := new(mdns.OPT)
+	secondOPT.Hdr.Name = "."
+	secondOPT.Hdr.Rrtype = mdns.TypeOPT
+	secondOPT.SetUDPSize(1232)
+	req.Extra = append(req.Extra, secondOPT)
+
+	w := &captureResponseWriter{}
+	handleRequest(w, req)
+
+	if w.msg == nil {
+		t.Fatalf("expected response")
+	}
+	if w.msg.Rcode != mdns.RcodeFormatError {
+		t.Fatalf("rcode = %s, want FORMERR", mdns.RcodeToString[w.msg.Rcode])
+	}
+	if w.msg.Authoritative {
+		t.Fatalf("multiple OPT FORMERR must not be authoritative")
+	}
+}
+
 func TestFinalizeResponseCapsUDPSizeAndTruncates(t *testing.T) {
 	resetDNSHandlerTestConfig()
 	config.AppConfig.Live.MaxUDPSize = 512
