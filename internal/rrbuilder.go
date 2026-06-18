@@ -529,6 +529,42 @@ var RRBuilders = map[string]RRBuilder{
 		}
 	},
 
+	"CAA": func(name string, data any) []dns.RR {
+		var rrs []dns.RR
+
+		appendRec := func(flag uint8, tag, value string, ttl uint32) {
+			rrs = append(rrs, &dns.CAA{
+				Hdr:   dns.RR_Header{Name: name, Rrtype: dns.TypeCAA, Class: dns.ClassINET, Ttl: ttl},
+				Flag:  flag,
+				Tag:   tag,
+				Value: value,
+			})
+		}
+
+		switch v := data.(type) {
+		case []types.CAARecord:
+			for _, rec := range v {
+				appendRec(rec.Flag, rec.Tag, rec.Value, rec.TTL)
+			}
+		case []map[string]interface{}:
+			for _, rec := range v {
+				tag, _ := rec["tag"].(string)
+				value, _ := rec["value"].(string)
+				appendRec(uint8(getFloat64(rec["flag"])), tag, value, toTTL(rec))
+			}
+		case []interface{}:
+			for _, raw := range v {
+				if rec, ok := raw.(map[string]interface{}); ok {
+					tag, _ := rec["tag"].(string)
+					value, _ := rec["value"].(string)
+					appendRec(uint8(getFloat64(rec["flag"])), tag, value, toTTL(rec))
+				}
+			}
+		}
+
+		return rrs
+	},
+
 	"SPF": func(name string, data any) []dns.RR {
 		switch v := data.(type) {
 		case types.SPFRecord:
@@ -995,6 +1031,8 @@ func RRToZoneData(rrs []dns.RR) types.ZoneData {
 			zd.CNAME[name] = types.CNAMERecord{Target: strings.TrimSuffix(v.Target, "."), TTL: v.Hdr.Ttl}
 		case *dns.DNAME:
 			zd.DNAME[name] = types.DNAMERecord{Target: strings.TrimSuffix(v.Target, "."), TTL: v.Hdr.Ttl}
+		case *dns.CAA:
+			zd.CAA[name] = append(zd.CAA[name], types.CAARecord{Flag: v.Flag, Tag: v.Tag, Value: v.Value, TTL: v.Hdr.Ttl})
 		case *dns.SPF:
 			zd.SPF[name] = types.SPFRecord{Text: strings.Join(v.Txt, ""), TTL: v.Hdr.Ttl}
 		case *dns.DNSKEY:

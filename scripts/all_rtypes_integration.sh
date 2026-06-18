@@ -182,6 +182,7 @@ create_all_records() {
     add_record "$zone" CNAME '{"name":"alias","ttl":300,"target":"www.all-rtypes.test."}'
     add_record "$zone" DNAME '{"name":"old","ttl":300,"target":"new.all-rtypes.test."}'
     add_record "$zone" MX '{"name":"@","ttl":300,"host":"mail.all-rtypes.test.","priority":10}'
+    add_record "$zone" CAA '{"name":"@","ttl":300,"flag":0,"tag":"issue","value":"letsencrypt.org"}'
     add_record "$zone" TXT '{"name":"txt","ttl":300,"text":"go53 all rtypes txt"}'
     add_record "$zone" SPF '{"name":"spf","ttl":300,"text":"v=spf1 -all"}'
     add_record "$zone" SRV '{"name":"_sip._tcp","ttl":300,"priority":10,"weight":5,"port":5060,"target":"sip.all-rtypes.test."}'
@@ -210,6 +211,7 @@ verify_all_records() {
     api_expect_record "$zone" CNAME "alias.$zone"
     api_expect_record "$zone" DNAME "old.$zone"
     api_expect_record "$zone" MX "$zone"
+    api_expect_record "$zone" CAA "$zone"
     api_expect_record "$zone" TXT "txt.$zone"
     api_expect_record "$zone" SPF "spf.$zone"
     api_expect_record "$zone" SRV "_sip._tcp.$zone"
@@ -233,6 +235,7 @@ verify_all_records() {
     dig_expect_type "$port" "alias.$zone" CNAME
     dig_expect_type "$port" "old.$zone" DNAME
     dig_expect_type "$port" "$zone" MX
+    dig_expect_type "$port" "$zone" CAA
     dig_expect_type "$port" "txt.$zone" TXT
     dig_expect_type "$port" "spf.$zone" SPF
     dig_expect_type "$port" "_sip._tcp.$zone" SRV
