@@ -85,7 +85,7 @@ func StartAdminSocket(cfg config.BaseConfig) {
 	}
 	applyAdminSocketGroup(path, cfg.AdminSocketGroup)
 
-	handler := localAdminTag(NewRouter(cfg))
+	handler := localAdminTag(RestoreGuard(NewRouter(cfg)))
 	srv := &http.Server{Handler: handler}
 	log.Printf("Starting admin API on unix socket %s (group %q, mode %#o)", path, cfg.AdminSocketGroup, adminSocketMode)
 	if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {

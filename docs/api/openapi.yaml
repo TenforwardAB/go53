@@ -32,6 +32,8 @@ tags:
   description: DNSSEC key material, lifecycle state, and parent-signaling record generation.
 - name: Distributed
   description: Distributed replication status, vector clocks, Merkle repair, invites, and join requests.
+- name: Backup
+  description: Full backups, binary WAL export/replay, and restore. Local admin socket only; the TCP API returns 403.
 paths:
   /openapi.yaml:
     get:
@@ -198,6 +200,128 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
       description: Same behavior as `PATCH /api/config/auth/x-auth-key`.
+  /api/backup:
+    get:
+      tags:
+      - Backup
+      summary: Stream a full backup
+      responses:
+        '200':
+          description: A full tar backup stream containing the manifest, zones, runtime config, TSIG keys, DNSSEC key material, and WAL metadata.
+          content:
+            application/x-tar:
+              schema:
+                type: string
+                format: binary
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      description: Streams a full tar backup. The manifest records `snapshot_start_seq` and `snapshot_end_seq`. This route requires the trusted local admin socket and returns `403` over the TCP API.
+  /api/backup/wal:
+    get:
+      tags:
+      - Backup
+      summary: Export binary WAL events
+      parameters:
+      - name: after
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int64
+        description: Export only WAL events with a sequence greater than this value.
+      responses:
+        '200':
+          description: Binary WAL export (magic header `GO53WAL1`; length-prefixed, checksummed records).
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      description: Streams exported binary logical WAL events (zone records, zone imports/deletes, config, TSIG keys, and DNSSEC key changes). This route requires the trusted local admin socket and returns `403` over the TCP API.
+  /api/backup/wal/status:
+    get:
+      tags:
+      - Backup
+      summary: Read the latest WAL sequence
+      responses:
+        '200':
+          description: The latest allocated WAL sequence number.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WALStatus'
+              examples:
+                status:
+                  summary: Current WAL head and archived watermark
+                  value:
+                    last_seq: 180
+                    archived_seq: 120
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      description: Returns the latest WAL sequence (`wal-meta/last_seq`) and the archived watermark (`archived_seq`) below which retention may prune. This route requires the trusted local admin socket and returns `403` over the TCP API.
+  /api/backup/wal/ack:
+    post:
+      tags:
+      - Backup
+      summary: Acknowledge archived WAL
+      parameters:
+      - name: seq
+        in: query
+        required: true
+        schema:
+          type: integer
+          format: int64
+        description: Highest WAL sequence the caller has durably archived.
+      responses:
+        '204':
+          description: Archived watermark advanced (monotonic; stale or lower values are ignored).
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      description: Advances the archived WAL watermark so retention will not prune events at or below `seq`. Called by `go53ctl backup wal-follow` after a segment is durably stored. The watermark is monotonic. This route requires the trusted local admin socket and returns `403` over the TCP API.
+  /api/restore:
+    post:
+      tags:
+      - Backup
+      summary: Restore a full backup
+      requestBody:
+        required: true
+        content:
+          application/x-tar:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '204':
+          description: Backup restored; persisted state replaced and runtime reloaded.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      description: Restores a full backup into the running node, replacing persisted zones and metadata and reloading runtime state (zone store, live config, TSIG and DNSSEC key caches). Do not run concurrent administrative writes while restoring. This route requires the trusted local admin socket and returns `403` over the TCP API.
+  /api/restore/wal:
+    post:
+      tags:
+      - Backup
+      summary: Replay an exported WAL file
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '204':
+          description: WAL file applied to the running node.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      description: Replays one exported WAL file (the complete file) into the running node, then reloads runtime state (zone store, live config, TSIG and DNSSEC key caches). Replay WAL files in sequence order after restoring a base backup. This route requires the trusted local admin socket and returns `403` over the TCP API.
   /api/zones:
     get:
       tags:
@@ -1401,6 +1525,19 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorText'
   schemas:
+    WALStatus:
+      type: object
+      properties:
+        last_seq:
+          type: integer
+          format: int64
+          description: The latest allocated WAL sequence number.
+          example: 180
+        archived_seq:
+          type: integer
+          format: int64
+          description: Highest WAL sequence acknowledged as durably archived. Retention does not prune above it while it is greater than 0.
+          example: 120
     Page:
       type: object
       required:
@@ -1525,6 +1662,23 @@ components:
         enforce_tsig:
           type: boolean
           example: false
+        wal_retention_days:
+          type: integer
+          default: 14
+          example: 14
+          description: >-
+            How long go53 retains internal WAL events in storage for
+            backup/restore. `0` keeps them indefinitely. External WAL archives
+            written by `go53ctl backup wal-follow` are operator-managed.
+        max_restore_bytes:
+          type: integer
+          format: int64
+          default: 1073741824
+          example: 1073741824
+          description: >-
+            Upper bound on a restore upload (full backup or WAL), which is read
+            into memory. `0` disables the cap. Raise it before restoring a backup
+            larger than 1 GiB.
         any_query_policy:
           type: string
           enum:

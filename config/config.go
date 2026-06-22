@@ -99,8 +99,9 @@ type LiveConfig struct {
 	NSID              string `json:"nsid"`            // EDNS0 NSID (RFC 5001); empty = disabled
 	RateLimitQPS      int    `json:"rate_limit_qps"`  // queries per second
 	WALRetentionDays  int    `json:"wal_retention_days"`
-	AllowAXFR         bool   `json:"allow_axfr"` // "true"/"false"
-	DefaultNS         string `json:"default_ns"` // e.g. ns1.example.com
+	MaxRestoreBytes   int64  `json:"max_restore_bytes"` // restore upload cap in bytes; 0 = unlimited
+	AllowAXFR         bool   `json:"allow_axfr"`        // "true"/"false"
+	DefaultNS         string `json:"default_ns"`        // e.g. ns1.example.com
 	EnforceTSIG       bool   `json:"enforce_tsig"`
 	AnyQueryPolicy    string `json:"any_query_policy"`    // hinfo/refuse
 	UnknownZonePolicy string `json:"unknown_zone_policy"` // refused

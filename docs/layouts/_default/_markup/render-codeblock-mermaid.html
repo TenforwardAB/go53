@@ -1,0 +1,4 @@
+{{- /* Render ```mermaid fenced code blocks as <pre class="mermaid"> so the
+   mermaid runtime (loaded conditionally in baseof.html) can draw them. */ -}}
+<pre class="mermaid">{{ .Inner | htmlEscape | safeHTML }}</pre>
+{{- .Page.Store.Set "hasMermaid" true -}}

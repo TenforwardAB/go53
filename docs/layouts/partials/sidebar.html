@@ -1,0 +1,25 @@
+{{- $cur := .RelPermalink -}}
+<aside>
+  <a class="brand" href="{{ .Site.Home.RelPermalink }}">
+    <img src="{{ .Site.Params.logo }}" alt="go53" />
+    <span>
+      <span class="name">{{ .Site.Title }}</span>
+      <span class="tag">{{ .Site.Params.tagline }}</span>
+    </span>
+  </a>
+  <nav>
+    <a href="{{ .Site.Home.RelPermalink }}" class="{{ if eq $cur .Site.Home.RelPermalink }}active{{ end }}">Home</a>
+    {{- /* Top-level standalone pages (installation, container, releases) */ -}}
+    {{- range .Site.Home.RegularPages.ByWeight }}
+      <a href="{{ .RelPermalink }}" class="{{ if eq $cur .RelPermalink }}active{{ end }}">{{ .LinkTitle }}</a>
+    {{- end }}
+    {{- /* Sections (guides, concepts, reference, internal) with their pages */ -}}
+    {{- range .Site.Home.Sections.ByWeight }}
+      <div class="section">{{ .LinkTitle }}</div>
+      <a href="{{ .RelPermalink }}" class="{{ if eq $cur .RelPermalink }}active{{ end }}">Overview</a>
+      {{- range .RegularPages.ByWeight }}
+        <a href="{{ .RelPermalink }}" class="{{ if eq $cur .RelPermalink }}active{{ end }}">{{ .LinkTitle }}</a>
+      {{- end }}
+    {{- end }}
+  </nav>
+</aside>

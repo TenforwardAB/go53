@@ -16,6 +16,7 @@ import (
 	"go53/internal"
 	"go53/storage"
 	"go53/types"
+	"go53/wal"
 	"go53/zonereader"
 	"log"
 	"math/big"
@@ -474,6 +475,9 @@ func SavePrivateKeyToStorage(zone, keyID, algorithmName string, priv crypto.Priv
 	if err := storage.Backend.SaveTable(dnssecKeyTable, keyID, data); err != nil {
 		return fmt.Errorf("save to backend: %w", err)
 	}
+	if _, err := wal.Append(wal.KindDNSSECKey, wal.OpUpsert, "", "", "", dnssecKeyTable, keyID, data); err != nil {
+		return fmt.Errorf("append WAL: %w", err)
+	}
 	cacheStoredKey(keyID, &stored)
 
 	return nil
@@ -531,6 +535,9 @@ func GenerateRolloverKey(zone, role, algorithmName string, publishAt, activateAt
 		return "", nil, err
 	}
 	if err := storage.Backend.SaveTable(dnssecKeyTable, keyID, data); err != nil {
+		return "", nil, err
+	}
+	if _, err := wal.Append(wal.KindDNSSECKey, wal.OpUpsert, "", "", "", dnssecKeyTable, keyID, data); err != nil {
 		return "", nil, err
 	}
 	cacheStoredKey(keyID, stored)
@@ -628,6 +635,9 @@ func saveStoredKey(keyID string, stored *types.StoredKey) error {
 	if err := storage.Backend.SaveTable(dnssecKeyTable, keyID, data); err != nil {
 		return err
 	}
+	if _, err := wal.Append(wal.KindDNSSECKey, wal.OpUpsert, "", "", "", dnssecKeyTable, keyID, data); err != nil {
+		return err
+	}
 	cacheStoredKey(keyID, stored)
 	return nil
 }
@@ -665,6 +675,9 @@ func LoadPrivateKeyFromStorage(keyID string) (crypto.PrivateKey, *types.StoredKe
 
 func DeleteStoredKey(keyID string) error {
 	if err := storage.Backend.DeleteFromTable(dnssecKeyTable, keyID); err != nil {
+		return err
+	}
+	if _, err := wal.Append(wal.KindDNSSECKey, wal.OpDelete, "", "", "", dnssecKeyTable, keyID, nil); err != nil {
 		return err
 	}
 	uncacheStoredKey(keyID)

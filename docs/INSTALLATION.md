@@ -1,3 +1,10 @@
+---
+title: "Installation"
+linkTitle: "Installation"
+weight: 10
+description: "How to install and run go53."
+---
+
 # go53 Installation Guide
 
 ## Installation Methods

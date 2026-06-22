@@ -125,12 +125,54 @@ func GetWALStatusHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read WAL sequence: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]uint64{"last_seq": seq})
+	archived, err := wal.ArchivedSeq()
+	if err != nil {
+		http.Error(w, "failed to read archived WAL sequence: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]uint64{"last_seq": seq, "archived_seq": archived})
+}
+
+// AckWALHandler advances the archived WAL watermark. An external archiver calls
+// it after durably storing WAL up to `seq`, so retention will not prune events
+// at or below `seq`. The watermark is monotonic, so retries and stale acks are
+// safe.
+func AckWALHandler(w http.ResponseWriter, r *http.Request) {
+	seq, err := strconv.ParseUint(r.URL.Query().Get("seq"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid seq", http.StatusBadRequest)
+		return
+	}
+	if err := wal.SetArchivedSeq(seq); err != nil {
+		http.Error(w, "failed to set archived WAL sequence: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// quiesceSigning waits for any in-flight async DNSSEC signing goroutines to
+// finish persisting before a restore replaces zone data, so a lingering
+// persist() cannot clobber the restored state.
+func quiesceSigning() {
+	if store := rtypes.GetMemStore(); store != nil {
+		store.WaitForSigning()
+	}
+}
+
+// restoreBody caps the restore upload at the configured max_restore_bytes to
+// bound memory (the whole backup/WAL is read into memory). 0 disables the cap.
+func restoreBody(w http.ResponseWriter, r *http.Request) io.Reader {
+	limit := config.AppConfig.GetLive().MaxRestoreBytes
+	if limit <= 0 {
+		return r.Body
+	}
+	return http.MaxBytesReader(w, r.Body, limit)
 }
 
 func RestoreBackupHandler(w http.ResponseWriter, r *http.Request) {
+	quiesceSigning()
 	files := map[string][]byte{}
-	tr := tar.NewReader(http.MaxBytesReader(w, r.Body, 1<<30))
+	tr := tar.NewReader(restoreBody(w, r))
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -175,7 +217,8 @@ func RestoreBackupHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func RestoreWALHandler(w http.ResponseWriter, r *http.Request) {
-	events, err := wal.DecodeExport(http.MaxBytesReader(w, r.Body, 1<<30))
+	quiesceSigning()
+	events, err := wal.DecodeExport(restoreBody(w, r))
 	if err != nil {
 		http.Error(w, "invalid WAL: "+err.Error(), http.StatusBadRequest)
 		return
@@ -186,6 +229,9 @@ func RestoreWALHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Drain signing spawned by the replayed events so persisted state is stable
+	// before we rebuild the in-memory store from storage.
+	quiesceSigning()
 	if err := reloadRuntimeState(); err != nil {
 		http.Error(w, "failed to reload runtime state: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -313,6 +359,19 @@ func applyWALEvent(event wal.Event) error {
 			security.DeleteTSIGKey(event.Key)
 			return nil
 		}
+	case wal.KindDNSSECKey:
+		switch event.Op {
+		case wal.OpUpsert:
+			if err := storage.Backend.SaveTable(event.Table, event.Key, event.Value); err != nil {
+				return err
+			}
+			return security.InitDNSSECKeyCache()
+		case wal.OpDelete:
+			if err := storage.Backend.DeleteFromTable(event.Table, event.Key); err != nil {
+				return err
+			}
+			return security.InitDNSSECKeyCache()
+		}
 	}
 	return nil
 }
@@ -324,5 +383,10 @@ func reloadRuntimeState() error {
 	}
 	rtypes.InitMemoryStore(store)
 	config.AppConfig.InitLiveConfig()
-	return security.LoadTSIGKeysFromStorage()
+	if err := security.LoadTSIGKeysFromStorage(); err != nil {
+		return err
+	}
+	// Reload the in-memory DNSSEC key cache so signing uses the restored keys
+	// without requiring a process restart.
+	return security.InitDNSSECKeyCache()
 }

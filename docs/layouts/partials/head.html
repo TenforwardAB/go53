@@ -1,0 +1,82 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>{{ if .IsHome }}{{ .Site.Title }} — Documentation{{ else }}{{ .Title }} · {{ .Site.Title }}{{ end }}</title>
+<meta name="description" content="{{ with .Description }}{{ . }}{{ else }}{{ .Site.Params.description }}{{ end }}" />
+
+<!-- Favicons / browser logo (served from docs/images/favicons via the images mount) -->
+<link rel="icon" href="/favicons/favicon.ico" sizes="any" />
+<link rel="icon" type="image/png" sizes="32x32" href="/favicons/favicon-32x32.png" />
+<link rel="icon" type="image/png" sizes="16x16" href="/favicons/favicon-16x16.png" />
+<link rel="apple-touch-icon" sizes="180x180" href="/favicons/apple-touch-icon.png" />
+<link rel="manifest" href="/favicons/site.webmanifest" />
+<meta name="theme-color" content="#2f7f94" />
+
+<style>
+  /* go53 documentation theme — same palette as the public landing page. */
+  :root {
+    --brand: #2f7f94;        /* teal */
+    --brand-dark: #26323a;   /* graphite */
+    --bg: #f5f7f8;
+    --sidebar: #26323a;
+    --sidebar-fg: #c8dde4;
+    --border: #d8e0e5;
+    --text: #172026;
+    --muted: #5c6972;
+    --code-bg: #e8eef2;
+    --max: 52rem;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font: 16px/1.6 Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    display: grid;
+    grid-template-columns: 17rem 1fr;
+    min-height: 100vh;
+  }
+  a { color: var(--brand); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  aside {
+    background: var(--sidebar);
+    color: var(--sidebar-fg);
+    padding: 1.25rem 1rem;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+  }
+  .brand { display: flex; align-items: center; gap: .6rem; margin-bottom: 1.5rem; }
+  .brand img { width: 2.4rem; height: auto; }
+  .brand .name { font-weight: 800; font-size: 1.25rem; color: #fff; letter-spacing: .02em; }
+  .brand .tag { display: block; font-size: .58rem; letter-spacing: .16em; text-transform: uppercase; color: #8fb3bf; }
+
+  nav .section { margin: 1.1rem 0 .35rem; font-size: .65rem; text-transform: uppercase; letter-spacing: .15em; color: #7fa0ac; }
+  nav a { display: block; color: var(--sidebar-fg); padding: .3rem .6rem; border-radius: .375rem; font-size: .9rem; }
+  nav a:hover { background: rgba(255,255,255,.07); text-decoration: none; }
+  nav a.active { background: var(--brand); color: #fff; font-weight: 600; }
+
+  main { min-width: 0; padding: 2.5rem clamp(1rem, 5vw, 4rem); }
+  .content { max-width: var(--max); }
+  .content img { max-width: 100%; height: auto; }
+  .content h1 { font-size: 2rem; margin-top: 0; color: var(--brand-dark); }
+  .content h2 { margin-top: 2.2rem; border-bottom: 1px solid var(--border); padding-bottom: .3rem; }
+  .content code { background: var(--code-bg); padding: .1em .35em; border-radius: .25rem; font-size: .88em; }
+  .content pre { background: var(--brand-dark); color: #e6edf3; padding: 1rem 1.2rem; border-radius: .6rem; overflow-x: auto; }
+  .content pre code { background: none; padding: 0; color: inherit; }
+  /* Mermaid diagrams render an SVG into the <pre>; keep it on a light, transparent
+     background so the diagram's dark text stays readable (the code-block dark
+     background above must not apply here). */
+  .content pre.mermaid { background: transparent; color: inherit; padding: .5rem 0; text-align: center; overflow-x: auto; }
+  .content table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .92rem; background: #fff; }
+  .content th, .content td { border: 1px solid var(--border); padding: .45rem .7rem; text-align: left; vertical-align: top; }
+  .content th { background: #e9eef2; }
+  .content blockquote { border-left: 3px solid var(--brand); margin: 1rem 0; padding: .3rem 1rem; background: #eef5f7; color: var(--muted); }
+
+  @media (max-width: 800px) {
+    body { grid-template-columns: 1fr; }
+    aside { position: static; height: auto; }
+  }
+</style>

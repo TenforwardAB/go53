@@ -46,6 +46,7 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 	r.HandleFunc("/api/backup", localAdminOnly(handlers.ExportBackupHandler)).Methods("GET")
 	r.HandleFunc("/api/backup/wal", localAdminOnly(handlers.ExportWALHandler)).Methods("GET")
 	r.HandleFunc("/api/backup/wal/status", localAdminOnly(handlers.GetWALStatusHandler)).Methods("GET")
+	r.HandleFunc("/api/backup/wal/ack", localAdminOnly(handlers.AckWALHandler)).Methods("POST")
 	r.HandleFunc("/api/restore", localAdminOnly(handlers.RestoreBackupHandler)).Methods("POST")
 	r.HandleFunc("/api/restore/wal", localAdminOnly(handlers.RestoreWALHandler)).Methods("POST")
 	r.HandleFunc("/.well-known/go53-node.json", handlers.GetWellKnownNodeHandler).Methods("GET")
@@ -105,7 +106,7 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 }
 
 func Start(cfg config.BaseConfig) error {
-	var handler http.Handler = AuthMiddleware(NewRouter(cfg))
+	var handler http.Handler = AuthMiddleware(RestoreGuard(NewRouter(cfg)))
 
 	addr := net.JoinHostPort(cfg.BindHost, strings.TrimPrefix(cfg.APIPort, ":"))
 	log.Printf("Starting API server on %s", addr)

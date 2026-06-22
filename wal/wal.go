@@ -21,11 +21,15 @@ const (
 	EventsTable = "wal-events"
 	MetaTable   = "wal-meta"
 	LastSeqKey  = "last_seq"
+	// ArchivedSeqKey records the highest WAL sequence an external archiver has
+	// confirmed durably stored. Retention never prunes events above it.
+	ArchivedSeqKey = "archived_seq"
 
 	KindZoneRecord = "zone_record"
 	KindZone       = "zone"
 	KindConfig     = "config"
 	KindTSIGKey    = "tsig_key"
+	KindDNSSECKey  = "dnssec_key"
 
 	OpUpsert = "upsert"
 	OpDelete = "delete"
@@ -185,12 +189,55 @@ func LastSeq() (uint64, error) {
 	return strconv.ParseUint(string(meta[LastSeqKey]), 10, 64)
 }
 
+// ArchivedSeq returns the highest WAL sequence an external archiver has
+// acknowledged as durably stored, or 0 when none has been recorded.
+func ArchivedSeq() (uint64, error) {
+	if storage.Backend == nil {
+		return 0, errors.New("storage backend is not initialized")
+	}
+	meta, err := storage.Backend.LoadTable(MetaTable)
+	if err != nil {
+		return 0, err
+	}
+	if len(meta[ArchivedSeqKey]) == 0 {
+		return 0, nil
+	}
+	return strconv.ParseUint(string(meta[ArchivedSeqKey]), 10, 64)
+}
+
+// SetArchivedSeq advances the archived watermark. It is monotonic: a sequence at
+// or below the current value is ignored, so a stale or duplicate ack can never
+// move the floor backward and expose un-archived events to pruning.
+func SetArchivedSeq(seq uint64) error {
+	if storage.Backend == nil {
+		return errors.New("storage backend is not initialized")
+	}
+	cur, err := ArchivedSeq()
+	if err != nil {
+		return err
+	}
+	if seq <= cur {
+		return nil
+	}
+	return storage.Backend.SaveTable(MetaTable, ArchivedSeqKey, []byte(strconv.FormatUint(seq, 10)))
+}
+
+// PruneOlderThan deletes internal WAL events older than the retention window.
+// It is export-status aware: once an external archiver has acknowledged a
+// sequence (archived_seq > 0), events above that watermark are kept regardless
+// of age, so a lagging archiver can never lose un-archived WAL. When no archiver
+// has acknowledged anything (archived_seq == 0), retention falls back to plain
+// time-based pruning so non-archiving deployments stay bounded.
 func PruneOlderThan(days int) error {
 	if days <= 0 {
 		return nil
 	}
 	if storage.Backend == nil {
 		return errors.New("storage backend is not initialized")
+	}
+	archived, err := ArchivedSeq()
+	if err != nil {
+		return err
 	}
 	raw, err := storage.Backend.LoadTable(EventsTable)
 	if err != nil {
@@ -202,10 +249,14 @@ func PruneOlderThan(days int) error {
 		if err != nil {
 			return fmt.Errorf("decode WAL event %s: %w", key, err)
 		}
-		if event.CreatedAt < cutoff {
-			if err := storage.Backend.DeleteFromTable(EventsTable, key); err != nil {
-				return err
-			}
+		if event.CreatedAt >= cutoff {
+			continue
+		}
+		if archived > 0 && event.Seq > archived {
+			continue
+		}
+		if err := storage.Backend.DeleteFromTable(EventsTable, key); err != nil {
+			return err
 		}
 	}
 	return nil

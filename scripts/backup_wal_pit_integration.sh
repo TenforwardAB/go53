@@ -79,10 +79,41 @@ snapshot_end_seq() {
 	tar -xOf "$BACKUP_FILE" manifest.json | sed -n 's/.*"snapshot_end_seq": \([0-9][0-9]*\).*/\1/p'
 }
 
+# dnssec_present succeeds when pit.test. has DNSSEC keys visible through the
+# (cache-backed) admin API. After a restore this only returns true if the DNSSEC
+# key cache was reloaded, so it doubles as a regression guard for that reload.
+dnssec_present() {
+	"$CTL_BIN" dnskeys list --socket "$ADMIN_SOCKET" 2>/dev/null | grep -q 'pit\.test'
+}
+
+require_dnssec_present() {
+	dnssec_present || fail "expected DNSSEC keys for pit.test. to be present"
+}
+
+require_dnssec_absent() {
+	if dnssec_present; then
+		fail "expected DNSSEC keys for pit.test. to be absent"
+	fi
+}
+
+# wal_status_field reads a numeric field from GET /api/backup/wal/status over the
+# admin socket (the JSON has no spaces, e.g. {"archived_seq":3,"last_seq":5}).
+wal_status_field() {
+	curl -s --unix-socket "$ADMIN_SOCKET" "http://localhost/api/backup/wal/status" \
+		| sed -n "s/.*\"$1\":\([0-9][0-9]*\).*/\1/p"
+}
+
+# seg_end_seq extracts the trailing (TO) sequence from a wal-follow segment file
+# named go53-wal-<FROM>-<TO>.g53wal, stripping the zero padding.
+seg_end_seq() {
+	basename "$1" | sed -n 's/^go53-wal-[0-9][0-9]*-0*\([0-9][0-9]*\)\.g53wal$/\1/p'
+}
+
 main() {
 	need_cmd go
 	need_cmd tar
 	need_cmd sed
+	need_cmd curl
 
 	mkdir -p "$BIN_DIR" "$BADGER_DIR"
 	echo "building local go53 server and go53ctl"
@@ -110,6 +141,7 @@ main() {
 	ctl records add pit.test. NS '{"name":"@","ttl":300,"ns":"ns1.pit.test."}' >/dev/null
 	ctl records add pit.test. A '{"name":"www","ttl":300,"ip":"192.0.2.10"}' >/dev/null
 	require_present "www.pit.test."
+	require_dnssec_absent
 
 	ctl backup create --out "$BACKUP_FILE"
 	[[ -s "$BACKUP_FILE" ]] || fail "backup file was not created"
@@ -117,11 +149,33 @@ main() {
 	base_seq="$(snapshot_end_seq)"
 	[[ "$base_seq" =~ ^[0-9]+$ ]] || fail "could not read snapshot_end_seq from backup manifest"
 
+	# No archiver has run yet, so the archived watermark must still be zero.
+	local archived_before
+	archived_before="$(wal_status_field archived_seq)"
+	[[ "${archived_before:-0}" == "0" ]] || fail "archived_seq should be 0 before any archive, got '$archived_before'"
+
+	# DNSSEC key creation happens AFTER the base backup, so the keys live only in
+	# the WAL — proving point-in-time replay restores DNSSEC key state, not just
+	# records.
+	ctl dnskeys create pit.test. >/dev/null
+	require_dnssec_present
+
 	ctl records add pit.test. A '{"name":"api","ttl":300,"ip":"192.0.2.20"}' >/dev/null
 	require_present "api.pit.test."
 	ctl backup wal-follow --dir "$WAL_ARCHIVE_DIR" --after "$base_seq" --once
 	PIT_WAL_FILE="$(find "$WAL_ARCHIVE_DIR" -type f -name 'go53-wal-*.g53wal' | sort | tail -1)"
 	[[ -s "$PIT_WAL_FILE" ]] || fail "PIT WAL file was not created"
+
+	# wal-follow acknowledges the durably-archived sequence; the server's archived
+	# watermark must advance to the segment's end sequence so retention will not
+	# prune un-archived WAL.
+	local seg_end archived_after
+	seg_end="$(seg_end_seq "$PIT_WAL_FILE")"
+	archived_after="$(wal_status_field archived_seq)"
+	[[ "$seg_end" =~ ^[0-9]+$ ]] || fail "could not parse segment end sequence from $PIT_WAL_FILE"
+	[[ "$archived_after" =~ ^[0-9]+$ ]] || fail "could not read archived_seq after archive"
+	((archived_after > base_seq)) || fail "archived_seq ($archived_after) did not advance past base_seq ($base_seq)"
+	[[ "$archived_after" == "$seg_end" ]] || fail "archived_seq ($archived_after) != archived segment end ($seg_end)"
 
 	ctl records add pit.test. A '{"name":"late","ttl":300,"ip":"192.0.2.30"}' >/dev/null
 	require_present "late.pit.test."
@@ -130,13 +184,19 @@ main() {
 	require_present "www.pit.test."
 	require_absent "api.pit.test."
 	require_absent "late.pit.test."
+	# Base backup predates the DNSSEC keys; a correct restore reloads the key
+	# cache, so the keys must now read as absent (a stale cache would still show
+	# them).
+	require_dnssec_absent
 
 	ctl restore wal "$PIT_WAL_FILE"
 	require_present "www.pit.test."
 	require_present "api.pit.test."
 	require_absent "late.pit.test."
+	# DNSSEC key events replayed from the WAL and the cache was reloaded.
+	require_dnssec_present
 
-	echo "backup/WAL PIT integration passed"
+	echo "backup/WAL PIT integration passed (records + DNSSEC keys + archive watermark)"
 }
 
 main "$@"

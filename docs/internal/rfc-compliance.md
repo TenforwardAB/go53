@@ -1,3 +1,10 @@
+---
+title: "RFC Compliance"
+linkTitle: "RFC Compliance"
+weight: 30
+description: "Authoritative DNS RFC compliance matrix."
+---
+
 # go53 Authoritative DNS RFC Compliance Matrix
 
 Scope: authoritative DNS service only. Recursive resolver behavior, DoH/DoT,

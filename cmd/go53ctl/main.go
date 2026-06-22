@@ -895,7 +895,31 @@ func archiveWALOnce(socketPath, dir, statePath string, after uint64) (uint64, er
 	if err := os.WriteFile(statePath, []byte(strconv.FormatUint(lastSeq, 10)+"\n"), 0600); err != nil {
 		return after, err
 	}
+	// Acknowledge the durably-archived sequence so server-side retention will
+	// not prune WAL we have not yet archived.
+	if err := ackAdminWAL(socketPath, lastSeq); err != nil {
+		return after, err
+	}
 	return lastSeq, nil
+}
+
+func ackAdminWAL(socketPath string, seq uint64) error {
+	client := socketClient(socketPath)
+	url := "http://go53-admin-socket/api/backup/wal/ack?seq=" + strconv.FormatUint(seq, 10)
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(data)))
+	}
+	return nil
 }
 
 func getAdminWALLastSeq(socketPath string) (uint64, error) {

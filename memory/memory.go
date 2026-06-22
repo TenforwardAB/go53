@@ -26,6 +26,27 @@ type InMemoryZoneStore struct {
 	cache   map[string]map[string]map[string]map[string]any // "zones" -> zone -> type -> name -> record
 	storage storage.Storage
 	mu      sync.RWMutex
+	// signWG tracks in-flight async DNSSEC signing/denial goroutines so callers
+	// (notably restore) can wait for them to finish persisting before they
+	// replace zone data underneath them.
+	signWG sync.WaitGroup
+}
+
+// spawnSign runs an async signing task while tracking it in signWG so
+// WaitForSigning can drain outstanding work.
+func (z *InMemoryZoneStore) spawnSign(fn func()) {
+	z.signWG.Add(1)
+	go func() {
+		defer z.signWG.Done()
+		fn()
+	}()
+}
+
+// WaitForSigning blocks until all async signing goroutines spawned so far have
+// finished. It quiesces the store before a restore replaces zone data so a
+// lingering persist() cannot clobber the restored state.
+func (z *InMemoryZoneStore) WaitForSigning() {
+	z.signWG.Wait()
 }
 
 func NewZoneStore(s storage.Storage) (*InMemoryZoneStore, error) {
@@ -129,10 +150,10 @@ func (z *InMemoryZoneStore) AddRecord(zone, rtype, name string, record any) erro
 		return z.persist(zone)
 	}
 
-	go z.maybeSignRRSet(zone, rtype, name)
+	z.spawnSign(func() { z.maybeSignRRSet(zone, rtype, name) })
 	if shouldMaintainNSEC(rtype) {
-		go z.signNSECChain(zone)
-		go z.signNSEC3Chain(zone)
+		z.spawnSign(func() { z.signNSECChain(zone) })
+		z.spawnSign(func() { z.signNSEC3Chain(zone) })
 	}
 
 	return nil
@@ -163,10 +184,10 @@ func (z *InMemoryZoneStore) PutRecordRaw(zone, rtype, name string, record any) e
 		return err
 	}
 	if dnssecPrimary && rtype != string(types.TypeRRSIG) {
-		go z.maybeSignRRSet(zone, rtype, name)
+		z.spawnSign(func() { z.maybeSignRRSet(zone, rtype, name) })
 		if shouldMaintainNSEC(rtype) {
-			go z.signNSECChain(zone)
-			go z.signNSEC3Chain(zone)
+			z.spawnSign(func() { z.signNSECChain(zone) })
+			z.spawnSign(func() { z.signNSEC3Chain(zone) })
 		}
 	}
 	return nil
@@ -190,8 +211,8 @@ func (z *InMemoryZoneStore) DeleteRecordRaw(zone, rtype, name string) error {
 			return err
 		}
 		if dnssecPrimary && shouldMaintainNSEC(rtype) {
-			go z.signNSECChain(zone)
-			go z.signNSEC3Chain(zone)
+			z.spawnSign(func() { z.signNSECChain(zone) })
+			z.spawnSign(func() { z.signNSEC3Chain(zone) })
 		}
 		return nil
 	}
@@ -578,8 +599,8 @@ func (z *InMemoryZoneStore) DeleteRecord(zone, rtype, name string) error {
 			return err
 		}
 		if dnssecPrimary && shouldMaintainNSEC(rtype) {
-			go z.signNSECChain(zone)
-			go z.signNSEC3Chain(zone)
+			z.spawnSign(func() { z.signNSECChain(zone) })
+			z.spawnSign(func() { z.signNSEC3Chain(zone) })
 		}
 		return nil
 	}
@@ -740,9 +761,9 @@ func (z *InMemoryZoneStore) RefreshDNSSECKeyMaterial(zone string) error {
 	// too, not just the denial chain. Otherwise a key change/rollover (or a
 	// replicated DNSSEC key event in distributed mode) would leave SOA, NS,
 	// MX, TXT, ... unsigned until a manual re-import.
-	go z.signAllDataRRSets(zone)
-	go z.signNSECChain(zone)
-	go z.signNSEC3Chain(zone)
+	z.spawnSign(func() { z.signAllDataRRSets(zone) })
+	z.spawnSign(func() { z.signNSECChain(zone) })
+	z.spawnSign(func() { z.signNSEC3Chain(zone) })
 	return nil
 }
 

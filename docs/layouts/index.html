@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>go53 - API-Driven Authoritative DNS</title>
   <meta name="description" content="go53 authoritative DNS server: implemented protocol support, DNSSEC, distributed mode, and roadmap.">
-  <link rel="icon" type="image/png" sizes="32x32" href="images/favicons/favicon-32x32.png">
-  <link rel="icon" type="image/png" sizes="16x16" href="images/favicons/favicon-16x16.png">
-  <link rel="apple-touch-icon" sizes="180x180" href="images/favicons/apple-touch-icon.png">
-  <link rel="manifest" href="images/favicons/site.webmanifest">
-  <link rel="shortcut icon" href="images/favicons/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicons/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicons/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/favicons/apple-touch-icon.png">
+  <link rel="manifest" href="/favicons/site.webmanifest">
+  <link rel="shortcut icon" href="/favicons/favicon.ico">
   <meta name="msapplication-TileColor" content="#2f7f94">
   <meta name="theme-color" content="#2f7f94">
   <style>
@@ -324,17 +324,18 @@
 </head>
 <body>
   <header class="hero">
-    <img class="hero-bg" src="images/go53-hero-distributed.png" alt="Secure authoritative DNS nodes connected across a distributed infrastructure">
+    <img class="hero-bg" src="/go53-hero-distributed.png" alt="Secure authoritative DNS nodes connected across a distributed infrastructure">
     <div class="hero-content">
       <div class="brand-row">
-        <img src="images/go53_trans.png" alt="go53 logo">
+        <img src="/go53_trans.png" alt="go53 logo">
         <span>Authoritative DNS for API-managed infrastructure</span>
       </div>
       <h1>go53 authoritative DNS</h1>
       <p class="lead">A Go-based authoritative DNS server with in-memory serving, API-managed zones, DNSSEC, transfer support, and signed distributed replication between nodes.</p>
       <div class="actions">
-        <a class="button primary" href="admin_guide/">Administrator Guide</a>
-        <a class="button" href="config/">Config Reference</a>
+        <a class="button primary" href="/guides/">Documentation</a>
+        <a class="button" href="/reference/configuration/">Config Reference</a>
+        <a class="button" href="https://github.com/TenforwardAB/go53">GitHub</a>
       </div>
     </div>
   </header>
@@ -457,6 +458,16 @@
           <p>Zone and DNSSEC key material are loaded for read-heavy serving, while Badger persists changes.</p>
           <div class="rfc-list"><span class="rfc">BadgerDB</span><span class="rfc">Operational</span></div>
         </article>
+        <article class="feature">
+          <header><h3><del>Per-client rate limiting</del></h3><span class="status done">done</span></header>
+          <p>Optional per-source-IP token-bucket QPS limiting on the UDP query path, with silent drops and bounded memory to blunt query floods. TCP and zone transfers are exempt.</p>
+          <div class="rfc-list"><span class="rfc">Abuse protection</span><span class="rfc">Operational</span></div>
+        </article>
+        <article class="feature">
+          <header><h3><del>Health and readiness probes</del></h3><span class="status done">done</span></header>
+          <p>Unauthenticated <code>/healthz</code> and <code>/readyz</code> HTTP endpoints for liveness and readiness checks behind load balancers and orchestrators.</p>
+          <div class="rfc-list"><span class="rfc">Operational</span><span class="rfc">Kubernetes</span></div>
+        </article>
       </div>
     </section>
 
@@ -466,7 +477,7 @@
         <p class="section-lead">The current beta focus is validation quality: interop testing with common validating resolvers, transfer edge cases, and operational hardening around distributed cluster membership.</p>
         <p>The DNSSEC implementation is built around RFC 4033/4034/4035 behavior, with NSEC3 coverage from RFC 5155 and parent signaling through CDS/CDNSKEY endpoints.</p>
       </div>
-      <img src="images/go53-dnssec-replication.png" alt="Technical illustration of DNSSEC signatures and replicated authoritative DNS nodes">
+      <img src="/go53-dnssec-replication.png" alt="Technical illustration of DNSSEC signatures and replicated authoritative DNS nodes">
     </section>
 
     <section aria-labelledby="roadmap-title">
@@ -488,7 +499,7 @@
         </article>
         <article class="roadmap">
           <header><h3>Metrics and structured observability</h3><span class="status next">planned</span></header>
-          <p>Prometheus metrics, structured query/error logging, and operational health endpoints.</p>
+          <p>Prometheus metrics and structured query/error logging. Operational health and readiness endpoints are already in place.</p>
         </article>
         <article class="roadmap">
           <header><h3>Import/export tooling</h3><span class="status next">planned</span></header>
@@ -502,20 +513,20 @@
       <p class="section-lead">Operational setup and parameter-level reference are split so admins can either follow workflows or inspect exact config behavior.</p>
       <div class="doc-grid">
         <div class="doc-link">
-          <a href="admin_guide/">Administrator Guide</a>
+          <a href="/guides/">Guides</a>
           <p>Primary/secondary/distributed setup, API examples, DNSSEC, TSIG, transfers, and go53ctl workflows.</p>
         </div>
         <div class="doc-link">
-          <a href="config/">Config Reference</a>
+          <a href="/reference/configuration/">Config Reference</a>
           <p>Every environment and live config parameter with type, default, and implementation effect.</p>
         </div>
         <div class="doc-link">
-          <a href="distributed/">Distributed Mode Technical Guide</a>
-          <p>Deep dive into multi-node replication: encryption, signed events, vector clocks, Merkle repair, and protocol details.</p>
+          <a href="/concepts/">Concepts</a>
+          <p>Deep dives into DNSSEC behavior and multi-node replication: encryption, signed events, vector clocks, and Merkle repair.</p>
         </div>
         <div class="doc-link">
-          <a href="internal/storage.md">Storage Notes</a>
-          <p>Internal notes for persistence behavior and storage layout.</p>
+          <a href="/internal/">Engine Internals</a>
+          <p>Notes on persistence behavior, storage layout, the zone model, and RFC compliance.</p>
         </div>
       </div>
     </section>
