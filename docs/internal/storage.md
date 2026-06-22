@@ -1,3 +1,10 @@
+---
+title: "Storage"
+linkTitle: "Storage"
+weight: 10
+description: "Persistence behavior and storage layout notes."
+---
+
 Inga har markerats
 
 Fortsätt till innehåll

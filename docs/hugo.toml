@@ -1,0 +1,61 @@
+# Hugo site config for the go53 documentation.
+#
+# Self-contained, theme-less: the layouts in ./layouts render the docs with go53
+# branding (logo + favicons + teal color scheme) and a sidebar built from the
+# content tree. Run `hugo server` from this directory.
+#
+# The Markdown stays at the docs/ root (so the files browse cleanly on GitHub);
+# module mounts expose it to Hugo as content/, and images/ + api/ as static
+# assets. The public landing page (go53.eu) is rendered by layouts/index.html,
+# a standalone bespoke page; documentation pages use the sidebar layout.
+baseURL = "https://go53.eu/"
+defaultContentLanguage = "en"
+title = "go53"
+enableEmoji = true
+# README.md is for GitHub browsing, not a site page; taxonomies are unused.
+disableKinds = ["taxonomy", "term", "rss"]
+ignoreFiles = ["README\\.md$"]
+
+[params]
+  description = "go53 authoritative DNS server: API-managed zones, DNSSEC, transfers, and signed distributed replication."
+  logo = "/go53_trans.png"
+  tagline = "Authoritative DNS for API-managed infrastructure"
+  repo = "https://github.com/TenforwardAB/go53"
+  site = "https://go53.eu"
+
+[markup]
+  [markup.goldmark.renderer]
+    unsafe = true               # allow raw HTML used on a few pages
+  [markup.tableOfContents]
+    startLevel = 2
+    endLevel = 3
+
+# Keep .md at the docs root but present it to Hugo as content/. images/ is served
+# at the site root (so /favicons/... and /go53_trans.png resolve); api/ is served
+# under /api.
+[module]
+  [[module.mounts]]
+    source = "."
+    target = "content"
+    includeFiles = "/*.md"   # only the root .md files (README dropped via ignoreFiles)
+  [[module.mounts]]
+    source = "guides"
+    target = "content/guides"
+  [[module.mounts]]
+    source = "concepts"
+    target = "content/concepts"
+  [[module.mounts]]
+    source = "reference"
+    target = "content/reference"
+  [[module.mounts]]
+    source = "internal"
+    target = "content/internal"
+  [[module.mounts]]
+    source = "layouts"
+    target = "layouts"
+  [[module.mounts]]
+    source = "images"
+    target = "static"
+  [[module.mounts]]
+    source = "api"
+    target = "static/api"

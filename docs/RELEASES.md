@@ -1,3 +1,10 @@
+---
+title: "Releases"
+linkTitle: "Releases"
+weight: 14
+description: "go53 release process and notes."
+---
+
 # Release Process for go53
 
 ## Automated Releases with GitHub Actions

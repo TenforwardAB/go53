@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>go53 - API-Driven Authoritative DNS</title>
+  <meta name="description" content="go53 authoritative DNS server: implemented protocol support, DNSSEC, distributed mode, and roadmap.">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicons/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicons/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/favicons/apple-touch-icon.png">
+  <link rel="manifest" href="/favicons/site.webmanifest">
+  <link rel="shortcut icon" href="/favicons/favicon.ico">
+  <meta name="msapplication-TileColor" content="#2f7f94">
+  <meta name="theme-color" content="#2f7f94">
+  <style>
+    :root {
+      --ink: #172026;
+      --muted: #5c6972;
+      --bg: #f5f7f8;
+      --surface: #ffffff;
+      --line: #d8e0e5;
+      --teal: #2f7f94;
+      --green: #287d5a;
+      --amber: #b7791f;
+      --graphite: #26323a;
+      --hero-text: #f7fbfc;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.55;
+    }
+
+    a {
+      color: var(--teal);
+      text-underline-offset: 0.18em;
+    }
+
+    .hero {
+      position: relative;
+      min-height: 74vh;
+      display: grid;
+      align-items: end;
+      overflow: hidden;
+      color: var(--hero-text);
+      background: var(--graphite);
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, rgba(13, 23, 29, 0.9) 0%, rgba(13, 23, 29, 0.7) 42%, rgba(13, 23, 29, 0.2) 100%);
+    }
+
+    .hero img.hero-bg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .hero-content {
+      position: relative;
+      z-index: 1;
+      width: min(1160px, 100%);
+      margin: 0 auto;
+      padding: 32px clamp(20px, 5vw, 72px) 46px;
+    }
+
+    .brand-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 28px;
+    }
+
+    .brand-row img {
+      width: 58px;
+      height: auto;
+    }
+
+    .brand-row span {
+      font-size: 0.9rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #c8dde4;
+    }
+
+    h1 {
+      max-width: 860px;
+      margin: 0 0 18px;
+      font-size: clamp(2.4rem, 6vw, 5.8rem);
+      line-height: 0.98;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      max-width: 780px;
+      margin: 0 0 24px;
+      font-size: clamp(1rem, 2vw, 1.25rem);
+      color: #dcebef;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 22px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      min-height: 42px;
+      padding: 10px 14px;
+      border: 1px solid rgba(255, 255, 255, 0.32);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.12);
+      color: #ffffff;
+      text-decoration: none;
+      font-weight: 700;
+    }
+
+    .button.primary {
+      background: #e8f6f3;
+      color: #12343b;
+      border-color: #e8f6f3;
+    }
+
+    main {
+      width: min(1160px, 100%);
+      margin: 0 auto;
+      padding: 34px clamp(20px, 5vw, 72px) 80px;
+    }
+
+    section {
+      margin: 0 0 54px;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: clamp(1.7rem, 4vw, 2.4rem);
+      line-height: 1.12;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 1.05rem;
+      letter-spacing: 0;
+    }
+
+    p {
+      max-width: 82ch;
+      margin: 0 0 16px;
+    }
+
+    .section-lead {
+      color: var(--muted);
+      font-size: 1.04rem;
+    }
+
+    .summary-grid,
+    .feature-grid,
+    .roadmap-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 14px;
+      margin-top: 20px;
+    }
+
+    .metric,
+    .feature,
+    .roadmap,
+    .doc-link {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 16px;
+    }
+
+    .metric strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--teal);
+      font-size: 1.6rem;
+      line-height: 1;
+    }
+
+    .metric span,
+    .feature p,
+    .roadmap p,
+    .doc-link p {
+      color: var(--muted);
+      font-size: 0.94rem;
+    }
+
+    .feature header,
+    .roadmap header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .feature del {
+      color: var(--ink);
+      text-decoration-thickness: 0.12em;
+      text-decoration-color: var(--green);
+    }
+
+    .rfc-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 12px;
+    }
+
+    .rfc {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 3px 8px;
+      border: 1px solid #bed2d9;
+      border-radius: 999px;
+      background: #eef7f8;
+      color: #255d6c;
+      font-size: 0.78rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .status {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 0.76rem;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .status.done {
+      background: #e6f4ee;
+      color: var(--green);
+    }
+
+    .status.next {
+      background: #fff4dc;
+      color: var(--amber);
+    }
+
+    .visual-band {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 440px);
+      gap: 24px;
+      align-items: center;
+      padding: 24px;
+      border: 1px solid var(--line);
+      background: #ecf2f4;
+    }
+
+    .visual-band img {
+      width: 100%;
+      border-radius: 8px;
+      display: block;
+    }
+
+    .doc-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .doc-link a {
+      font-weight: 800;
+      font-size: 1.04rem;
+    }
+
+    footer {
+      border-top: 1px solid var(--line);
+      padding: 28px clamp(20px, 5vw, 72px);
+      color: var(--muted);
+      text-align: center;
+      background: #edf1f3;
+    }
+
+    @media (max-width: 780px) {
+      .hero {
+        min-height: 68vh;
+      }
+
+      .hero::after {
+        background: rgba(13, 23, 29, 0.74);
+      }
+
+      .brand-row {
+        margin-bottom: 20px;
+      }
+
+      .visual-band {
+        grid-template-columns: 1fr;
+        padding: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <img class="hero-bg" src="/go53-hero-distributed.png" alt="Secure authoritative DNS nodes connected across a distributed infrastructure">
+    <div class="hero-content">
+      <div class="brand-row">
+        <img src="/go53_trans.png" alt="go53 logo">
+        <span>Authoritative DNS for API-managed infrastructure</span>
+      </div>
+      <h1>go53 authoritative DNS</h1>
+      <p class="lead">A Go-based authoritative DNS server with in-memory serving, API-managed zones, DNSSEC, transfer support, and signed distributed replication between nodes.</p>
+      <div class="actions">
+        <a class="button primary" href="/guides/">Documentation</a>
+        <a class="button" href="/reference/configuration/">Config Reference</a>
+        <a class="button" href="https://github.com/TenforwardAB/go53">GitHub</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section aria-labelledby="snapshot-title">
+      <h2 id="snapshot-title">Project Snapshot</h2>
+      <p class="section-lead">go53 focuses on authoritative DNS only. The server keeps zone data in memory for read performance and persists changes through Badger-backed storage.</p>
+      <div class="summary-grid">
+        <div class="metric">
+          <strong>Authoritative</strong>
+          <span>UDP/TCP DNS serving with zone data managed through HTTP API routes.</span>
+        </div>
+        <div class="metric">
+          <strong>DNSSEC</strong>
+          <span>Query-time signing, cached RRSIGs, NSEC/NSEC3 denial, and key lifecycle metadata.</span>
+        </div>
+        <div class="metric">
+          <strong>Distributed</strong>
+          <span>Persistent TLS socket replication with signed events, vector clocks, and Merkle repair.</span>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="webadmin-demo-title">
+      <h2 id="webadmin-demo-title">Try go53 with webadmin</h2>
+      <p class="section-lead">Use the browser-based <a href="https://github.com/TenforwardAB/go53-webadmin">go53-webadmin</a> UI to evaluate go53 without writing API calls by hand.</p>
+      <div class="doc-grid">
+        <div class="doc-link">
+          <a href="https://demo.go53.eu">Open the public demo</a>
+          <p>The demo runs go53 with a resettable <code>go53.demo.</code> DNSSEC zone, distributed mode enabled, and representative A, AAAA, NS, MX, SRV, TXT, and CNAME records.</p>
+        </div>
+        <div class="doc-link">
+          <a href="https://github.com/TenforwardAB/go53-webadmin">go53-webadmin repository</a>
+          <p>SvelteKit-based administration UI for zones, records, DNSSEC keys, TSIG/transfers, distributed state, users, roles, and audit history.</p>
+        </div>
+        <div class="doc-link">
+          <a href="https://demo.go53.eu/login">Demo login</a>
+          <p>Username: <code>go53_admin</code><br>Password: <code>go53_admin</code></p>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="implemented-title">
+      <h2 id="implemented-title">Implemented</h2>
+      <p class="section-lead">Completed items are shown as struck-through roadmap entries with the RFCs or protocol references they target.</p>
+      <div class="feature-grid">
+        <article class="feature">
+          <header><h3><del>Authoritative DNS over UDP and TCP</del></h3><span class="status done">done</span></header>
+          <p>Authoritative query handling, TCP fallback paths, CHAOS version response, and no recursive service scope.</p>
+          <div class="rfc-list"><span class="rfc">RFC 1034</span><span class="rfc">RFC 1035</span><span class="rfc">RFC 7766</span></div>
+        </article>
+        <article class="feature">
+          <header><h3><del>EDNS-aware responses</del></h3><span class="status done">done</span></header>
+          <p>Configurable EDNS enablement and UDP payload sizing for modern resolver interoperability.</p>
+          <div class="rfc-list"><span class="rfc">RFC 6891</span></div>
+        </article>
+        <article class="feature">
+          <header><h3><del>NSID support</del></h3><span class="status done">done</span></header>
+          <p>EDNS NSID response support for node identification and anycast-style operations.</p>
+          <div class="rfc-list"><span class="rfc">RFC 5001</span></div>
+        </article>
+        <article class="feature">
+          <header><h3><del>ANY-query policy</del></h3><span class="status done">done</span></header>
+          <p>Controlled ANY response behavior reduces amplification exposure while preserving useful diagnostics.</p>
+          <div class="rfc-list"><span class="rfc">RFC 8482</span></div>
+        </article>
+        <article class="feature">
+          <header><h3><del>API-managed zones and RRsets</del></h3><span class="status done">done</span></header>
+          <p>HTTP API routes for zone record creation, lookup, deletion, TSIG keys, DNSSEC keys, and runtime config.</p>
+          <div class="rfc-list"><span class="rfc">RFC 1035</span><span class="rfc">JSON API</span></div>
+        </article>
+        <article class="feature">
+          <header><h3><del>AXFR, IXFR, and NOTIFY paths</del></h3><span class="status done">done</span></header>
+          <p>Zone transfer handling, SOA serial behavior, transfer ACLs, DNSSEC material in AXFR, and NOTIFY scheduling.</p>
+          <div class="rfc-list"><span class="rfc">RFC 1995</span><span class="rfc">RFC 1996</span><span class="rfc">RFC 5936</span></div>
+        </article>
+        <article class="feature">
+          <header><h3><del>Catalog zones</del></h3><span class="status done">done</span></header>
+          <p>RFC 9432 catalog-zone workflow for secondary provisioning and fleet-scale zone membership.</p>
+          <div class="rfc-list"><span class="rfc">RFC 9432</span></div>
+        </article>
+        <article class="feature">
+          <header><h3><del>TSIG validation and key API</del></h3><span class="status done">done</span></header>
+          <p>TSIG key storage, API management, transfer enforcement option, and distributed TSIG key replication.</p>
+          <div class="rfc-list"><span class="rfc">RFC 2845</span><span class="rfc">RFC 4635</span></div>
+        </article>
+        <article class="feature">
+          <header><h3><del>DNSSEC signing and denial</del></h3><span class="status done">done</span></header>
+          <p>DNSKEY/RRSIG support, query-time signing cache, NSEC/NSEC3 chains, wildcard denial, and no-data proofs.</p>
+          <div class="rfc-list"><span class="rfc">RFC 4033</span><span class="rfc">RFC 4034</span><span class="rfc">RFC 4035</span><span class="rfc">RFC 5155</span></div>
+        </article>
+        <article class="feature">
+          <header><h3><del>DNSSEC key lifecycle and parent signaling</del></h3><span class="status done">done</span></header>
+          <p>KSK/ZSK metadata, rollover helpers, revoke/retire timing, DS, CDS, and CDNSKEY endpoints.</p>
+          <div class="rfc-list"><span class="rfc">RFC 5011</span><span class="rfc">RFC 7344</span><span class="rfc">RFC 8078</span></div>
+        </article>
+        <article class="feature">
+          <header><h3><del>CNAME and DNAME DNSSEC chains</del></h3><span class="status done">done</span></header>
+          <p>Signed answer-chain handling and denial coverage around target and no-data cases.</p>
+          <div class="rfc-list"><span class="rfc">RFC 6672</span><span class="rfc">RFC 4035</span></div>
+        </article>
+        <article class="feature">
+          <header><h3><del>Canonical DNSSEC ordering</del></h3><span class="status done">done</span></header>
+          <p>Canonical owner-name comparison for escaped labels, case folding, IDNA, root, and wildcard names.</p>
+          <div class="rfc-list"><span class="rfc">RFC 4034</span></div>
+        </article>
+        <article class="feature">
+          <header><h3><del>Distributed mode</del></h3><span class="status done">done</span></header>
+          <p>Signed event replication over persistent TCP/TLS, vector clocks, Merkle repair, and config/key/zone event coverage.</p>
+          <div class="rfc-list"><span class="rfc">TLS 1.3</span><span class="rfc">Ed25519</span><span class="rfc">Internal protocol</span></div>
+        </article>
+        <article class="feature">
+          <header><h3><del>go53ctl cluster onboarding</del></h3><span class="status done">done</span></header>
+          <p>JWT invite creation, one-time invite consume, self-registering joins, and generated distributed node keys.</p>
+          <div class="rfc-list"><span class="rfc">RFC 7519</span><span class="rfc">EdDSA</span></div>
+        </article>
+        <article class="feature">
+          <header><h3><del>In-memory read path with persistent mutations</del></h3><span class="status done">done</span></header>
+          <p>Zone and DNSSEC key material are loaded for read-heavy serving, while Badger persists changes.</p>
+          <div class="rfc-list"><span class="rfc">BadgerDB</span><span class="rfc">Operational</span></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="visual-band" aria-labelledby="dnssec-title">
+      <div>
+        <h2 id="dnssec-title">DNSSEC and Replication</h2>
+        <p class="section-lead">The current beta focus is validation quality: interop testing with common validating resolvers, transfer edge cases, and operational hardening around distributed cluster membership.</p>
+        <p>The DNSSEC implementation is built around RFC 4033/4034/4035 behavior, with NSEC3 coverage from RFC 5155 and parent signaling through CDS/CDNSKEY endpoints.</p>
+      </div>
+      <img src="/go53-dnssec-replication.png" alt="Technical illustration of DNSSEC signatures and replicated authoritative DNS nodes">
+    </section>
+
+    <section aria-labelledby="roadmap-title">
+      <h2 id="roadmap-title">Future Work</h2>
+      <p class="section-lead">These items remain planned or intentionally deferred until the beta test surface is stable.</p>
+      <div class="roadmap-grid">
+        <article class="roadmap">
+          <header><h3>API authentication and authorization</h3><span class="status next">next</span></header>
+          <p>Define production auth for all API routes, including operator roles, token lifecycle, and secure automation.</p>
+        </article>
+        <article class="roadmap">
+          <header><h3>Resolver interoperability matrix</h3><span class="status next">next</span></header>
+          <p>Automated validation against BIND, Knot, Unbound, PowerDNS Recursor, and common secondary setups.</p>
+        </article>
+        <article class="roadmap">
+          <header><h3>DoT listener</h3><span class="status next">planned</span></header>
+          <p>Native DNS-over-TLS listener for authoritative service once the core DNS and auth surfaces settle.</p>
+          <div class="rfc-list"><span class="rfc">RFC 7858</span></div>
+        </article>
+        <article class="roadmap">
+          <header><h3>Metrics and structured observability</h3><span class="status next">planned</span></header>
+          <p>Prometheus metrics, structured query/error logging, and operational health endpoints.</p>
+        </article>
+        <article class="roadmap">
+          <header><h3>Import/export tooling</h3><span class="status next">planned</span></header>
+          <p>Zone-file import/export and safer administrative workflows around bulk changes.</p>
+        </article>
+      </div>
+    </section>
+
+    <section aria-labelledby="docs-title">
+      <h2 id="docs-title">Documentation</h2>
+      <p class="section-lead">Operational setup and parameter-level reference are split so admins can either follow workflows or inspect exact config behavior.</p>
+      <div class="doc-grid">
+        <div class="doc-link">
+          <a href="/guides/">Guides</a>
+          <p>Primary/secondary/distributed setup, API examples, DNSSEC, TSIG, transfers, and go53ctl workflows.</p>
+        </div>
+        <div class="doc-link">
+          <a href="/reference/configuration/">Config Reference</a>
+          <p>Every environment and live config parameter with type, default, and implementation effect.</p>
+        </div>
+        <div class="doc-link">
+          <a href="/concepts/">Concepts</a>
+          <p>Deep dives into DNSSEC behavior and multi-node replication: encryption, signed events, vector clocks, and Merkle repair.</p>
+        </div>
+        <div class="doc-link">
+          <a href="/internal/">Engine Internals</a>
+          <p>Notes on persistence behavior, storage layout, the zone model, and RFC compliance.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Copyright 2025 go53 Project - Fast, secure, API-driven authoritative DNS</p>
+    <p><a href="https://go53.eu">https://go53.eu</a></p>
+  </footer>
+</body>
+</html>
