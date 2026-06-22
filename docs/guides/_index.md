@@ -11,5 +11,10 @@ Task-oriented walkthroughs for running and operating go53 — installation,
 primary/secondary/distributed setup, DNSSEC operations, TSIG and zone transfers,
 and `go53ctl` workflows.
 
-> These pages are being migrated from the previous HTML administrator guide. The
-> [Config Reference](/reference/configuration/) is already available.
+- **[Administrator Guide](/guides/administrator-guide/)** — the full operational
+  guide: installation, quick start, deployment and runtime config, zones and
+  records, DNSSEC, transfers, distributed mode, `go53ctl`, TSIG, API routes, and
+  operations.
+
+See also the [Configuration Reference](/reference/configuration/) for the exact
+parameter-level details.
