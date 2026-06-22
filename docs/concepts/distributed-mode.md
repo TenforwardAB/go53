@@ -77,13 +77,6 @@ graph TB
   API1 -->|HTTP<br/>:8053| NodeA
   API1 -->|HTTP<br/>:8053| NodeB
   API1 -->|HTTP<br/>:8053| NodeC
-
-  style Cluster fill:#e8f3ef
-  style DNS1 fill:#fff4dc
-  style API1 fill:#fff4dc
-  style NodeA fill:#d4f1e4
-  style NodeB fill:#d4f1e4
-  style NodeC fill:#d4f1e4
 ```
 
 Each node exposes three independent listeners:
@@ -235,15 +228,6 @@ graph LR
   I --> K["Send ACK"]
   J --> L["Replication<br/>complete"]
   K --> L
-
-  style A fill:#fff4dc
-  style B fill:#e8f3ef
-  style C fill:#e8f3ef
-  style F fill:#d4f1e4
-  style G fill:#d4f1e4
-  style H fill:#d4f1e4
-  style I fill:#d4f1e4
-  style L fill:#e8f3ef
 ```
 
 ## Vector Clocks
@@ -358,13 +342,6 @@ graph BT
   Leaf3 --> Branch2
   Branch1 --> Root
   Branch2 --> Root
-
-  style Leaf1 fill:#d4f1e4
-  style Leaf2 fill:#d4f1e4
-  style Leaf3 fill:#d4f1e4
-  style Branch1 fill:#c0e8db
-  style Branch2 fill:#c0e8db
-  style Root fill:#0b4f49,color:#ffffff
 ```
 
 ### Repair Protocol

@@ -66,6 +66,10 @@
   .content code { background: var(--code-bg); padding: .1em .35em; border-radius: .25rem; font-size: .88em; }
   .content pre { background: var(--brand-dark); color: #e6edf3; padding: 1rem 1.2rem; border-radius: .6rem; overflow-x: auto; }
   .content pre code { background: none; padding: 0; color: inherit; }
+  /* Mermaid diagrams render an SVG into the <pre>; keep it on a light, transparent
+     background so the diagram's dark text stays readable (the code-block dark
+     background above must not apply here). */
+  .content pre.mermaid { background: transparent; color: inherit; padding: .5rem 0; text-align: center; overflow-x: auto; }
   .content table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: .92rem; background: #fff; }
   .content th, .content td { border: 1px solid var(--border); padding: .45rem .7rem; text-align: left; vertical-align: top; }
   .content th { background: #e9eef2; }

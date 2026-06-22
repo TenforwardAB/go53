@@ -72,7 +72,7 @@ sequenceDiagram
   P-->>V: DS (hash of KSK)
   V->>Z: DNSKEY for example? (DO=1)
   Z-->>V: DNSKEY RRset + RRSIG(KSK)
-  Note over V: DS matches KSK; KSK validates DNSKEY RRset
+  Note over V: DS matches KSK — KSK validates DNSKEY RRset
   V->>Z: SOA for example? (DO=1)
   Z-->>V: SOA + RRSIG(ZSK)
   Note over V: ZSK (from DNSKEY RRset) validates SOA
