@@ -100,7 +100,9 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 }
 
 func Start(cfg config.BaseConfig) error {
-	var handler http.Handler = AuthMiddleware(NewRouter(cfg))
+	// Health probes are wrapped outside AuthMiddleware so /healthz and /readyz
+	// stay reachable in every auth mode (including "disabled").
+	var handler http.Handler = withHealth(AuthMiddleware(NewRouter(cfg)))
 
 	addr := net.JoinHostPort(cfg.BindHost, strings.TrimPrefix(cfg.APIPort, ":"))
 	log.Printf("Starting API server on %s", addr)

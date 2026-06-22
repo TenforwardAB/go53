@@ -96,6 +96,7 @@ func main() {
 	// filesystem permissions (group go53_admin), usable when the IdP is unreachable.
 	go api.StartAdminSocket(base)
 
+	api.SetReady(true)
 	log.Println("Starting REST API on", base.APIPort)
 	if err := api.Start(base); err != nil {
 		log.Fatal(err)

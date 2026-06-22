@@ -16,6 +16,8 @@ servers:
 - url: http://127.0.0.1:8053
   description: TCP admin API
 tags:
+- name: Health
+  description: Unauthenticated liveness and readiness probes for orchestrators and load balancers.
 - name: Docs
   description: OpenAPI document and Swagger UI endpoints.
 - name: Config
@@ -33,6 +35,41 @@ tags:
 - name: Distributed
   description: Distributed replication status, vector clocks, Merkle repair, invites, and join requests.
 paths:
+  /healthz:
+    get:
+      tags:
+      - Health
+      summary: Liveness probe
+      responses:
+        '200':
+          description: The process is up and serving HTTP.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: ok
+      description: Always returns `200` while the API process is responsive. Served before authentication, so it works in every `auth.mode` (including `disabled`). Use for liveness checks; it does not reflect dependency health.
+  /readyz:
+    get:
+      tags:
+      - Health
+      summary: Readiness probe
+      responses:
+        '200':
+          description: The server has completed startup and is ready to serve traffic.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: ok
+        '503':
+          description: The server has not finished startup yet.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: not ready
+      description: Returns `200` once the zone store and DNS listener are up, otherwise `503`. Served before authentication, so it works in every `auth.mode` (including `disabled`). Use to gate traffic during rollout/restart.
   /openapi.yaml:
     get:
       tags:
