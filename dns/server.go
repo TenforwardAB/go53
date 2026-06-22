@@ -25,6 +25,7 @@ func Start(cfg config.BaseConfig) error {
 
 func buildDNSServers(cfg config.BaseConfig) (string, *dns.Server, *dns.Server) {
 	dns.HandleFunc(".", handleRequest)
+	go startLimiterCleanup()
 
 	addr := fmt.Sprintf("%s%s", cfg.BindHost, cfg.DNSPort)
 	tsigProvider := security.DynamicTSIGProvider{}

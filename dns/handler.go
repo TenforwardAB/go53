@@ -15,6 +15,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
@@ -22,6 +23,15 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	live := config.AppConfig.GetLive()
 	opt := r.IsEdns0()
 	wantsDNSSEC := config.AppConfig.GetLive().DNSSECEnabled && opt != nil && opt.Do()
+
+	// Per-client QPS limiting for UDP queries
+	if live.RateLimitQPS > 0 && r.Opcode == dns.OpcodeQuery && !responseIsTCP(w) {
+		ip, _, err := net.SplitHostPort(w.RemoteAddr().String())
+		if err == nil && !limiter.allow(ip, live.RateLimitQPS, time.Now()) {
+			slog.Warn("rate-limited query from %s (limit %d qps)", ip, live.RateLimitQPS)
+			return
+		}
+	}
 
 	if r.Opcode == dns.OpcodeNotify && live.Mode == "secondary" {
 		remoteIP, _, err := net.SplitHostPort(w.RemoteAddr().String())

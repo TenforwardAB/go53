@@ -1552,7 +1552,18 @@ components:
           example: node-a
         rate_limit_qps:
           type: integer
+          default: 0
           example: 1000
+          description: >-
+            Maximum queries per second allowed from a single source IP, enforced
+            as a token bucket with a burst equal to this value. `0` (the default)
+            disables rate limiting. Only UDP queries are limited; TCP, AXFR/IXFR
+            and NOTIFY are exempt so zone transfers and secondaries are never
+            throttled. Queries over the limit are dropped silently (no response)
+            to avoid spending response bandwidth on a flood. The server tracks up
+            to 100000 distinct source IPs to bound memory; beyond that, new IPs
+            are allowed without tracking. Idle client state is reclaimed roughly
+            10 minutes after a source goes quiet.
         allow_axfr:
           type: boolean
           example: false
