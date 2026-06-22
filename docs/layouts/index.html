@@ -458,6 +458,16 @@
           <p>Zone and DNSSEC key material are loaded for read-heavy serving, while Badger persists changes.</p>
           <div class="rfc-list"><span class="rfc">BadgerDB</span><span class="rfc">Operational</span></div>
         </article>
+        <article class="feature">
+          <header><h3><del>Per-client rate limiting</del></h3><span class="status done">done</span></header>
+          <p>Optional per-source-IP token-bucket QPS limiting on the UDP query path, with silent drops and bounded memory to blunt query floods. TCP and zone transfers are exempt.</p>
+          <div class="rfc-list"><span class="rfc">Abuse protection</span><span class="rfc">Operational</span></div>
+        </article>
+        <article class="feature">
+          <header><h3><del>Health and readiness probes</del></h3><span class="status done">done</span></header>
+          <p>Unauthenticated <code>/healthz</code> and <code>/readyz</code> HTTP endpoints for liveness and readiness checks behind load balancers and orchestrators.</p>
+          <div class="rfc-list"><span class="rfc">Operational</span><span class="rfc">Kubernetes</span></div>
+        </article>
       </div>
     </section>
 
@@ -489,7 +499,7 @@
         </article>
         <article class="roadmap">
           <header><h3>Metrics and structured observability</h3><span class="status next">planned</span></header>
-          <p>Prometheus metrics, structured query/error logging, and operational health endpoints.</p>
+          <p>Prometheus metrics and structured query/error logging. Operational health and readiness endpoints are already in place.</p>
         </article>
         <article class="roadmap">
           <header><h3>Import/export tooling</h3><span class="status next">planned</span></header>

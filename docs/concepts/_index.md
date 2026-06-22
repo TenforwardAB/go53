@@ -7,9 +7,11 @@ description: "Explanatory deep-dives into how go53 works."
 
 # Concepts
 
-Explanatory deep-dives into how go53 works under the hood: the DNSSEC signing and
-denial model, and the multi-node distributed replication design (encryption,
-signed events, vector clocks, and Merkle repair).
+Explanatory deep-dives into how go53 works under the hood:
 
-> These pages are being migrated from the previous HTML DNSSEC and distributed
-> guides.
+- **[DNSSEC](/concepts/dnssec/)** — the signing model, refresh and jitter timing,
+  query-time signing, NSEC/NSEC3 denial, parent signaling (DS/CDS/CDNSKEY), and
+  the key lifecycle.
+- **[Distributed Mode](/concepts/distributed-mode/)** — multi-node replication:
+  architecture, Ed25519 signing, the frame protocol, vector clocks, and
+  Merkle-tree integrity repair.
