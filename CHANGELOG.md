@@ -1,3 +1,21 @@
+## 0.79.0 (June 23, 2026)
+  - Backup/restore feature: WAL DNSSEC coverage, retention watermark, restore hardening (#48)
+  - fix(roadmap): drop volatile timestamp so refresh only commits on real changes
+  - docs: refresh roadmap from project board
+  - fix(roadmap): read project via GraphQL to avoid 'unknown owner type'
+  - docs: add auto-generated roadmap page and workflow
+  - noop
+  - Updated Mermaidjs diagrams AI-Note: Claude failed on these and they where fixed manually
+  - Migrated dnssec and distributed sections to MD. AI-Note: Claude was involved here
+  - Migrated admin_guides to MD. AI-Note: Claude was involved here
+  - Updated Docs to pure MD and HUGO
+  - The rate_limit_qps config knob existed but was never enforced. Add a small per-source-IP token bucket on the UDP query path: a client may send up to rate_limit_qps queries per second (burst equal to that value) before being throttled; 0 (default) disables it.
+  - Add /healthz and /readyz health probes
+  - rtype CAA added as new rtype
+  - Reject queries with multiple OPT records as FORMERR (#30) (#36)
+  - Fix main packages for tests in tools
+  - Fix malformed EDNS COOKIE length handling for bug #29 (#35)
+
 ## 0.78.0 (June 15, 2026)
   - Merge pull request #33 from TenforwardAB/feature/multiprimaries
   - Fix #Issue-31 DNSSEC wildcard responses fail strict validationbugSomething isn't working
