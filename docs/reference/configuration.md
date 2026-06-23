@@ -50,6 +50,8 @@ socket.
 | `allow_axfr` | bool | `false` | Allows AXFR/IXFR response handling when client allowlist and TSIG policy also pass. |
 | `default_ns` | string | `ns1.go53.local.` | Default nameserver value used by helper logic that needs an NS name when zone data does not provide one. |
 | `enforce_tsig` | bool | `false` | Requires valid TSIG on DNS requests in TSIG validation paths and on AXFR/IXFR when enabled. |
+| `wal_retention_days` | int days | `14` | How long go53 retains internal WAL events in storage for backup/restore. `0` keeps them indefinitely; external WAL archives written by `go53ctl backup wal-follow` are operator-managed. See [Backup & Restore](/guides/backup-and-restore/). |
+| `max_restore_bytes` | int bytes | `1073741824` | Upper bound on a restore upload (full backup or WAL), since restore reads the file into memory. `0` disables the cap. Raise it before restoring a backup larger than 1 GiB. |
 | `any_query_policy` | string | `hinfo` | Authoritative ANY-query policy. `hinfo` returns a minimal RFC 8482-style HINFO answer; `refuse` returns REFUSED. |
 | `unknown_zone_policy` | string | `refused` | Response policy for names outside all loaded authoritative zones. Default is non-authoritative REFUSED. |
 

@@ -325,6 +325,8 @@ curl -X PATCH http://127.0.0.1:8053/api/config \
 | `allow_axfr` | `false` | Enables transfer responses when the client also passes the allowlist and TSIG policy. |
 | `default_ns` | `ns1.go53.local.` | Default nameserver used by helper logic when a zone does not specify one. |
 | `enforce_tsig` | `false` | Requires valid TSIG for transfers when enabled. |
+| `wal_retention_days` | `14` | How long go53 keeps internal WAL events in storage. `0` keeps them indefinitely. See [Backup & Restore](/guides/backup-and-restore/). |
+| `max_restore_bytes` | `1073741824` | Max restore upload size in bytes (restore reads into memory). `0` disables the cap; raise before restoring a backup larger than 1 GiB. |
 | `auth.mode` | `disabled` | Controls TCP API access. `disabled` returns `503`, `none` allows unauthenticated TCP API access, `x-auth-key` requires a static key, and `oidc` is reserved. |
 | `auth.x_auth_key` | `""` | Static base62 API key for `auth.mode=x-auth-key`. It must match `^[A-Za-z0-9]{48,}$`. If unset or invalid, the TCP API returns `403`. |
 | `primary.notify_debounce_ms` | `2000` | Delay used to coalesce NOTIFY after record changes. |
@@ -817,6 +819,7 @@ local admin socket.
 | `ds`, `cds`, `cdnskey` | Generate parent-signaling records. |
 | `distributed` | Inspect vectors, events, Merkle state, invites, and node discovery. |
 | `docs` | Fetch the OpenAPI spec or Swagger UI HTML. |
+| `backup`, `restore` | Create full backups, archive binary WAL, and restore over the local admin socket. See [Backup & Restore](/guides/backup-and-restore/). |
 | `api` | Raw method/path passthrough for advanced use. |
 
 > ⚠️ The socket grants unauthenticated, full administrative control of the local
@@ -948,6 +951,39 @@ go53ctl --db /data/go53 --list-zone example.com.
 go53ctl --db /data/go53 --list-zone example.com. --count-only
 ```
 
+## Backup, WAL, And Point-In-Time Restore
+
+go53 backup and restore operations are local-first administrative workflows.
+`go53ctl` uses the Unix admin socket by default, so operators can create full
+backups, archive WAL, and restore a node without exposing these operations on the
+TCP API.
+
+> ⚠️ Backups and WAL files contain DNSSEC private keys, TSIG secrets, and the API
+> key in cleartext — store them with owner-only permissions and encrypt at rest
+> off-host. A restore excludes concurrent admin writes while it runs, and the
+> upload is capped by `max_restore_bytes`. See [Backup & Restore](/guides/backup-and-restore/).
+
+```sh
+# Create a full tar backup.
+go53ctl backup create --out /backup/go53/base.tar
+
+# Continuously archive binary WAL segments.
+go53ctl backup wal-follow --dir /backup/go53/wal --interval-sec 60
+
+# Restore a base backup and replay archived WAL.
+go53ctl restore backup /backup/go53/base.tar
+go53ctl restore wal /backup/go53/wal/go53-wal-00000000000000000124-00000000000000000180.g53wal
+```
+
+Each backup manifest records `snapshot_start_seq` and `snapshot_end_seq`. For
+normal recovery, archive and replay WAL events after `snapshot_end_seq`. The
+runtime setting `wal_retention_days` controls how long internal WAL events are
+retained in go53 storage; external WAL files written by `wal-follow` are
+operator-managed archives.
+
+See the dedicated [Backup & Restore](/guides/backup-and-restore/) guide for
+retention, format, and point-in-time restore details.
+
 ## TSIG
 
 TSIG keys are stored separately from DNSSEC keys. Add shared TSIG secrets before
@@ -977,6 +1013,12 @@ curl -X DELETE http://127.0.0.1:8053/api/tsig/transfer-key.
 | `PATCH` | `/api/config` | Patch live runtime config. |
 | `GET` | `/api/config/auth/x-auth-key` | Read the static API key. Local admin socket only; TCP returns `403`. |
 | `PATCH` | `/api/config/auth/x-auth-key` | Set the static API key. Local admin socket only; key must be base62 and at least 48 characters. |
+| `GET` | `/api/backup` | Stream a full tar backup. Local admin socket only. |
+| `GET` | `/api/backup/wal` | Stream exported binary WAL events. Local admin socket only; optional `after` query. |
+| `GET` | `/api/backup/wal/status` | Return the latest WAL sequence and archived watermark. Local admin socket only. |
+| `POST` | `/api/backup/wal/ack` | Advance the archived WAL watermark (`seq` query) so retention will not prune un-archived events. Local admin socket only. |
+| `POST` | `/api/restore` | Restore a full backup into the running node. Local admin socket only. |
+| `POST` | `/api/restore/wal` | Replay an exported WAL file into the running node. Local admin socket only. |
 | `GET` | `/api/zones` | List loaded zones. |
 | `POST` | `/api/zones/{zone}/records/{rrtype}` | Add a record. Disabled in secondary mode. |
 | `GET` | `/api/zones/{zone}/records/{rrtype}/{name}` | Read one RRset owner name. |

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"go53/config"
 	"go53/distributed"
+	"go53/wal"
 	"io"
 	"net/http"
 )
@@ -30,6 +31,10 @@ func UpdateLiveConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err := config.AppConfig.MergeUpdateLiveJSON(body); err != nil {
 		http.Error(w, "failed to apply config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if _, err := wal.Append(wal.KindConfig, wal.OpUpsert, "", "", "", "config", "live", body); err != nil {
+		http.Error(w, "config updated but WAL append failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if distributed.Default != nil {
@@ -88,6 +93,10 @@ func SetXAuthKeyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := config.AppConfig.MergeUpdateLiveJSON(body); err != nil {
 		http.Error(w, "failed to apply config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if _, err := wal.Append(wal.KindConfig, wal.OpUpsert, "", "", "", "config", "live", body); err != nil {
+		http.Error(w, "x_auth_key updated but WAL append failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if distributed.Default != nil && config.AppConfig.GetLive().Distributed.AuthSyncEnabled() {

@@ -28,7 +28,9 @@ func ListDNSKeysHandler(w http.ResponseWriter, r *http.Request) {
 
 func GetDNSKeyHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	zone := vars["keyid"]
+	// Stored keys keep the zone without a trailing dot; accept the zone with or
+	// without one (and any case) so "pit.test." and "pit.test" both match.
+	zone := strings.TrimSuffix(strings.ToLower(vars["keyid"]), ".")
 
 	table, err := security.ListStoredKeys()
 	if err != nil {
@@ -39,7 +41,7 @@ func GetDNSKeyHandler(w http.ResponseWriter, r *http.Request) {
 	response := make(map[string]types.StoredKey)
 
 	for keyID, key := range table {
-		if key.Zone != zone {
+		if strings.TrimSuffix(strings.ToLower(key.Zone), ".") != zone {
 			continue
 		}
 

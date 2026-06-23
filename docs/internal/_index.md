@@ -8,4 +8,6 @@ description: "Authoritative-engine internals: storage, zone model, and RFC compl
 # Internals
 
 Notes on the go53 authoritative engine internals: persistence behavior and
-storage layout, the in-memory zone model, and RFC compliance details.
+storage layout, the in-memory zone model, RFC compliance details, and
+[performance notes](/internal/performance/) with forward-looking optimization
+ideas.
