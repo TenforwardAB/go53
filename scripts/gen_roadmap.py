@@ -41,13 +41,68 @@ STATUS_ORDER = {s: i for i, s in enumerate(
     ["In Progress", "Review", "Ready", "Blocked", "Backlog", "Done", ""])}
 
 
+QUERY = """
+query($org:String!, $number:Int!, $cursor:String){
+  organization(login:$org){
+    projectV2(number:$number){
+      items(first:100, after:$cursor){
+        pageInfo{ hasNextPage endCursor }
+        nodes{
+          content{
+            ... on Issue { number title url }
+            ... on PullRequest { number title url }
+          }
+          fieldValues(first:30){
+            nodes{
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                name
+                field{ ... on ProjectV2FieldCommon { name } }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+
 def fetch_items():
-    out = subprocess.check_output(
-        ["gh", "project", "item-list", PROJECT_NUMBER,
-         "--owner", OWNER, "--limit", "200", "--format", "json"],
-        text=True,
-    )
-    return json.loads(out).get("items", [])
+    """Read the org Project via GraphQL. Avoids `gh project`'s owner-type
+    resolution (which fails as "unknown owner type" for some token types) and
+    needs only a token with project read access."""
+    items = []
+    cursor = None
+    while True:
+        args = ["gh", "api", "graphql", "-f", "query=" + QUERY,
+                "-f", "org=" + OWNER, "-F", "number=" + str(PROJECT_NUMBER)]
+        if cursor:
+            args += ["-f", "cursor=" + cursor]
+        out = subprocess.check_output(args, text=True)
+        data = json.loads(out)["data"]["organization"]["projectV2"]["items"]
+        for node in data["nodes"]:
+            c = node.get("content") or {}
+            if not c.get("number"):
+                continue  # skip draft items
+            fv = {}
+            for v in (node.get("fieldValues") or {}).get("nodes", []):
+                field = v.get("field") or {}
+                name = field.get("name")
+                if name and "name" in v:
+                    fv[name] = v["name"]
+            items.append({
+                "content": {"number": c.get("number"), "title": c.get("title"), "url": c.get("url")},
+                "theme": fv.get("Theme", ""),
+                "release": fv.get("Release", ""),
+                "status": fv.get("Status", ""),
+            })
+        page = data["pageInfo"]
+        if page["hasNextPage"]:
+            cursor = page["endCursor"]
+        else:
+            break
+    return items
 
 
 def clean_title(t):
