@@ -7,6 +7,7 @@ import (
 	"go53/internal"
 	"go53/security"
 	"go53/storage"
+	"go53/wal"
 	"log"
 	"net/http"
 
@@ -58,6 +59,10 @@ func AddTSIGKeyHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to save TSIG key", http.StatusInternalServerError)
 		return
 	}
+	if _, err := wal.Append(wal.KindTSIGKey, wal.OpUpsert, "", "", "", table, nameParam, value); err != nil {
+		http.Error(w, "TSIG key saved but WAL append failed", http.StatusInternalServerError)
+		return
+	}
 
 	log.Printf("Saved TSIG key '%s', now reloading from backend...", nameParam)
 
@@ -90,6 +95,10 @@ func DeleteTSIGKeyHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err := storage.Backend.DeleteFromTable("tsig-keys", mux.Vars(r)["name"]); err != nil {
 		http.Error(w, "failed to delete TSIG key", http.StatusInternalServerError)
+		return
+	}
+	if _, err := wal.Append(wal.KindTSIGKey, wal.OpDelete, "", "", "", "tsig-keys", mux.Vars(r)["name"], nil); err != nil {
+		http.Error(w, "TSIG key deleted but WAL append failed", http.StatusInternalServerError)
 		return
 	}
 

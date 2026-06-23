@@ -295,6 +295,8 @@ func printMainUsage(help bool) {
 
 Commands:
   api METHOD PATH      Call any admin API route locally over the Unix socket (break-glass)
+  backup              Export backup WAL data over the local admin socket
+  restore             Restore backup or WAL data over the local admin socket
   config               Read or patch live runtime config
   zones                List, delete, import, or export zones
   records              List, add, get, patch, or delete records
@@ -588,6 +590,10 @@ func handleAdminCommand(command string, args []string) bool {
 	switch command {
 	case "config":
 		handleAdminConfig(args)
+	case "backup":
+		handleAdminBackup(args)
+	case "restore":
+		handleAdminRestore(args)
 	case "zones":
 		handleAdminZones(args)
 	case "records":
@@ -728,6 +734,291 @@ func requireArgs(args []string, n int, usage func()) {
 	}
 }
 
+func handleAdminBackup(args []string) {
+	if len(args) == 0 {
+		printBackupUsage()
+		os.Exit(1)
+	}
+	switch args[0] {
+	case "create":
+		fs := flag.NewFlagSet("backup create", flag.ExitOnError)
+		socketPath := defaultAdminSocket()
+		outPath := ""
+		fs.StringVar(&socketPath, "socket", socketPath, "Unix admin socket path")
+		fs.StringVar(&outPath, "out", "", "Output backup file; stdout when empty")
+		_ = fs.Parse(args[1:])
+		if len(fs.Args()) != 0 {
+			printBackupUsage()
+			os.Exit(1)
+		}
+		if err := exportAdminBackup(socketPath, outPath); err != nil {
+			log.Fatal(err)
+		}
+	case "wal":
+		fs := flag.NewFlagSet("backup wal", flag.ExitOnError)
+		socketPath := defaultAdminSocket()
+		outPath := ""
+		after := uint64(0)
+		fs.StringVar(&socketPath, "socket", socketPath, "Unix admin socket path")
+		fs.StringVar(&outPath, "out", "", "Output WAL file; stdout when empty")
+		fs.Uint64Var(&after, "after", 0, "Export WAL events after this sequence")
+		_ = fs.Parse(args[1:])
+		if len(fs.Args()) != 0 {
+			printBackupUsage()
+			os.Exit(1)
+		}
+		if err := exportAdminWAL(socketPath, outPath, after); err != nil {
+			log.Fatal(err)
+		}
+	case "wal-follow":
+		fs := flag.NewFlagSet("backup wal-follow", flag.ExitOnError)
+		socketPath := defaultAdminSocket()
+		dir := ""
+		after := uint64(0)
+		intervalSec := 60
+		once := false
+		fs.StringVar(&socketPath, "socket", socketPath, "Unix admin socket path")
+		fs.StringVar(&dir, "dir", "", "Directory for archived WAL segment files")
+		fs.Uint64Var(&after, "after", 0, "Initial sequence when no state file exists")
+		fs.IntVar(&intervalSec, "interval-sec", 60, "Polling interval in seconds")
+		fs.BoolVar(&once, "once", false, "Run one archive attempt and exit")
+		_ = fs.Parse(args[1:])
+		if dir == "" || len(fs.Args()) != 0 {
+			printBackupUsage()
+			os.Exit(1)
+		}
+		if err := followAdminWAL(socketPath, dir, after, time.Duration(intervalSec)*time.Second, once); err != nil {
+			log.Fatal(err)
+		}
+	default:
+		printBackupUsage()
+		os.Exit(1)
+	}
+}
+
+func printBackupUsage() {
+	fmt.Println(`Usage:
+  go53ctl backup create [--out FILE] [--socket PATH]
+  go53ctl backup wal [--after SEQ] [--out FILE] [--socket PATH]
+  go53ctl backup wal-follow --dir DIR [--after SEQ] [--interval-sec N] [--once] [--socket PATH]
+
+Examples:
+  go53ctl backup create --out go53.backup.tar
+  go53ctl backup wal --out go53.wal
+  go53ctl backup wal --after 12000 --out go53-12000.wal
+  go53ctl backup wal-follow --dir /backup/go53/wal`)
+}
+
+func exportAdminBackup(socketPath, outPath string) error {
+	return exportAdminBinary(socketPath, outPath, "/api/backup")
+}
+
+func exportAdminWAL(socketPath, outPath string, after uint64) error {
+	return exportAdminBinary(socketPath, outPath, "/api/backup/wal?after="+strconv.FormatUint(after, 10))
+}
+
+func exportAdminBinary(socketPath, outPath, path string) error {
+	client := socketClient(socketPath)
+	req, err := http.NewRequest(http.MethodGet, "http://go53-admin-socket"+path, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(data)))
+	}
+	var out io.Writer = os.Stdout
+	var f *os.File
+	if outPath != "" {
+		f, err = os.Create(outPath)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		out = f
+	}
+	_, err = io.Copy(out, resp.Body)
+	return err
+}
+
+type walStatusResponse struct {
+	LastSeq uint64 `json:"last_seq"`
+}
+
+func followAdminWAL(socketPath, dir string, initialAfter uint64, interval time.Duration, once bool) error {
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	if err := os.MkdirAll(dir, 0750); err != nil {
+		return err
+	}
+	statePath := filepath.Join(dir, ".go53-wal-follow.seq")
+	after, err := readWALFollowState(statePath, initialAfter)
+	if err != nil {
+		return err
+	}
+	for {
+		next, err := archiveWALOnce(socketPath, dir, statePath, after)
+		if err != nil {
+			return err
+		}
+		after = next
+		if once {
+			return nil
+		}
+		time.Sleep(interval)
+	}
+}
+
+func archiveWALOnce(socketPath, dir, statePath string, after uint64) (uint64, error) {
+	lastSeq, err := getAdminWALLastSeq(socketPath)
+	if err != nil {
+		return after, err
+	}
+	if lastSeq <= after {
+		return after, nil
+	}
+	from := after + 1
+	finalPath := filepath.Join(dir, fmt.Sprintf("go53-wal-%020d-%020d.g53wal", from, lastSeq))
+	tmpPath := finalPath + ".tmp"
+	if err := exportAdminWAL(socketPath, tmpPath, after); err != nil {
+		return after, err
+	}
+	if err := os.Rename(tmpPath, finalPath); err != nil {
+		return after, err
+	}
+	if err := os.WriteFile(statePath, []byte(strconv.FormatUint(lastSeq, 10)+"\n"), 0600); err != nil {
+		return after, err
+	}
+	// Acknowledge the durably-archived sequence so server-side retention will
+	// not prune WAL we have not yet archived.
+	if err := ackAdminWAL(socketPath, lastSeq); err != nil {
+		return after, err
+	}
+	return lastSeq, nil
+}
+
+func ackAdminWAL(socketPath string, seq uint64) error {
+	client := socketClient(socketPath)
+	url := "http://go53-admin-socket/api/backup/wal/ack?seq=" + strconv.FormatUint(seq, 10)
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(data)))
+	}
+	return nil
+}
+
+func getAdminWALLastSeq(socketPath string) (uint64, error) {
+	client := socketClient(socketPath)
+	req, err := http.NewRequest(http.MethodGet, "http://go53-admin-socket/api/backup/wal/status", nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(data)))
+	}
+	var status walStatusResponse
+	if err := json.Unmarshal(data, &status); err != nil {
+		return 0, err
+	}
+	return status.LastSeq, nil
+}
+
+func readWALFollowState(path string, fallback uint64) (uint64, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return fallback, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	value := strings.TrimSpace(string(data))
+	if value == "" {
+		return fallback, nil
+	}
+	return strconv.ParseUint(value, 10, 64)
+}
+
+func handleAdminRestore(args []string) {
+	if len(args) == 0 {
+		printRestoreUsage()
+		os.Exit(1)
+	}
+	fs := flag.NewFlagSet("restore "+args[0], flag.ExitOnError)
+	socketPath := defaultAdminSocket()
+	fs.StringVar(&socketPath, "socket", socketPath, "Unix admin socket path")
+	_ = fs.Parse(args[1:])
+	rest := fs.Args()
+	requireArgs(rest, 1, printRestoreUsage)
+	switch args[0] {
+	case "backup":
+		if err := postAdminBinaryFile(socketPath, "/api/restore", rest[0], "application/x-tar"); err != nil {
+			log.Fatal(err)
+		}
+	case "wal":
+		if err := postAdminBinaryFile(socketPath, "/api/restore/wal", rest[0], "application/octet-stream"); err != nil {
+			log.Fatal(err)
+		}
+	default:
+		printRestoreUsage()
+		os.Exit(1)
+	}
+}
+
+func printRestoreUsage() {
+	fmt.Println(`Usage:
+  go53ctl restore backup FILE [--socket PATH]
+  go53ctl restore wal FILE [--socket PATH]
+
+Examples:
+  go53ctl restore backup go53.backup.tar
+  go53ctl restore wal go53.wal`)
+}
+
+func postAdminBinaryFile(socketPath, path, filePath, contentType string) error {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	client := socketClient(socketPath)
+	req, err := http.NewRequest(http.MethodPost, "http://go53-admin-socket"+path, f)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", contentType)
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(data)))
+	}
+	return nil
+}
+
 // parseInterspersedFlags parses flags that may appear before or after positional
 // arguments and returns the positionals. Go's flag package stops at the first
 // positional, so a trailing flag such as `config set xauth_key --generate` would
@@ -794,6 +1085,19 @@ func handleAdminConfig(args []string) {
 				log.Fatal(err)
 			}
 			fmt.Println(value)
+		case "wal_retention_days":
+			requireArgs(rest, 2, printConfigUsage)
+			days, err := strconv.Atoi(rest[1])
+			if err != nil || days < 0 {
+				log.Fatal("wal_retention_days must be a non-negative integer")
+			}
+			body, err := json.Marshal(map[string]int{"wal_retention_days": days})
+			if err != nil {
+				log.Fatal(err)
+			}
+			if _, err := adminRequest(*opts, http.MethodPatch, "/api/config", string(body), "application/json"); err != nil {
+				log.Fatal(err)
+			}
 		default:
 			log.Fatalf("unsupported config setting %q", rest[0])
 		}
@@ -817,6 +1121,7 @@ Examples:
   go53ctl config get
   go53ctl config get xauth_key
   go53ctl config set xauth_key --generate
+  go53ctl config set wal_retention_days 30
   go53ctl config patch '{"auth":{"mode":"none"}}'`)
 }
 

@@ -15,6 +15,8 @@ and `go53ctl` workflows.
   guide: installation, quick start, deployment and runtime config, zones and
   records, DNSSEC, transfers, distributed mode, `go53ctl`, TSIG, API routes, and
   operations.
+- **[Backup & Restore](/guides/backup-and-restore/)** — full backups, the binary
+  logical WAL, point-in-time restore, retention, and the on-disk format.
 
 See also the [Configuration Reference](/reference/configuration/) for the exact
 parameter-level details.

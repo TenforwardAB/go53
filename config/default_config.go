@@ -11,6 +11,8 @@ var DefaultLiveConfig = LiveConfig{
 	EnableEDNS:        true,
 	NSID:              "", // empty = NSID disabled, avoids leaking node identity by default
 	RateLimitQPS:      0,  // 0 = no rate limiting
+	WALRetentionDays:  14,
+	MaxRestoreBytes:   1 << 30, // 1 GiB; raise via config for larger backups, 0 = unlimited
 	AllowAXFR:         false,
 	DefaultNS:         "ns1.go53.local.",
 	EnforceTSIG:       false,

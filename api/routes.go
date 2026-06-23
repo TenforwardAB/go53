@@ -43,6 +43,12 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 	r.HandleFunc("/api/config", handlers.GetLiveConfigHandler).Methods("GET")
 	r.HandleFunc("/api/config/auth/x-auth-key", localAdminOnly(handlers.GetXAuthKeyHandler)).Methods("GET")
 	r.HandleFunc("/api/config/auth/x-auth-key", localAdminOnly(handlers.SetXAuthKeyHandler)).Methods("PUT", "PATCH")
+	r.HandleFunc("/api/backup", localAdminOnly(handlers.ExportBackupHandler)).Methods("GET")
+	r.HandleFunc("/api/backup/wal", localAdminOnly(handlers.ExportWALHandler)).Methods("GET")
+	r.HandleFunc("/api/backup/wal/status", localAdminOnly(handlers.GetWALStatusHandler)).Methods("GET")
+	r.HandleFunc("/api/backup/wal/ack", localAdminOnly(handlers.AckWALHandler)).Methods("POST")
+	r.HandleFunc("/api/restore", localAdminOnly(handlers.RestoreBackupHandler)).Methods("POST")
+	r.HandleFunc("/api/restore/wal", localAdminOnly(handlers.RestoreWALHandler)).Methods("POST")
 	r.HandleFunc("/.well-known/go53-node.json", handlers.GetWellKnownNodeHandler).Methods("GET")
 
 	r.HandleFunc("/api/zones", handlers.GetZonesHandler).Methods("GET")
@@ -101,8 +107,9 @@ func NewRouter(cfg config.BaseConfig) http.Handler {
 
 func Start(cfg config.BaseConfig) error {
 	// Health probes are wrapped outside AuthMiddleware so /healthz and /readyz
-	// stay reachable in every auth mode (including "disabled").
-	var handler http.Handler = withHealth(AuthMiddleware(NewRouter(cfg)))
+	// stay reachable in every auth mode (including "disabled"). RestoreGuard sits
+	// inside auth so it only gates accepted mutations and restore.
+	var handler http.Handler = withHealth(AuthMiddleware(RestoreGuard(NewRouter(cfg))))
 
 	addr := net.JoinHostPort(cfg.BindHost, strings.TrimPrefix(cfg.APIPort, ":"))
 	log.Printf("Starting API server on %s", addr)
