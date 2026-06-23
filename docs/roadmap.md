@@ -12,9 +12,9 @@ prioritizes, in order: **reliability, RFC compliance, operational simplicity,
 performance, distributed resilience, and new features** — stability and
 maintainability over feature count.
 
-> This page is generated from the
-> [go53 Roadmap project](https://github.com/orgs/TenforwardAB/projects/10)
-> — last updated 2026-06-23 06:09 UTC. Status reflects the project board.
+> This page is generated automatically from the
+> [go53 Roadmap project](https://github.com/orgs/TenforwardAB/projects/10).
+> Status reflects the project board; see the board for live detail.
 
 ## Releases
 

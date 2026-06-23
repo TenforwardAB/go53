@@ -10,7 +10,6 @@ Requires `gh` authenticated with a token that can read the org Project
 (read:project) — see .github/workflows/roadmap.yml.
 """
 
-import datetime
 import json
 import os
 import subprocess
@@ -122,7 +121,6 @@ def main():
         rel = it.get("release") or "Future"
         by_release.setdefault(rel, []).append(it)
 
-    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = []
     lines.append("---")
     lines.append('title: "Roadmap"')
@@ -138,9 +136,9 @@ def main():
     lines.append("performance, distributed resilience, and new features** — stability and")
     lines.append("maintainability over feature count.")
     lines.append("")
-    lines.append("> This page is generated from the")
-    lines.append(f"> [go53 Roadmap project](https://github.com/orgs/{OWNER}/projects/{PROJECT_NUMBER})")
-    lines.append(f"> — last updated {now}. Status reflects the project board.")
+    lines.append("> This page is generated automatically from the")
+    lines.append(f"> [go53 Roadmap project](https://github.com/orgs/{OWNER}/projects/{PROJECT_NUMBER}).")
+    lines.append("> Status reflects the project board; see the board for live detail.")
     lines.append("")
     lines.append("## Releases")
     lines.append("")
