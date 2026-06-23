@@ -1,0 +1,50 @@
+name: Update roadmap
+
+# Regenerates docs/roadmap.md from the "go53 Roadmap" GitHub Project and commits
+# it when it changed. The commit (made with ROADMAP_PROJECT_TOKEN, a PAT) pushes
+# to the default branch, which triggers the Deploy docs workflow so go53.eu/roadmap/
+# stays in sync with the project board.
+#
+# Requirements:
+#   - Repo/org secret ROADMAP_PROJECT_TOKEN: a token that can read the org
+#     Project v2 (classic PAT with `read:project` + `repo`, or a fine-grained
+#     token with Projects: read-only and Contents: read/write). The default
+#     GITHUB_TOKEN cannot read org projects, and its pushes do not trigger the
+#     docs deploy — hence a PAT.
+
+on:
+  schedule:
+    - cron: "17 6 * * *" # daily, a few minutes past 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: roadmap
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.ROADMAP_PROJECT_TOKEN }}
+
+      - name: Generate roadmap from the project board
+        env:
+          GH_TOKEN: ${{ secrets.ROADMAP_PROJECT_TOKEN }}
+        run: python3 scripts/gen_roadmap.py
+
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- docs/roadmap.md; then
+            echo "roadmap unchanged"
+            exit 0
+          fi
+          git config user.name "go53-roadmap-bot"
+          git config user.email "noreply@tenforward.se"
+          git add docs/roadmap.md
+          git commit -m "docs: refresh roadmap from project board"
+          git push
