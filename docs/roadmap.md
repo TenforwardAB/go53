@@ -24,8 +24,8 @@ maintainability over feature count.
 
 | Issue | Title | Theme | Status |
 |-------|-------|-------|--------|
-| [#46](https://github.com/TenforwardAB/go53/issues/46) | Release 0.79: Backup, WAL and point-in-time restore | Operations | In Progress |
 | [#20](https://github.com/TenforwardAB/go53/issues/20) | Add rate limiting and abuse protection | Security | Done |
+| [#46](https://github.com/TenforwardAB/go53/issues/46) | Release 0.79: Backup, WAL and point-in-time restore | Operations | Done |
 
 ### Release 0.80
 
@@ -116,6 +116,7 @@ Interesting ideas that are not currently roadmap priorities.
 | [#19](https://github.com/TenforwardAB/go53/issues/19) | Add ACME-DNS support for DNS-01 challenge | Future | — |
 | [#21](https://github.com/TenforwardAB/go53/issues/21) | Support Response Policy Zones (RPZ) | Future | — |
 | [#39](https://github.com/TenforwardAB/go53/issues/39) | Add DNS-over-HTTPS (DoH) support (RFC 8484) | Future | — |
+| [#49](https://github.com/TenforwardAB/go53/issues/49) | API: MX payload field names + PATCH/DELETE owner-name form inconsistent (docs fixed for v1; v2 to correct) |  | — |
 
 ## Themes
 
