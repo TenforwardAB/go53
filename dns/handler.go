@@ -11,7 +11,6 @@ import (
 	"github.com/miekg/dns"
 
 	"encoding/hex"
-	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -19,7 +18,7 @@ import (
 )
 
 func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
-	log.Println("Incomming DNS request")
+	slog.Debug("incoming DNS request")
 	live := config.AppConfig.GetLive()
 	opt := r.IsEdns0()
 	wantsDNSSEC := config.AppConfig.GetLive().DNSSECEnabled && opt != nil && opt.Do()
@@ -36,12 +35,12 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	if r.Opcode == dns.OpcodeNotify && live.Mode == "secondary" {
 		remoteIP, _, err := net.SplitHostPort(w.RemoteAddr().String())
 		if err != nil {
-			log.Println("Invalid remote address:", w.RemoteAddr())
+			slog.Warn("invalid remote address: %v", w.RemoteAddr())
 			return
 		}
 
 		if !notifySourceAllowed(r, remoteIP, live) {
-			log.Println("Refusing NOTIFY from unknown IP:", remoteIP)
+			slog.Warn("refusing NOTIFY from unknown IP: %s", remoteIP)
 			return
 		}
 
@@ -52,24 +51,24 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		case tsig != nil:
 			// TSIG is present — must be validated regardless of config is (RFC 2845  §4.6)
 			if _, ok := security.GetTSIGKey(tsig.Hdr.Name); !ok {
-				log.Printf("TSIG key not recognized: %s — rejecting", tsig.Hdr.Name)
+				slog.Warn("TSIG key not recognized: %s — rejecting", tsig.Hdr.Name)
 				m := new(dns.Msg)
 				m.SetRcode(r, dns.RcodeRefused)
 				_ = w.WriteMsg(m)
 				return
 			}
 			if w.TsigStatus() != nil {
-				log.Printf("TSIG validation failed: %v", w.TsigStatus())
+				slog.Warn("TSIG validation failed: %v", w.TsigStatus())
 				m := new(dns.Msg)
 				m.SetRcode(r, dns.RcodeRefused)
 				_ = w.WriteMsg(m)
 				return
 			}
-			log.Printf("TSIG validated. Key: %s", tsig.Hdr.Name)
+			slog.Debug("TSIG validated. Key: %s", tsig.Hdr.Name)
 
 		case tsig == nil && enforceTSIG:
 			// TSIG is required but not present — reject per RFC 2845 §4.5
-			log.Println("TSIG required but not present — rejecting")
+			slog.Warn("TSIG required but not present — rejecting")
 			m := new(dns.Msg)
 			m.SetRcode(r, dns.RcodeRefused)
 			_ = w.WriteMsg(m)
@@ -77,7 +76,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 		case tsig == nil && !enforceTSIG:
 			// TSIG is not  required — continue (RFC 2845  §4.5)
-			log.Println("TSIG not present, but not required — continuing")
+			slog.Debug("TSIG not present, but not required — continuing")
 		}
 
 		dnsutils.HandleNotify(w, r)
@@ -118,7 +117,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	if len(r.Question) != 1 {
-		log.Printf("Refusing DNS request with QDCOUNT=%d; only one question is supported", len(r.Question))
+		slog.Debug("refusing DNS request with QDCOUNT=%d; only one question is supported", len(r.Question))
 		m.SetRcode(r, dns.RcodeFormatError)
 		m.Authoritative = false
 		dnsutils.ApplyNSID(m, r)
@@ -131,7 +130,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	for _, q := range r.Question {
 		var answered bool
 		answered = false
-		log.Println("Type is :", q.Qtype)
+		slog.Debug("query type: %d", q.Qtype)
 
 		if q.Qclass == dns.ClassCHAOS && q.Qtype == dns.TypeTXT && strings.ToLower(q.Name) == "version.bind." {
 			version := live.Version
@@ -194,11 +193,11 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		case dns.TypeDNSKEY:
 			zoneApex, _ := internal.SanitizeFQDN(q.Name) //TODO: manage error
 			if rec, ok := zone.LookupRecord(dns.TypeDNSKEY, zoneApex); ok {
-				log.Println("DNSKEY record found:", rec)
+				slog.Debug("DNSKEY record found: %v", rec)
 				m.Answer = append(m.Answer, rec...)
 				answered = true
 			} else {
-				log.Println("DNSKEY record NOT FOUND OR ERROR:")
+				slog.Debug("DNSKEY record not found or error")
 			}
 
 		case dns.TypeCNAME, dns.TypeDNAME, dns.TypeNS:
@@ -209,14 +208,14 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 		case dns.TypeAXFR, dns.TypeIXFR:
 			if !live.AllowAXFR {
-				log.Println("AXFR/IXFR disabled by configuration")
+				slog.Debug("AXFR/IXFR disabled by configuration")
 				m.SetRcode(r, dns.RcodeRefused)
 				writeResponse(w, r, m)
 				return
 			}
 
 			if !transferClientAllowed(w.RemoteAddr().String(), live.AllowTransfer) {
-				log.Printf("AXFR/IXFR refused for unauthorized client %s", w.RemoteAddr().String())
+				slog.Warn("AXFR/IXFR refused for unauthorized client %s", w.RemoteAddr().String())
 				m.SetRcode(r, dns.RcodeRefused)
 				writeResponse(w, r, m)
 				return
@@ -230,29 +229,29 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 			case tsig != nil:
 				// TSIG present: validate it
 				if _, ok := security.GetTSIGKey(tsig.Hdr.Name); !ok {
-					log.Printf("TSIG key not recognized: %s — rejecting", tsig.Hdr.Name)
+					slog.Warn("TSIG key not recognized: %s — rejecting", tsig.Hdr.Name)
 					m.SetRcode(r, dns.RcodeRefused)
 					writeResponse(w, r, m)
 					return
 				}
 				if w.TsigStatus() != nil {
-					log.Printf("TSIG validation failed: %v", w.TsigStatus())
+					slog.Warn("TSIG validation failed: %v", w.TsigStatus())
 					m.SetRcode(r, dns.RcodeRefused)
 					writeResponse(w, r, m)
 					return
 				}
-				log.Printf("TSIG validated for AXFR/IXFR. Key: %s", tsig.Hdr.Name)
+				slog.Debug("TSIG validated for AXFR/IXFR. Key: %s", tsig.Hdr.Name)
 
 			case tsig == nil && enforceTSIG:
 				// TSIG required but missing
-				log.Println("AXFR/IXFR request is not TSIG-signed — rejecting due to EnforceTSIG")
+				slog.Warn("AXFR/IXFR request is not TSIG-signed — rejecting due to EnforceTSIG")
 				m.SetRcode(r, dns.RcodeRefused)
 				writeResponse(w, r, m)
 				return
 
 			case tsig == nil && !enforceTSIG:
 				// TSIG not present and not required
-				log.Println("AXFR/IXFR without TSIG — accepted due to EnforceTSIG=false")
+				slog.Debug("AXFR/IXFR without TSIG — accepted due to EnforceTSIG=false")
 			}
 
 			// Delegate to ServeDNS

@@ -492,8 +492,8 @@ paths:
                 value:
                   name: '@'
                   ttl: 3600
-                  preference: 10
-                  mx: mail.example.com.
+                  priority: 10
+                  host: mail.example.com.
               txt:
                 summary: TXT record
                 value:
@@ -527,7 +527,12 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '503':
           $ref: '#/components/responses/SecondaryMode'
-      description: Adds one record value to the owner/type RRset. The payload schema is RR-type specific; examples show the common shapes.
+      description: >-
+        Adds one record value to the owner/type RRset. The payload schema is
+        RR-type specific; examples show the common shapes. The owner `name` is
+        relative to the zone (use `@` for the apex). If the zone does not yet
+        exist it is created on first record, and zones are automatically
+        DNSSEC-signed.
   /api/zones/{zone}/records/{rrtype}/{name}:
     get:
       tags:
@@ -593,8 +598,8 @@ paths:
                 value:
                   name: '@'
                   ttl: 3600
-                  preference: 10
-                  mx: mail.example.com.
+                  priority: 10
+                  host: mail.example.com.
               txt:
                 summary: TXT record
                 value:
@@ -1477,7 +1482,11 @@ components:
       schema:
         type: string
       example: www.example.com.
-      description: Owner name. Relative labels and absolute FQDNs are accepted by the handlers; examples use FQDN form for clarity.
+      description: >-
+        Owner name for PATCH/DELETE, given as an absolute FQDN (e.g.
+        `www.example.com.`); the zone apex is the zone name itself (e.g.
+        `example.com.`). A relative label here is rejected. Note the asymmetry
+        with POST, which takes a relative owner `name` in the request body.
     KeyID:
       name: keyid
       in: path
@@ -2091,14 +2100,16 @@ components:
       - type: object
         required:
         - name
-        - preference
-        - mx
+        - priority
+        - host
         properties:
-          preference:
+          priority:
             type: integer
+            description: MX preference (RFC 1035 PREFERENCE). Lower is preferred.
             example: 10
-          mx:
+          host:
             type: string
+            description: Mail exchange host (RFC 1035 EXCHANGE), as an FQDN.
             example: mail.example.com.
     TXTRecordPayload:
       allOf:
