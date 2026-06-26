@@ -33,8 +33,8 @@ maintainability over feature count.
 
 | Issue | Title | Theme | Status |
 |-------|-------|-------|--------|
-| [#42](https://github.com/TenforwardAB/go53/issues/42) | Enhancement: Remove hot-path query logging | Performance | — |
-| [#43](https://github.com/TenforwardAB/go53/issues/43) | Enhancement: Normalize DNS names at write-time and eliminate fallback scans | Performance | — |
+| [#43](https://github.com/TenforwardAB/go53/issues/43) | Enhancement: Normalize DNS names at write-time and eliminate fallback scans | Performance | In Progress |
+| [#42](https://github.com/TenforwardAB/go53/issues/42) | Enhancement: Remove hot-path query logging | Performance | Done |
 | [#45](https://github.com/TenforwardAB/go53/issues/45) | Enhancement: Reduce configuration lock usage on DNS request path | Performance | — |
 
 ### Release 0.81
