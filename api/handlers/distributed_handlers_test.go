@@ -20,13 +20,13 @@ func TestDistributedHandlersWithInitializedService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeyPair: %v", err)
 	}
-	config.AppConfig.Live.Mode = "distributed"
-	config.AppConfig.Live.Version = "test-version"
-	config.AppConfig.Live.Distributed.NodeID = "node-a"
-	config.AppConfig.Live.Distributed.PrivateKey = priv
-	config.AppConfig.Live.Distributed.PeerPublicKeys = map[string]string{"node-a": pub}
-	config.AppConfig.Live.Distributed.SyncBindHost = "127.0.0.1"
-	config.AppConfig.Live.Distributed.SyncPort = ":53530"
+	config.AppConfig.LiveForTest().Mode = "distributed"
+	config.AppConfig.LiveForTest().Version = "test-version"
+	config.AppConfig.LiveForTest().Distributed.NodeID = "node-a"
+	config.AppConfig.LiveForTest().Distributed.PrivateKey = priv
+	config.AppConfig.LiveForTest().Distributed.PeerPublicKeys = map[string]string{"node-a": pub}
+	config.AppConfig.LiveForTest().Distributed.SyncBindHost = "127.0.0.1"
+	config.AppConfig.LiveForTest().Distributed.SyncPort = ":53530"
 	mem := rtypes.GetMemStore()
 	distributed.Init(mem)
 	t.Cleanup(func() { distributed.Default = nil })

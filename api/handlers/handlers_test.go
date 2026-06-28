@@ -69,7 +69,7 @@ func TestConfigHandlers(t *testing.T) {
 	if live.Mode != "secondary" || live.DefaultTTL != 123 {
 		t.Fatalf("live config = %#v", live)
 	}
-	config.AppConfig.Live.Auth.XAuthKey = strings.Repeat("z", 48)
+	config.AppConfig.LiveForTest().Auth.XAuthKey = strings.Repeat("z", 48)
 
 	getReq := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	getRec := httptest.NewRecorder()
@@ -290,9 +290,9 @@ func addTestRecord(t *testing.T, zoneName, rrtype, body string) {
 
 func TestAddRecordUpdatesCatalogZone(t *testing.T) {
 	setupHandlerTestStore(t)
-	config.AppConfig.Live.Mode = "primary"
-	config.AppConfig.Live.Secondary.CatalogEnabled = true
-	config.AppConfig.Live.Secondary.CatalogZone = "_catalog.go53."
+	config.AppConfig.LiveForTest().Mode = "primary"
+	config.AppConfig.LiveForTest().Secondary.CatalogEnabled = true
+	config.AppConfig.LiveForTest().Secondary.CatalogZone = "_catalog.go53."
 	distributed.Default = nil
 	t.Cleanup(func() { distributed.Default = nil })
 
@@ -329,9 +329,9 @@ func setupHandlerTestStore(t *testing.T) *storage.MockStorage {
 	}
 	storage.Backend = backend
 	config.AppConfig = &config.ConfigManager{}
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.Mode = "secondary"
-	config.AppConfig.Live.DNSSECEnabled = false
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().Mode = "secondary"
+	config.AppConfig.LiveForTest().DNSSECEnabled = false
 
 	mem, err := memory.NewZoneStore(backend)
 	if err != nil {

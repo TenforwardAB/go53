@@ -14,12 +14,12 @@ func setLiveNSID(t *testing.T, enableEDNS bool, nsid string) {
 	t.Helper()
 	prev := config.AppConfig.GetLive()
 	t.Cleanup(func() {
-		config.AppConfig.Live = prev
+		config.AppConfig.SetLive(prev)
 	})
 	live := prev
 	live.EnableEDNS = enableEDNS
 	live.NSID = nsid
-	config.AppConfig.Live = live
+	config.AppConfig.SetLive(live)
 }
 
 // requestWithNSID builds a query that opts in to NSID via an empty NSID option.

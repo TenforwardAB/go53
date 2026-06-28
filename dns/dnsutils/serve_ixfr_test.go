@@ -103,9 +103,9 @@ func TestServeDNSIXFRMissingClientSOAIsFormErr(t *testing.T) {
 func setupIXFRTestZone(t *testing.T, zoneName string) *dns.SOA {
 	t.Helper()
 	config.AppConfig = &config.ConfigManager{}
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.DNSSECEnabled = false
-	config.AppConfig.Live.Mode = "primary"
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().DNSSECEnabled = false
+	config.AppConfig.LiveForTest().Mode = "primary"
 	storage.Backend = &storage.MockStorage{Zones: map[string][]byte{}, Tables: map[string]map[string][]byte{}}
 	store, err := memory.NewZoneStore(storage.Backend)
 	if err != nil {

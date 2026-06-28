@@ -161,8 +161,8 @@ func setupRTypesLifecycleStore(t *testing.T) {
 	}
 	storage.Backend = backend
 	config.AppConfig = &config.ConfigManager{}
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.DNSSECEnabled = false
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().DNSSECEnabled = false
 
 	mem, err := memory.NewZoneStore(backend)
 	if err != nil {

@@ -21,12 +21,12 @@ func setupCatalogTestStore(t *testing.T, mode string) {
 	}
 	storage.Backend = backend
 	config.AppConfig = &config.ConfigManager{}
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.Mode = mode
-	config.AppConfig.Live.DNSSECEnabled = false
-	config.AppConfig.Live.Secondary.CatalogEnabled = true
-	config.AppConfig.Live.Secondary.CatalogZone = "_catalog.go53."
-	config.AppConfig.Live.Secondary.MinFetchIntervalSec = 0
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().Mode = mode
+	config.AppConfig.LiveForTest().DNSSECEnabled = false
+	config.AppConfig.LiveForTest().Secondary.CatalogEnabled = true
+	config.AppConfig.LiveForTest().Secondary.CatalogZone = "_catalog.go53."
+	config.AppConfig.LiveForTest().Secondary.MinFetchIntervalSec = 0
 	store, err := memory.NewZoneStore(backend)
 	if err != nil {
 		t.Fatalf("NewZoneStore: %v", err)
@@ -74,7 +74,7 @@ func TestRefreshZoneUnionIncludesCatalogAndMembers(t *testing.T) {
 	if err := EnsureCatalogMember("member.example."); err != nil {
 		t.Fatalf("EnsureCatalogMember: %v", err)
 	}
-	config.AppConfig.Live.Mode = "secondary"
+	config.AppConfig.LiveForTest().Mode = "secondary"
 
 	got := map[string]bool{}
 	for _, z := range refreshZoneUnion() {
@@ -105,7 +105,7 @@ func TestPruneRemovedCatalogMembersDeletesOnlyRemovedMembers(t *testing.T) {
 
 func TestPruneRemovedCatalogMembersKeepsConfiguredZones(t *testing.T) {
 	setupCatalogTestStore(t, "secondary")
-	config.AppConfig.Live.Secondary.Zones = []string{"manual.example."}
+	config.AppConfig.LiveForTest().Secondary.Zones = []string{"manual.example."}
 	addTestSOA(t, "manual.example.")
 
 	pruneRemovedCatalogMembers([]string{"manual.example."}, nil)

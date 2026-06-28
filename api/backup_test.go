@@ -20,7 +20,7 @@ func TestBackupWALRequiresLocalAdmin(t *testing.T) {
 	}
 	storage.Backend = backend
 	config.AppConfig = &config.ConfigManager{}
-	config.AppConfig.Live = config.DefaultLiveConfig
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
 
 	if _, err := wal.Append(wal.KindConfig, wal.OpUpsert, "", "", "", "config", "live", []byte(`{"default_ttl":120}`)); err != nil {
 		t.Fatalf("Append: %v", err)
@@ -53,7 +53,7 @@ func TestBackupCreateRequiresLocalAdmin(t *testing.T) {
 	backend.Zones["example.test."] = []byte("zone-data")
 	storage.Backend = backend
 	config.AppConfig = &config.ConfigManager{}
-	config.AppConfig.Live = config.DefaultLiveConfig
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
 
 	router := api.NewRouter(config.DefaultBaseConfig)
 	req := httptest.NewRequest(http.MethodGet, "/api/backup", nil)

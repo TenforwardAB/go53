@@ -12,7 +12,7 @@ import (
 )
 
 func TestSignRRSetUsesSignaturePolicy(t *testing.T) {
-	config.AppConfig.Live.DNSSEC = config.DNSSECSignaturePolicy{
+	config.AppConfig.LiveForTest().DNSSEC = config.DNSSECSignaturePolicy{
 		ValiditySeconds:       7200,
 		DNSKEYValiditySeconds: 14400,
 		RefreshBeforeSeconds:  1800,
@@ -94,7 +94,7 @@ func TestRRSIGLabelCountApexWildcard(t *testing.T) {
 }
 
 func TestRRSIGFreshRefreshBeforeExpiration(t *testing.T) {
-	config.AppConfig.Live.DNSSEC = config.DNSSECSignaturePolicy{
+	config.AppConfig.LiveForTest().DNSSEC = config.DNSSECSignaturePolicy{
 		ValiditySeconds:       7200,
 		DNSKEYValiditySeconds: 14400,
 		RefreshBeforeSeconds:  1800,

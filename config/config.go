@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"regexp"
 	"sync"
+	"sync/atomic"
 
 	"go53/storage"
 
@@ -131,10 +132,20 @@ type LiveConfig struct {
 	Auth        AuthConfig            `json:"auth"`
 }
 
+// ConfigManager hold the live config behind an atmic pointer
 type ConfigManager struct {
-	Base BaseConfig
-	mu   sync.RWMutex
-	Live LiveConfig
+	Base    BaseConfig
+	writeMu sync.Mutex // serializes writers doing read-modify-store on live
+	live    atomic.Pointer[LiveConfig]
+}
+
+// loadLive returns the current snapshot by value, or a zero value if nothing has
+// been published yet.
+func (cm *ConfigManager) loadLive() LiveConfig {
+	if p := cm.live.Load(); p != nil {
+		return *p
+	}
+	return LiveConfig{}
 }
 
 var AppConfig = &ConfigManager{}
@@ -235,9 +246,7 @@ func (cm *ConfigManager) InitLiveConfig() {
 		changed = true
 	}
 
-	cm.mu.Lock()
-	cm.Live = cfg
-	cm.mu.Unlock()
+	cm.SetLive(cfg)
 
 	if changed {
 		if err := cm.persistLiveConfigUnlocked(cfg); err != nil {
@@ -320,9 +329,7 @@ func (cm *ConfigManager) loadLiveConfig() error {
 		}
 	}
 
-	cm.mu.Lock()
-	cm.Live = cfg
-	cm.mu.Unlock()
+	cm.SetLive(cfg)
 
 	if changed {
 		if err := cm.persistLiveConfigUnlocked(cfg); err != nil {
@@ -367,40 +374,59 @@ func (cm *ConfigManager) persistLiveConfigUnlocked(live LiveConfig) error {
 	return nil
 }
 
-// PersistLiveConfig is the public version: it locks, then calls the unlocked writer.
+// PersistLiveConfig is the public version: it snapshots, then calls the unlocked writer.
 func (cm *ConfigManager) PersistLiveConfig() error {
-	cm.mu.RLock()
-	liveCopy := cm.Live
-	cm.mu.RUnlock()
-
-	return cm.persistLiveConfigUnlocked(liveCopy)
+	return cm.persistLiveConfigUnlocked(cm.loadLive())
 }
 
 func (cm *ConfigManager) GetBase() BaseConfig {
 	return cm.Base
 }
 
+// GetLive returns the current live config snapshot.
 func (cm *ConfigManager) GetLive() LiveConfig {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	return cm.Live
+	return cm.loadLive()
+}
+
+// SetLive atomically publishes c as the new live config snapshoot without
+// persisting it.
+func (cm *ConfigManager) SetLive(c LiveConfig) {
+	cm.writeMu.Lock()
+	defer cm.writeMu.Unlock()
+	cm.live.Store(&c)
+}
+
+// LiveForTest returns a mutable pointer to the publkished live config snapshot so
+// tests can poke individual fields. It mutats the snapshoot in place and is NOT
+// safe under concurrent readers — DO NOT use outside tests #NOQA.
+func (cm *ConfigManager) LiveForTest() *LiveConfig {
+	cm.writeMu.Lock()
+	defer cm.writeMu.Unlock()
+	p := cm.live.Load()
+	if p == nil {
+		p = &LiveConfig{}
+		cm.live.Store(p)
+	}
+	return p
 }
 
 func (cm *ConfigManager) UpdateLive(newConfig LiveConfig) {
-	cm.mu.Lock()
-	cm.Live = newConfig
-	_ = cm.persistLiveConfigUnlocked(cm.Live)
-	cm.mu.Unlock()
+	cm.writeMu.Lock()
+	cm.live.Store(&newConfig)
+	_ = cm.persistLiveConfigUnlocked(newConfig)
+	cm.writeMu.Unlock()
 	ApplyLogLevel(newConfig.LogLevel)
 }
 
 func (cm *ConfigManager) MergeUpdateLive(partial LiveConfig) {
-	cm.mu.Lock()
-	internal.MergeStructs(&cm.Live, &partial)
-
-	// take a snapshot to persist
-	toPersist := cm.Live
-	cm.mu.Unlock()
+	cm.writeMu.Lock()
+	// Copy-on-write: merge into a new snapshoot, leaving the published one
+	// untouched.
+	merged := cm.loadLive()
+	internal.MergeStructs(&merged, &partial)
+	cm.live.Store(&merged)
+	toPersist := merged
+	cm.writeMu.Unlock()
 
 	if err := cm.persistLiveConfigUnlocked(toPersist); err != nil {
 		log.Println("MergeUpdateLive: failed to persist:", err)
@@ -415,18 +441,19 @@ func (cm *ConfigManager) MergeUpdateLive(partial LiveConfig) {
 // document keep their current values. json.Unmarshal recurses into nested structs,
 // setting only the sub-fields present in the document.
 func (cm *ConfigManager) MergeUpdateLiveJSON(raw []byte) error {
-	cm.mu.Lock()
-	merged := cm.Live
-	// Clone nested maps so an in-place unmarshal cannot mutate the live config before commit.
-	merged.Distributed.PeerPublicKeys = clonePeerPublicKeys(cm.Live.Distributed.PeerPublicKeys)
+	cm.writeMu.Lock()
+	merged := cm.loadLive()
+	// Clone nested maps so an in-place unmarshal cannot mutate the published
+	// snapshot before commit (copy-on-write).
+	merged.Distributed.PeerPublicKeys = clonePeerPublicKeys(merged.Distributed.PeerPublicKeys)
 	prepareReplaceOnlyMapFields(raw, &merged)
 	if err := json.Unmarshal(raw, &merged); err != nil {
-		cm.mu.Unlock()
+		cm.writeMu.Unlock()
 		return err
 	}
-	cm.Live = merged
-	toPersist := cm.Live
-	cm.mu.Unlock()
+	cm.live.Store(&merged)
+	toPersist := merged
+	cm.writeMu.Unlock()
 
 	if err := cm.persistLiveConfigUnlocked(toPersist); err != nil {
 		log.Println("MergeUpdateLiveJSON: failed to persist:", err)

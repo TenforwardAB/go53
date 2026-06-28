@@ -157,8 +157,8 @@ func TestZoneFacadeNilMemoryStoreWrappers(t *testing.T) {
 func setupZoneFacadeTestStore(t *testing.T) {
 	t.Helper()
 	config.AppConfig = &config.ConfigManager{}
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.DNSSECEnabled = false
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().DNSSECEnabled = false
 
 	backend := &storage.MockStorage{}
 	if err := backend.Init(); err != nil {

@@ -33,9 +33,9 @@ func setupAPITest(t *testing.T) {
 	}
 	storage.Backend = backend
 	config.AppConfig = &config.ConfigManager{}
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.Mode = "primary"
-	config.AppConfig.Live.DNSSECEnabled = false
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().Mode = "primary"
+	config.AppConfig.LiveForTest().DNSSECEnabled = false
 	distributed.Default = nil
 
 	mem, err := memory.NewZoneStore(backend)
@@ -258,7 +258,7 @@ func TestTCPAPI_ZoneRecordLifecycle(t *testing.T) {
 
 func TestTCPAPI_DisabledInSecondaryMode(t *testing.T) {
 	setupAPITest(t)
-	config.AppConfig.Live.Mode = "secondary"
+	config.AppConfig.LiveForTest().Mode = "secondary"
 	srv := newTCPServer(t)
 
 	code := post(t, http.DefaultClient, srv.URL, "/api/zones/example.test./records/A",
@@ -364,7 +364,7 @@ func TestRouterAllManagementRoutes(t *testing.T) {
 
 	expectRoute(t, router, http.MethodDelete, "/api/zones/imported.test.", "", http.StatusNoContent)
 
-	config.AppConfig.Live.Mode = "secondary"
+	config.AppConfig.LiveForTest().Mode = "secondary"
 	expectRoute(t, router, http.MethodPost, "/api/secondary/fetch/route.test.", "", http.StatusAccepted)
 }
 
@@ -423,7 +423,7 @@ func TestRouterPagination(t *testing.T) {
 
 func TestAuthMiddlewareNoneAllowsRequest(t *testing.T) {
 	setupAPITest(t)
-	config.AppConfig.Live.Auth.Mode = "none"
+	config.AppConfig.LiveForTest().Auth.Mode = "none"
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/probe", nil)
@@ -439,8 +439,8 @@ func TestAuthMiddlewareNoneAllowsRequest(t *testing.T) {
 func TestAuthMiddlewareXAuthKey(t *testing.T) {
 	setupAPITest(t)
 	key := strings.Repeat("a", 48)
-	config.AppConfig.Live.Auth.Mode = "x-auth-key"
-	config.AppConfig.Live.Auth.XAuthKey = key
+	config.AppConfig.LiveForTest().Auth.Mode = "x-auth-key"
+	config.AppConfig.LiveForTest().Auth.XAuthKey = key
 
 	handler := api.AuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -465,8 +465,8 @@ func TestAuthMiddlewareXAuthKey(t *testing.T) {
 
 func TestAuthMiddlewareXAuthKeyRequiresConfiguredKey(t *testing.T) {
 	setupAPITest(t)
-	config.AppConfig.Live.Auth.Mode = "x-auth-key"
-	config.AppConfig.Live.Auth.XAuthKey = strings.Repeat("a", 47)
+	config.AppConfig.LiveForTest().Auth.Mode = "x-auth-key"
+	config.AppConfig.LiveForTest().Auth.XAuthKey = strings.Repeat("a", 47)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/probe", nil)
@@ -483,7 +483,7 @@ func TestAuthMiddlewareFutureModesFailClosed(t *testing.T) {
 	for _, mode := range []string{"oidc"} {
 		t.Run(mode, func(t *testing.T) {
 			setupAPITest(t)
-			config.AppConfig.Live.Auth.Mode = mode
+			config.AppConfig.LiveForTest().Auth.Mode = mode
 
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/probe", nil)
@@ -500,7 +500,7 @@ func TestAuthMiddlewareFutureModesFailClosed(t *testing.T) {
 
 func TestAuthMiddlewareLocalAdminBypassesAuthMode(t *testing.T) {
 	setupAPITest(t)
-	config.AppConfig.Live.Auth.Mode = "oidc"
+	config.AppConfig.LiveForTest().Auth.Mode = "oidc"
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/probe", nil)
@@ -520,13 +520,13 @@ func initDistributedForRouterTest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeyPair: %v", err)
 	}
-	config.AppConfig.Live.Mode = "distributed"
-	config.AppConfig.Live.Version = "test-version"
-	config.AppConfig.Live.Distributed.NodeID = "node-a"
-	config.AppConfig.Live.Distributed.PrivateKey = privateKey
-	config.AppConfig.Live.Distributed.PeerPublicKeys = map[string]string{"node-a": publicKey}
-	config.AppConfig.Live.Distributed.SyncBindHost = "127.0.0.1"
-	config.AppConfig.Live.Distributed.SyncPort = ":53530"
+	config.AppConfig.LiveForTest().Mode = "distributed"
+	config.AppConfig.LiveForTest().Version = "test-version"
+	config.AppConfig.LiveForTest().Distributed.NodeID = "node-a"
+	config.AppConfig.LiveForTest().Distributed.PrivateKey = privateKey
+	config.AppConfig.LiveForTest().Distributed.PeerPublicKeys = map[string]string{"node-a": publicKey}
+	config.AppConfig.LiveForTest().Distributed.SyncBindHost = "127.0.0.1"
+	config.AppConfig.LiveForTest().Distributed.SyncPort = ":53530"
 	distributed.Init(rtypes.GetMemStore())
 	t.Cleanup(func() { distributed.Default = nil })
 }
@@ -573,7 +573,7 @@ func createRolloverKeyViaRouter(t *testing.T, router http.Handler) string {
 
 func TestSocketAPI_GetConfig(t *testing.T) {
 	setupAPITest(t)
-	config.AppConfig.Live.Auth.XAuthKey = strings.Repeat("b", 48)
+	config.AppConfig.LiveForTest().Auth.XAuthKey = strings.Repeat("b", 48)
 	client := newSocketServer(t)
 	base := "http://go53-local"
 

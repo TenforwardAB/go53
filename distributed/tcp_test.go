@@ -108,7 +108,7 @@ func TestHandleTCPFrameRequests(t *testing.T) {
 	if resp := svc.handleTCPFrame(ctx, frame{Type: "NOPE"}); resp.Type != frameTypeError || resp.Error == "" {
 		t.Fatalf("unknown response = %#v, want error", resp)
 	}
-	config.AppConfig.Live.Mode = "primary"
+	config.AppConfig.LiveForTest().Mode = "primary"
 	if resp := svc.handleTCPFrame(ctx, frame{Type: frameTypeVectorRequest}); resp.Type != frameTypeError || resp.Error == "" {
 		t.Fatalf("disabled response = %#v, want error", resp)
 	}
@@ -150,11 +150,11 @@ func TestHelloFrameVerification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeyPair: %v", err)
 	}
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.Mode = "distributed"
-	config.AppConfig.Live.Distributed.NodeID = "node-local"
-	config.AppConfig.Live.Distributed.PrivateKey = priv
-	config.AppConfig.Live.Distributed.PeerPublicKeys = map[string]string{
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().Mode = "distributed"
+	config.AppConfig.LiveForTest().Distributed.NodeID = "node-local"
+	config.AppConfig.LiveForTest().Distributed.PrivateKey = priv
+	config.AppConfig.LiveForTest().Distributed.PeerPublicKeys = map[string]string{
 		"node-local": pub,
 	}
 
@@ -177,11 +177,11 @@ func TestTLSCertificateUsesDistributedKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeyPair: %v", err)
 	}
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.Mode = "distributed"
-	config.AppConfig.Live.Distributed.NodeID = "node-local"
-	config.AppConfig.Live.Distributed.PrivateKey = priv
-	config.AppConfig.Live.Distributed.PeerPublicKeys = map[string]string{
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().Mode = "distributed"
+	config.AppConfig.LiveForTest().Distributed.NodeID = "node-local"
+	config.AppConfig.LiveForTest().Distributed.PrivateKey = priv
+	config.AppConfig.LiveForTest().Distributed.PeerPublicKeys = map[string]string{
 		"node-local": pub,
 	}
 
@@ -221,16 +221,16 @@ func TestTLSCertificateUsesDistributedKey(t *testing.T) {
 		t.Fatalf("verifyPeerCertificate: %v", err)
 	}
 
-	config.AppConfig.Live.Distributed.PeerPublicKeys = map[string]string{}
+	config.AppConfig.LiveForTest().Distributed.PeerPublicKeys = map[string]string{}
 	if err := verifyPeerCertificate(cert.Certificate, nil); err == nil {
 		t.Fatalf("verifyPeerCertificate accepted an untrusted certificate")
 	}
 }
 
 func TestTransportSelectionSupportsTLS(t *testing.T) {
-	config.AppConfig.Live = config.DefaultLiveConfig
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
 
-	config.AppConfig.Live.Distributed.Transport = "tls"
+	config.AppConfig.LiveForTest().Distributed.Transport = "tls"
 	if !useSocketTransport("127.0.0.1:19090") || !useTLSTransport("127.0.0.1:19090") {
 		t.Fatalf("plain peer did not inherit tls transport")
 	}
@@ -241,7 +241,7 @@ func TestTransportSelectionSupportsTLS(t *testing.T) {
 		t.Fatalf("mtls:// peer did not use TLS socket transport")
 	}
 
-	config.AppConfig.Live.Distributed.Transport = "http"
+	config.AppConfig.LiveForTest().Distributed.Transport = "http"
 	if useSocketTransport("https://127.0.0.1:18080") {
 		t.Fatalf("https peer unexpectedly used socket transport")
 	}
@@ -252,23 +252,23 @@ func TestTCPAddressAndTLSConfigHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKeyPair: %v", err)
 	}
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.Mode = "distributed"
-	config.AppConfig.Live.Distributed.NodeID = "node-local"
-	config.AppConfig.Live.Distributed.PrivateKey = priv
-	config.AppConfig.Live.Distributed.PeerPublicKeys = map[string]string{"node-local": pub}
-	config.AppConfig.Live.Distributed.Transport = "mtls"
-	config.AppConfig.Live.Distributed.SyncBindHost = "127.0.0.1"
-	config.AppConfig.Live.Distributed.SyncPort = ":53530"
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().Mode = "distributed"
+	config.AppConfig.LiveForTest().Distributed.NodeID = "node-local"
+	config.AppConfig.LiveForTest().Distributed.PrivateKey = priv
+	config.AppConfig.LiveForTest().Distributed.PeerPublicKeys = map[string]string{"node-local": pub}
+	config.AppConfig.LiveForTest().Distributed.Transport = "mtls"
+	config.AppConfig.LiveForTest().Distributed.SyncBindHost = "127.0.0.1"
+	config.AppConfig.LiveForTest().Distributed.SyncPort = ":53530"
 
 	if got := syncListenAddr(); got != "127.0.0.1:53530" {
 		t.Fatalf("syncListenAddr = %q", got)
 	}
-	config.AppConfig.Live.Distributed.SyncPort = "53531"
+	config.AppConfig.LiveForTest().Distributed.SyncPort = "53531"
 	if got := syncListenAddr(); got != "127.0.0.1:53531" {
 		t.Fatalf("syncListenAddr numeric = %q", got)
 	}
-	config.AppConfig.Live.Distributed.SyncPort = ""
+	config.AppConfig.LiveForTest().Distributed.SyncPort = ""
 	if got := syncListenAddr(); got != "" {
 		t.Fatalf("syncListenAddr empty port = %q", got)
 	}

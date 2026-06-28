@@ -87,8 +87,8 @@ func newMerkleOnlyService(t *testing.T) *Service {
 	}
 	storage.Backend = backend
 	config.AppConfig = &config.ConfigManager{}
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.DNSSECEnabled = false
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().DNSSECEnabled = false
 	mem, err := memory.NewZoneStore(backend)
 	if err != nil {
 		t.Fatalf("new memory store: %v", err)

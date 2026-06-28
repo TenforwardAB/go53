@@ -109,11 +109,11 @@ func TestHandleNotify_FormatError(t *testing.T) {
 func TestSendNotify_UDPAndTCP(t *testing.T) {
 	tmpConfig := config.ConfigManager{
 		Base: config.DefaultBaseConfig,
-		Live: config.LiveConfig{
-			AllowTransfer: "127.0.0.1:8055",
-		},
 	}
 	config.AppConfig = &tmpConfig
+	config.AppConfig.SetLive(config.LiveConfig{
+		AllowTransfer: "127.0.0.1:8055",
+	})
 
 	var mu sync.Mutex
 	received := false
@@ -159,13 +159,12 @@ func TestScheduleNotify_Debounce(t *testing.T) {
 	// Clean state
 	delete(notifyStates, zone)
 
-	config.AppConfig = &config.ConfigManager{
-		Live: config.LiveConfig{
-			Primary: config.PrimaryConfig{
-				NotifyDebounceMs: 100,
-			},
+	config.AppConfig = &config.ConfigManager{}
+	config.AppConfig.SetLive(config.LiveConfig{
+		Primary: config.PrimaryConfig{
+			NotifyDebounceMs: 100,
 		},
-	}
+	})
 
 	ScheduleNotify(zone)
 
@@ -244,8 +243,8 @@ func TestHandleNotifyUsesConfiguredMinFetchInterval(t *testing.T) {
 	clearFetchQueue()
 	zoneStates = make(map[string]*zoneState)
 	config.AppConfig = &config.ConfigManager{}
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.Secondary.MinFetchIntervalSec = 0
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().Secondary.MinFetchIntervalSec = 0
 
 	handleNotify(testZone)
 	readQueuedZone(t, testZone)
@@ -256,7 +255,7 @@ func TestHandleNotifyUsesConfiguredMinFetchInterval(t *testing.T) {
 
 	clearFetchQueue()
 	zoneStates = make(map[string]*zoneState)
-	config.AppConfig.Live.Secondary.MinFetchIntervalSec = 30
+	config.AppConfig.LiveForTest().Secondary.MinFetchIntervalSec = 30
 	handleNotify(testZone)
 	readQueuedZone(t, testZone)
 	zoneStates[testZone].pending = false
@@ -276,8 +275,8 @@ func TestEnqueueFetchFullQueueClearsPending(t *testing.T) {
 	zoneStates = make(map[string]*zoneState)
 	stateMu.Unlock()
 	config.AppConfig = &config.ConfigManager{}
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.Secondary.MinFetchIntervalSec = 0
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().Secondary.MinFetchIntervalSec = 0
 
 	for i := 0; i < cap(fetchQueue); i++ {
 		fetchQueue <- "queued.test."
@@ -309,14 +308,13 @@ func readQueuedZone(t *testing.T, want string) {
 }
 
 func TestCheckSOA_MissingPrimary(t *testing.T) {
-	config.AppConfig = &config.ConfigManager{
-		Live: config.LiveConfig{
-			Primary: config.PrimaryConfig{
-				Ip:   "127.0.0.2", // nothing is running
-				Port: 5353,
-			},
+	config.AppConfig = &config.ConfigManager{}
+	config.AppConfig.SetLive(config.LiveConfig{
+		Primary: config.PrimaryConfig{
+			Ip:   "127.0.0.2", // nothing is running
+			Port: 5353,
 		},
-	}
+	})
 
 	ok := checkSOA("nonexistent.com.")
 	if ok {
@@ -328,14 +326,13 @@ func TestFetchZone_InvalidAXFR(t *testing.T) {
 	addr := "127.0.0.1:15353"
 	zoneName := "refused.com."
 
-	config.AppConfig = &config.ConfigManager{
-		Live: config.LiveConfig{
-			Primary: config.PrimaryConfig{
-				Ip:   "127.0.0.1",
-				Port: 15353,
-			},
+	config.AppConfig = &config.ConfigManager{}
+	config.AppConfig.SetLive(config.LiveConfig{
+		Primary: config.PrimaryConfig{
+			Ip:   "127.0.0.1",
+			Port: 15353,
 		},
-	}
+	})
 
 	dns.HandleFunc(zoneName, func(w dns.ResponseWriter, r *dns.Msg) {
 		m := new(dns.Msg)
@@ -356,11 +353,10 @@ func TestFetchZone_InvalidAXFR(t *testing.T) {
 }
 
 func TestSendNotify_InvalidTarget(t *testing.T) {
-	config.AppConfig = &config.ConfigManager{
-		Live: config.LiveConfig{
-			AllowTransfer: "256.256.256.256",
-		},
-	}
+	config.AppConfig = &config.ConfigManager{}
+	config.AppConfig.SetLive(config.LiveConfig{
+		AllowTransfer: "256.256.256.256",
+	})
 
 	SendNotify("invalid.com.")
 
@@ -390,12 +386,12 @@ func TestStartSecondaryRefresh_StartupSweepEnqueuesConfiguredZones(t *testing.T)
 	stateMu.Unlock()
 
 	config.AppConfig = &config.ConfigManager{}
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.Mode = "secondary"
-	config.AppConfig.Live.Primary.Ip = "127.0.0.1"
-	config.AppConfig.Live.Secondary.MinFetchIntervalSec = 0
-	config.AppConfig.Live.Secondary.RefreshIntervalSec = 0 // disable ticker; test the one-shot sweep
-	config.AppConfig.Live.Secondary.Zones = []string{"a.test.", "b.test."}
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().Mode = "secondary"
+	config.AppConfig.LiveForTest().Primary.Ip = "127.0.0.1"
+	config.AppConfig.LiveForTest().Secondary.MinFetchIntervalSec = 0
+	config.AppConfig.LiveForTest().Secondary.RefreshIntervalSec = 0 // disable ticker; test the one-shot sweep
+	config.AppConfig.LiveForTest().Secondary.Zones = []string{"a.test.", "b.test."}
 
 	StartSecondaryRefresh(context.Background())
 
@@ -412,10 +408,10 @@ func TestStartSecondaryRefresh_DisabledInPrimaryMode(t *testing.T) {
 	stateMu.Unlock()
 
 	config.AppConfig = &config.ConfigManager{}
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.Mode = "primary" // gating must suppress the sweep
-	config.AppConfig.Live.Primary.Ip = "127.0.0.1"
-	config.AppConfig.Live.Secondary.Zones = []string{"a.test."}
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().Mode = "primary" // gating must suppress the sweep
+	config.AppConfig.LiveForTest().Primary.Ip = "127.0.0.1"
+	config.AppConfig.LiveForTest().Secondary.Zones = []string{"a.test."}
 
 	StartSecondaryRefresh(context.Background())
 
@@ -433,10 +429,10 @@ func TestStartSecondaryRefresh_DisabledWhenPrimaryIpEmpty(t *testing.T) {
 	stateMu.Unlock()
 
 	config.AppConfig = &config.ConfigManager{}
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.Mode = "secondary"
-	config.AppConfig.Live.Primary.Ip = "" // no upstream configured
-	config.AppConfig.Live.Secondary.Zones = []string{"a.test."}
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().Mode = "secondary"
+	config.AppConfig.LiveForTest().Primary.Ip = "" // no upstream configured
+	config.AppConfig.LiveForTest().Secondary.Zones = []string{"a.test."}
 
 	StartSecondaryRefresh(context.Background())
 
@@ -449,8 +445,8 @@ func TestStartSecondaryRefresh_DisabledWhenPrimaryIpEmpty(t *testing.T) {
 
 func TestStartSecondaryRefreshUsesCatalogPrimaryWhenPrimaryIpEmpty(t *testing.T) {
 	setupCatalogTestStore(t, "secondary")
-	config.AppConfig.Live.Primary.Ip = ""
-	config.AppConfig.Live.Secondary.RefreshIntervalSec = 0
+	config.AppConfig.LiveForTest().Primary.Ip = ""
+	config.AppConfig.LiveForTest().Secondary.RefreshIntervalSec = 0
 	addCatalogBaseForTest(t)
 	addCatalogPTR(t, "m1.zones", "member.test.")
 	addCatalogA(t, "ns1.primaries.ext", "192.0.2.53")
@@ -465,8 +461,8 @@ func TestStartSecondaryRefreshUsesCatalogPrimaryWhenPrimaryIpEmpty(t *testing.T)
 
 func TestTransferPrimariesPreferCatalogOverConfig(t *testing.T) {
 	setupCatalogTestStore(t, "secondary")
-	config.AppConfig.Live.Primary.Ip = "127.0.0.1"
-	config.AppConfig.Live.Primary.Port = 15353
+	config.AppConfig.LiveForTest().Primary.Ip = "127.0.0.1"
+	config.AppConfig.LiveForTest().Primary.Port = 15353
 	addCatalogBaseForTest(t)
 	addCatalogPTR(t, "m1.zones", "member.test.")
 	addCatalogA(t, "ns1.primaries.ext.m1.zones", "192.0.2.99")
@@ -479,8 +475,8 @@ func TestTransferPrimariesPreferCatalogOverConfig(t *testing.T) {
 
 func TestTransferPrimariesDoNotFallbackWhenCatalogPrimaryUnusable(t *testing.T) {
 	setupCatalogTestStore(t, "secondary")
-	config.AppConfig.Live.Primary.Ip = "127.0.0.1"
-	config.AppConfig.Live.Primary.Port = 15353
+	config.AppConfig.LiveForTest().Primary.Ip = "127.0.0.1"
+	config.AppConfig.LiveForTest().Primary.Port = 15353
 	addCatalogBaseForTest(t)
 	addCatalogPTR(t, "m1.zones", "member.test.")
 	addCatalogA(t, "ns1.primaries.ext.m1.zones", "192.0.2.99")
@@ -489,15 +485,15 @@ func TestTransferPrimariesDoNotFallbackWhenCatalogPrimaryUnusable(t *testing.T) 
 	if got := transferPrimariesForZone("member.test."); len(got) != 0 {
 		t.Fatalf("unusable catalog primary must not fall back to config primary: %#v", got)
 	}
-	if hasTransferPrimaryForZone("member.test.", config.AppConfig.Live) {
+	if hasTransferPrimaryForZone("member.test.", config.AppConfig.GetLive()) {
 		t.Fatalf("unusable catalog primary should not count as a transfer primary")
 	}
 }
 
 func TestTransferPrimariesFallbackToConfig(t *testing.T) {
 	setupCatalogTestStore(t, "secondary")
-	config.AppConfig.Live.Primary.Ip = "127.0.0.1"
-	config.AppConfig.Live.Primary.Port = 15353
+	config.AppConfig.LiveForTest().Primary.Ip = "127.0.0.1"
+	config.AppConfig.LiveForTest().Primary.Port = 15353
 
 	got := transferPrimariesForZone("legacy.test.")
 	if len(got) != 1 || got[0].addr() != "127.0.0.1:15353" {
@@ -545,13 +541,13 @@ func TestRunRefreshTicker_PeriodicEnqueue(t *testing.T) {
 	stateMu.Unlock()
 
 	config.AppConfig = &config.ConfigManager{}
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.Mode = "secondary"
-	config.AppConfig.Live.Primary.Ip = "127.0.0.1"
-	config.AppConfig.Live.Secondary.MinFetchIntervalSec = 0
-	config.AppConfig.Live.Secondary.RefreshIntervalSec = 1
-	config.AppConfig.Live.Secondary.RefreshJitterSec = 0
-	config.AppConfig.Live.Secondary.Zones = []string{"t.test."}
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().Mode = "secondary"
+	config.AppConfig.LiveForTest().Primary.Ip = "127.0.0.1"
+	config.AppConfig.LiveForTest().Secondary.MinFetchIntervalSec = 0
+	config.AppConfig.LiveForTest().Secondary.RefreshIntervalSec = 1
+	config.AppConfig.LiveForTest().Secondary.RefreshJitterSec = 0
+	config.AppConfig.LiveForTest().Secondary.Zones = []string{"t.test."}
 
 	// Drain enqueued zones and clear the pending flag so each tick can re-enqueue
 	// (ProcessFetchQueue is not running in this test).
@@ -597,12 +593,12 @@ func TestSweepOnceJitterHonorsCanceledContext(t *testing.T) {
 	stateMu.Unlock()
 
 	config.AppConfig = &config.ConfigManager{}
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.Mode = "secondary"
-	config.AppConfig.Live.Primary.Ip = "127.0.0.1"
-	config.AppConfig.Live.Secondary.MinFetchIntervalSec = 0
-	config.AppConfig.Live.Secondary.RefreshJitterSec = 1
-	config.AppConfig.Live.Secondary.Zones = []string{"jitter.test."}
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().Mode = "secondary"
+	config.AppConfig.LiveForTest().Primary.Ip = "127.0.0.1"
+	config.AppConfig.LiveForTest().Secondary.MinFetchIntervalSec = 0
+	config.AppConfig.LiveForTest().Secondary.RefreshJitterSec = 1
+	config.AppConfig.LiveForTest().Secondary.Zones = []string{"jitter.test."}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sweepOnce(ctx, config.AppConfig.GetLive())

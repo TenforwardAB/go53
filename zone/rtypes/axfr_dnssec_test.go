@@ -10,9 +10,9 @@ import (
 )
 
 func TestAXFRIncludesCompleteDNSSECMaterial(t *testing.T) {
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.DNSSECEnabled = true
-	config.AppConfig.Live.Mode = "primary"
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().DNSSECEnabled = true
+	config.AppConfig.LiveForTest().Mode = "primary"
 
 	zone := "axfr-dnssec.test"
 	ttl := uint32(3600)

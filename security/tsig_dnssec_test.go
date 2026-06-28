@@ -55,8 +55,8 @@ func TestTSIGProviderGenerateVerifyAndList(t *testing.T) {
 
 func TestDNSSECUtilities(t *testing.T) {
 	config.AppConfig = &config.ConfigManager{}
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.DNSSEC = config.DNSSECSignaturePolicy{
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().DNSSEC = config.DNSSECSignaturePolicy{
 		ValiditySeconds:       3600,
 		DNSKEYValiditySeconds: 7200,
 		RefreshBeforeSeconds:  600,

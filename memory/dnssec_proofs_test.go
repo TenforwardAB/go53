@@ -140,8 +140,8 @@ func setupProofZoneStore(t *testing.T) *InMemoryZoneStore {
 }
 
 func configureProofDefaults() {
-	config.AppConfig.Live.DefaultTTL = proofTTL
-	config.AppConfig.Live.DNSSECEnabled = false
+	config.AppConfig.LiveForTest().DefaultTTL = proofTTL
+	config.AppConfig.LiveForTest().DNSSECEnabled = false
 }
 
 func owner(zone, name string) string {

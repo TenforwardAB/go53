@@ -21,7 +21,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 	slog.Debug("incoming DNS request")
 	live := config.AppConfig.GetLive()
 	opt := r.IsEdns0()
-	wantsDNSSEC := config.AppConfig.GetLive().DNSSECEnabled && opt != nil && opt.Do()
+	wantsDNSSEC := live.DNSSECEnabled && opt != nil && opt.Do()
 
 	// Per-client QPS limiting for UDP queries
 	if live.RateLimitQPS > 0 && r.Opcode == dns.OpcodeQuery && !responseIsTCP(w) {
@@ -223,7 +223,7 @@ func handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 			// RFC 2845 §4.5: If TSIG is present, it MUST be validated. If not present, only require it if EnforceTSIG is true.
 			tsig := r.IsTsig()
-			enforceTSIG := config.AppConfig.GetLive().EnforceTSIG
+			enforceTSIG := live.EnforceTSIG
 
 			switch {
 			case tsig != nil:

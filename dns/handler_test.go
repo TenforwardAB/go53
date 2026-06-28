@@ -99,7 +99,7 @@ func TestBuildDNSServersConfiguresUDPAndTCP(t *testing.T) {
 
 func TestHandleRequestVersionBindChaosTXT(t *testing.T) {
 	resetDNSHandlerTestConfig()
-	config.AppConfig.Live.Version = "go53-test"
+	config.AppConfig.LiveForTest().Version = "go53-test"
 
 	req := new(mdns.Msg)
 	req.SetQuestion("version.bind.", mdns.TypeTXT)
@@ -131,7 +131,7 @@ func TestHandleRequestVersionBindChaosTXT(t *testing.T) {
 
 func TestHandleRequestAXFRRefusedWhenDisabled(t *testing.T) {
 	resetDNSHandlerTestConfig()
-	config.AppConfig.Live.AllowAXFR = false
+	config.AppConfig.LiveForTest().AllowAXFR = false
 
 	req := new(mdns.Msg)
 	req.SetQuestion("example.test.", mdns.TypeAXFR)
@@ -199,10 +199,10 @@ func TestHandleRequestUnknownZoneRefused(t *testing.T) {
 
 func TestHandleRequestAcceptsNotifyFromCatalogPrimary(t *testing.T) {
 	setupDNSHandlerTestStore(t)
-	config.AppConfig.Live.Mode = "secondary"
-	config.AppConfig.Live.Primary.Ip = ""
-	config.AppConfig.Live.Secondary.CatalogEnabled = true
-	config.AppConfig.Live.Secondary.CatalogZone = "_catalog.go53."
+	config.AppConfig.LiveForTest().Mode = "secondary"
+	config.AppConfig.LiveForTest().Primary.Ip = ""
+	config.AppConfig.LiveForTest().Secondary.CatalogEnabled = true
+	config.AppConfig.LiveForTest().Secondary.CatalogZone = "_catalog.go53."
 	ttl := uint32(300)
 	if err := zone.AddRecord(mdns.TypeSOA, "_catalog.go53.", "@", map[string]interface{}{"ns": "invalid.", "mbox": "hostmaster.go53.", "refresh": float64(3600), "retry": float64(600), "expire": float64(86400), "minimum": float64(300)}, &ttl); err != nil {
 		t.Fatalf("add catalog SOA: %v", err)
@@ -339,7 +339,7 @@ func TestHandleRequestRejectsMultipleOPTRecords(t *testing.T) {
 
 func TestFinalizeResponseCapsUDPSizeAndTruncates(t *testing.T) {
 	resetDNSHandlerTestConfig()
-	config.AppConfig.Live.MaxUDPSize = 512
+	config.AppConfig.LiveForTest().MaxUDPSize = 512
 
 	req := new(mdns.Msg)
 	req.SetQuestion("big.test.", mdns.TypeTXT)
@@ -608,8 +608,8 @@ func TestResolveAnswerChainCNAMEAndDNAME(t *testing.T) {
 
 func resetDNSHandlerTestConfig() {
 	config.AppConfig = &config.ConfigManager{}
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.DNSSECEnabled = false
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().DNSSECEnabled = false
 }
 
 func setupDNSHandlerTestStore(t *testing.T) {

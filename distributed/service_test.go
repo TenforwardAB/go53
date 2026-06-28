@@ -29,11 +29,11 @@ func TestInitSetsDefaultService(t *testing.T) {
 		t.Fatalf("mock init: %v", err)
 	}
 	storage.Backend = mock
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.Mode = "distributed"
-	config.AppConfig.Live.Distributed.NodeID = "node-init"
-	config.AppConfig.Live.Distributed.PrivateKey = priv
-	config.AppConfig.Live.Distributed.PushTimeoutMs = 25
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().Mode = "distributed"
+	config.AppConfig.LiveForTest().Distributed.NodeID = "node-init"
+	config.AppConfig.LiveForTest().Distributed.PrivateKey = priv
+	config.AppConfig.LiveForTest().Distributed.PushTimeoutMs = 25
 	mem, err := memory.NewZoneStore(mock)
 	if err != nil {
 		t.Fatalf("NewZoneStore: %v", err)
@@ -278,10 +278,10 @@ func TestApplyConfigEventMergesDistributedMembership(t *testing.T) {
 		t.Fatalf("GenerateKeyPair: %v", err)
 	}
 	svc := newTestService(t, "node-b", priv, map[string]string{"node-a": "pub-a"})
-	config.AppConfig.Live.Distributed.Transport = "tls"
-	config.AppConfig.Live.Distributed.SyncBindHost = "127.0.0.1"
-	config.AppConfig.Live.Distributed.SyncPort = ":53531"
-	config.AppConfig.Live.Distributed.Peers = "tls://127.0.0.1:53530"
+	config.AppConfig.LiveForTest().Distributed.Transport = "tls"
+	config.AppConfig.LiveForTest().Distributed.SyncBindHost = "127.0.0.1"
+	config.AppConfig.LiveForTest().Distributed.SyncPort = ":53531"
+	config.AppConfig.LiveForTest().Distributed.Peers = "tls://127.0.0.1:53530"
 
 	event := Event{Operation: OperationUpsert, Value: []byte(`{"distributed":{"peers":"tls://127.0.0.1:53531,tls://127.0.0.1:53532","peer_public_keys":{"node-c":"pub-c"}}}`)}
 	if err := svc.applyConfigEvent(event); err != nil {
@@ -341,15 +341,15 @@ func TestStripDistributedKey(t *testing.T) {
 
 func TestDistributedTransportAndReadinessHelpers(t *testing.T) {
 	t.Cleanup(func() {
-		config.AppConfig.Live.Distributed.Peers = ""
-		config.AppConfig.Live.Distributed.Transport = ""
+		config.AppConfig.LiveForTest().Distributed.Peers = ""
+		config.AppConfig.LiveForTest().Distributed.Transport = ""
 	})
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.Mode = "distributed"
-	config.AppConfig.Live.Distributed.NodeID = "node-a"
-	config.AppConfig.Live.Distributed.PrivateKey = "priv"
-	config.AppConfig.Live.Distributed.Transport = "tls"
-	config.AppConfig.Live.Distributed.Peers = " http://a.local/ , tls://b.local:53530 , "
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().Mode = "distributed"
+	config.AppConfig.LiveForTest().Distributed.NodeID = "node-a"
+	config.AppConfig.LiveForTest().Distributed.PrivateKey = "priv"
+	config.AppConfig.LiveForTest().Distributed.Transport = "tls"
+	config.AppConfig.LiveForTest().Distributed.Peers = " http://a.local/ , tls://b.local:53530 , "
 
 	if !Enabled() || !TCPTransportEnabled() || !TLSTransportEnabled() || !readyToPublish() {
 		t.Fatalf("distributed readiness helpers returned false")
@@ -365,7 +365,7 @@ func TestDistributedTransportAndReadinessHelpers(t *testing.T) {
 		t.Fatalf("useTCPTransport returned unexpected values")
 	}
 
-	config.AppConfig.Live.Distributed.Transport = "http"
+	config.AppConfig.LiveForTest().Distributed.Transport = "http"
 	if TCPTransportEnabled() || TLSTransportEnabled() {
 		t.Fatalf("socket helpers true for http transport")
 	}
@@ -377,7 +377,7 @@ func TestHTTPPeerFetchPushAndRepairPaths(t *testing.T) {
 		t.Fatalf("GenerateKeyPair: %v", err)
 	}
 	svc := newTestService(t, "node-a", priv, nil)
-	config.AppConfig.Live.Distributed.Transport = "http"
+	config.AppConfig.LiveForTest().Distributed.Transport = "http"
 	if err := svc.store.PutRecordRaw("example.test.", "A", "www", []any{map[string]any{"ip": "192.0.2.1"}}); err != nil {
 		t.Fatalf("PutRecordRaw: %v", err)
 	}
@@ -501,10 +501,10 @@ func TestNodeInfoIncludesDiscoveryFields(t *testing.T) {
 		t.Fatalf("GenerateKeyPair: %v", err)
 	}
 	svc := newTestService(t, "node-a", priv, map[string]string{"node-b": pub})
-	config.AppConfig.Live.Version = "go53 test"
-	config.AppConfig.Live.Distributed.Transport = "tcp"
-	config.AppConfig.Live.Distributed.SyncBindHost = "127.0.0.1"
-	config.AppConfig.Live.Distributed.SyncPort = ":19090"
+	config.AppConfig.LiveForTest().Version = "go53 test"
+	config.AppConfig.LiveForTest().Distributed.Transport = "tcp"
+	config.AppConfig.LiveForTest().Distributed.SyncBindHost = "127.0.0.1"
+	config.AppConfig.LiveForTest().Distributed.SyncPort = ":19090"
 
 	info, err := svc.NodeInfo()
 	if err != nil {
@@ -520,7 +520,7 @@ func TestNodeInfoIncludesDiscoveryFields(t *testing.T) {
 		t.Fatalf("fingerprint = %q, want %q", got, info.Fingerprint)
 	}
 
-	config.AppConfig.Live.Distributed.Transport = "tls"
+	config.AppConfig.LiveForTest().Distributed.Transport = "tls"
 	info, err = svc.NodeInfo()
 	if err != nil {
 		t.Fatalf("TLS NodeInfo: %v", err)
@@ -539,8 +539,8 @@ func TestApplyConfigEventPreservesLocalDistributedIdentity(t *testing.T) {
 		t.Fatalf("GenerateKeyPair: %v", err)
 	}
 	svc := newTestService(t, "node-a", priv, nil)
-	config.AppConfig.Live.DefaultTTL = 3600
-	config.AppConfig.Live.Distributed.NodeID = "node-a"
+	config.AppConfig.LiveForTest().DefaultTTL = 3600
+	config.AppConfig.LiveForTest().Distributed.NodeID = "node-a"
 
 	value, _ := json.Marshal(config.LiveConfig{
 		DefaultTTL: 600,
@@ -1011,7 +1011,7 @@ func TestApplyConfigEventGatesAuthOnAuthSync(t *testing.T) {
 	}
 
 	// Default (auth_sync unset) replicates the auth block.
-	config.AppConfig.Live.Distributed.AuthSync = nil
+	config.AppConfig.LiveForTest().Distributed.AuthSync = nil
 	if err := svc.applyConfigEvent(authEvent); err != nil {
 		t.Fatalf("applyConfigEvent (default): %v", err)
 	}
@@ -1020,9 +1020,9 @@ func TestApplyConfigEventGatesAuthOnAuthSync(t *testing.T) {
 	}
 
 	// Opting out keeps the local auth untouched by peer events.
-	config.AppConfig.Live.Auth.XAuthKey = "local-only"
+	config.AppConfig.LiveForTest().Auth.XAuthKey = "local-only"
 	off := false
-	config.AppConfig.Live.Distributed.AuthSync = &off
+	config.AppConfig.LiveForTest().Distributed.AuthSync = &off
 	if err := svc.applyConfigEvent(authEvent); err != nil {
 		t.Fatalf("applyConfigEvent (auth_sync off): %v", err)
 	}
@@ -1038,13 +1038,13 @@ func newTestService(t *testing.T, nodeID, privateKey string, peerKeys map[string
 		t.Fatalf("mock init: %v", err)
 	}
 	storage.Backend = mock
-	config.AppConfig.Live = config.DefaultLiveConfig
-	config.AppConfig.Live.Mode = "distributed"
-	config.AppConfig.Live.DNSSECEnabled = false
-	config.AppConfig.Live.Distributed.NodeID = nodeID
-	config.AppConfig.Live.Distributed.Peers = ""
-	config.AppConfig.Live.Distributed.PrivateKey = privateKey
-	config.AppConfig.Live.Distributed.PeerPublicKeys = peerKeys
+	config.AppConfig.SetLive(config.DefaultLiveConfig)
+	config.AppConfig.LiveForTest().Mode = "distributed"
+	config.AppConfig.LiveForTest().DNSSECEnabled = false
+	config.AppConfig.LiveForTest().Distributed.NodeID = nodeID
+	config.AppConfig.LiveForTest().Distributed.Peers = ""
+	config.AppConfig.LiveForTest().Distributed.PrivateKey = privateKey
+	config.AppConfig.LiveForTest().Distributed.PeerPublicKeys = peerKeys
 
 	mem, err := memory.NewZoneStore(mock)
 	if err != nil {
