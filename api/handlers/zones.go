@@ -624,6 +624,14 @@ func publishDistributedUpsert(zoneName, rrtypeStr, name string, payload map[stri
 	if mem == nil {
 		return fmt.Errorf("memory store is not initialized")
 	}
+	// Storage and Merkle keys use the FQDN-sanitized zone (trailing dot), but the
+	// HTTP layer hands us the raw URL segment (no trailing dot). Canonicalize
+	// before touching the store or emitting the event, otherwise the read-back
+	// misses ("stored record not found after add") and the replicated event is
+	// keyed under a zone that peers store/tombstone inconsistently.
+	if sz, err := internal.SanitizeFQDN(zoneName); err == nil {
+		zoneName = sz
+	}
 	recordName := canonicalRecordName(zoneName, rrtypeStr, name)
 	if strings.EqualFold(rrtypeStr, "RRSIG") {
 		covered, _ := payload["type_covered"].(string)
@@ -642,6 +650,11 @@ func publishDistributedUpsert(zoneName, rrtypeStr, name string, payload map[stri
 func publishDistributedDelete(zoneName, rrtypeStr, name string) error {
 	if distributed.Default == nil || !distributed.Enabled() {
 		return nil
+	}
+	// Match the storage/Merkle zone key (FQDN) so the delete tombstone lines up
+	// with the record it removes; otherwise Merkle anti-entropy resurrects it.
+	if sz, err := internal.SanitizeFQDN(zoneName); err == nil {
+		zoneName = sz
 	}
 	return distributed.Default.PublishDelete(zoneName, strings.ToUpper(rrtypeStr), canonicalRecordName(zoneName, rrtypeStr, name))
 }

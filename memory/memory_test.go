@@ -224,3 +224,37 @@ func newMemoryTestStore(t *testing.T) (*InMemoryZoneStore, string) {
 	}
 	return store, "example.test."
 }
+
+// TestGetRecordBridgesTrailingDot is a regression test for issue #53. Records are
+// stored under the FQDN-sanitized zone key ("example.test."), but the distributed
+// publish path looked them up with the raw URL zone ("example.test"), and
+// GetRecord's fuzzy match only bridged case, not the trailing dot. The miss
+// produced a spurious "stored record not found after add" and left delete
+// tombstones keyed wrong, so anti-entropy resurrected deleted records.
+func TestGetRecordBridgesTrailingDot(t *testing.T) {
+	store, err := NewZoneStore(setupMemoryStoreBackend(t))
+	if err != nil {
+		t.Fatalf("NewZoneStore: %v", err)
+	}
+	// Stored under the FQDN zone key, exactly as the rtypes Add path does.
+	if err := store.AddRecord("example.test.", "TXT", "sel._domainkey",
+		map[string]any{"text": "v=DKIM1", "ttl": float64(3600)}); err != nil {
+		t.Fatalf("AddRecord: %v", err)
+	}
+
+	// Looking it up with the raw (non-FQDN) zone the HTTP handler passes must hit.
+	zoneKey, _, rec, ok := store.GetRecord("example.test", "TXT", "sel._domainkey")
+	if !ok || rec == nil {
+		t.Fatalf("GetRecord with non-FQDN zone missed the record (the #53 bug)")
+	}
+	// And it must report the canonical stored zone key, so replicated events are
+	// keyed consistently with storage/Merkle.
+	if zoneKey != "example.test." {
+		t.Errorf("expected canonical zone key %q, got %q", "example.test.", zoneKey)
+	}
+
+	// The FQDN form must keep working too.
+	if _, _, _, ok := store.GetRecord("example.test.", "TXT", "sel._domainkey"); !ok {
+		t.Errorf("GetRecord with FQDN zone should still resolve")
+	}
+}

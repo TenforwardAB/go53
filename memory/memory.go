@@ -227,7 +227,10 @@ func (z *InMemoryZoneStore) GetRecord(zone, rtype, name string) (string, string,
 	zoneMap, ok := zones[zone]
 	if !ok {
 		for candidate, records := range zones {
-			if strings.EqualFold(candidate, zone) {
+			// Match case-insensitively and bridge a missing/extra trailing dot,
+			// so a caller passing "example.com" resolves the zone stored as the
+			// FQDN "example.com." (and vice versa).
+			if strings.EqualFold(candidate, zone) || strings.EqualFold(dns.Fqdn(candidate), dns.Fqdn(zone)) {
 				zone = candidate
 				zoneMap = records
 				ok = true
