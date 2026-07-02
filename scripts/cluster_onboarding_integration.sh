@@ -235,6 +235,56 @@ wait_for_record() {
 	fail "$socket did not receive $rrtype $name in $zone"
 }
 
+delete_record() {
+	local socket="$1"
+	local zone="$2"
+	local rrtype="$3"
+	local name="$4"
+	ctl "$socket" records delete "$zone" "$rrtype" "$name" >/dev/null
+}
+
+wait_for_record_absent() {
+	local socket="$1"
+	local zone="$2"
+	local rrtype="$3"
+	local name="$4"
+	local deadline=$((SECONDS + 60))
+	while ((SECONDS < deadline)); do
+		if ! record_exists "$socket" "$zone" "$rrtype" "$name"; then
+			return 0
+		fi
+		sleep 0.5
+	done
+	fail "$socket still has $rrtype $name in $zone after delete"
+}
+
+assert_record_absent() {
+	local socket="$1"
+	local zone="$2"
+	local rrtype="$3"
+	local name="$4"
+	if record_exists "$socket" "$zone" "$rrtype" "$name"; then
+		fail "$socket unexpectedly has $rrtype $name in $zone (resurrected?)"
+	fi
+}
+
+wait_for_dns_gone() {
+	local port="$1"
+	local name="$2"
+	local rrtype="$3"
+	local pattern="$4"
+	local deadline=$((SECONDS + 60))
+	local out=""
+	while ((SECONDS < deadline)); do
+		out="$(dig @"$LOCAL_HOST" -p "$port" "$name" "$rrtype" +time=1 +tries=1 +short 2>/dev/null || true)"
+		if ! grep -Eq "$pattern" <<<"$out"; then
+			return 0
+		fi
+		sleep 0.5
+	done
+	fail "DNS ${LOCAL_HOST}:${port} still answers $rrtype $name with $pattern after delete; output: $out"
+}
+
 wait_for_dns_answer() {
 	local port="$1"
 	local name="$2"
@@ -339,6 +389,51 @@ add_live_cluster_record() {
 	wait_for_record "$NODE_C_SOCKET" "$zone" A "after-join.$zone"
 	wait_for_dns_answer "$NODE_B_DNS_PORT" "after-join.$zone" A "192\\.0\\.2\\.55"
 	wait_for_dns_answer "$NODE_C_DNS_PORT" "after-join.$zone" A "192\\.0\\.2\\.55"
+}
+
+# Regression guard for issue #53. Adding and deleting a single record must
+# converge across the whole cluster, and it must work when the zone is supplied
+# WITHOUT a trailing dot — the raw form the HTTP layer receives. Before the fix a
+# non-FQDN zone made the distributed upsert return "stored record not found after
+# add" and left the delete tombstone keyed under the wrong zone, so Merkle
+# anti-entropy resurrected the deleted record.
+record_add_delete_convergence_and_verify() {
+	local zone_fqdn="$BOOTSTRAP_ZONE"      # bootstrap-onboarding.test.
+	local zone_raw="${BOOTSTRAP_ZONE%.}"   # bootstrap-onboarding.test  (no dot -> reproduces #53)
+	local name="sel._domainkey"
+	local fqdn="${name}.${zone_fqdn}"      # sel._domainkey.bootstrap-onboarding.test.
+
+	log "#53: adding TXT via a NON-FQDN zone on node-a (must not fail with 'not found after add')"
+	add_record "$NODE_A_SOCKET" "$zone_raw" TXT '{"name":"sel._domainkey","text":"v=DKIM1; p=convergencetest","ttl":300}'
+
+	log "#53: verifying the record replicates to every node (admin API + DNS)"
+	local socket port
+	for socket in "$NODE_A_SOCKET" "$NODE_B_SOCKET" "$NODE_C_SOCKET"; do
+		wait_for_record "$socket" "$zone_fqdn" TXT "$fqdn"
+	done
+	for port in "$NODE_A_DNS_PORT" "$NODE_B_DNS_PORT" "$NODE_C_DNS_PORT"; do
+		wait_for_dns_answer "$port" "$fqdn" TXT "DKIM1"
+	done
+
+	log "#53: deleting the record on node-a via the non-FQDN zone (delete needs the FQDN name)"
+	delete_record "$NODE_A_SOCKET" "$zone_raw" TXT "$fqdn"
+
+	log "#53: verifying cluster-wide removal (admin API + DNS)"
+	for socket in "$NODE_A_SOCKET" "$NODE_B_SOCKET" "$NODE_C_SOCKET"; do
+		wait_for_record_absent "$socket" "$zone_fqdn" TXT "$fqdn"
+	done
+	for port in "$NODE_A_DNS_PORT" "$NODE_B_DNS_PORT" "$NODE_C_DNS_PORT"; do
+		wait_for_dns_gone "$port" "$fqdn" TXT "DKIM1"
+	done
+
+	# Let anti-entropy run several resync cycles (resync_interval_s=2) and confirm
+	# the record does NOT come back on any node — the core #53 regression guard.
+	log "#53: verifying the deleted record does not resurrect via anti-entropy"
+	sleep 6
+	for socket in "$NODE_A_SOCKET" "$NODE_B_SOCKET" "$NODE_C_SOCKET"; do
+		assert_record_absent "$socket" "$zone_fqdn" TXT "$fqdn"
+	done
+	log "#53: record add/delete convergence passed"
 }
 
 assert_pending_count() {
@@ -561,6 +656,8 @@ main() {
 	[[ -n "$key3" && "$key3" != "$key2" ]] || fail "node-a did not rotate x-auth-key again"
 	wait_for_xauth_key "$NODE_B_SOCKET" "$key3"
 	wait_for_xauth_key "$NODE_C_SOCKET" "$key3"
+
+	record_add_delete_convergence_and_verify
 
 	delete_bootstrap_zone_and_verify
 
