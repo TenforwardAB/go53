@@ -1,3 +1,16 @@
+## 0.79.1 (July 02, 2026)
+  - test(e2e): cluster add/delete record convergence guard for #53
+  - fix(distributed): canonicalize zone key so events/tombstones match storage
+  - Merge branch 'main' into fix/txt-spf-chunk-serve-path
+  - Merge branch 'main' of github.com:TenforwardAB/go53
+  - fix(serve): chunk long TXT/SPF rdata into ≤255-byte character-strings
+  - perf(config): make GetLive lock-free via atomic.Pointer snapshot (#45)
+  - docs: refresh roadmap from project board
+  - Issue42 (#51)
+  - perf(dns): move hot-path query logging behind log levels (#42)
+  -     docs(openapi): align MX payload naming with RFC and clarify record endpoints
+  - docs: refresh roadmap from project board
+
 ## 0.79.0 (June 23, 2026)
   - Backup/restore feature: WAL DNSSEC coverage, retention watermark, restore hardening (#48)
   - fix(roadmap): drop volatile timestamp so refresh only commits on real changes
