@@ -12,8 +12,26 @@ import (
 
 	"go53/storage"
 
+	"github.com/TenforwardAB/slog"
 	"github.com/joho/godotenv"
 )
+
+// ApplyLogLevel sets the global slog level from a config value. Unknown values
+// are ignored (slog.SetLevel panics on an invalid level) so a typo cannot crash
+// startup or a live config update; an empty string keeps the current level.
+// Called on every live-config commit so log_level changes take effect without a
+// restart.
+func ApplyLogLevel(level string) {
+	switch level {
+	case "debug", "info", "notice", "warn", "warning",
+		"error", "crit", "critical", "alert", "emerg", "emergency":
+		slog.SetLevel(level)
+	case "":
+		// keep current level
+	default:
+		slog.Warn("ignoring unknown log_level %q; keeping current level", level)
+	}
+}
 
 var xAuthKeyRe = regexp.MustCompile(`^[A-Za-z0-9]{48,}$`)
 
@@ -373,6 +391,7 @@ func (cm *ConfigManager) UpdateLive(newConfig LiveConfig) {
 	cm.Live = newConfig
 	_ = cm.persistLiveConfigUnlocked(cm.Live)
 	cm.mu.Unlock()
+	ApplyLogLevel(newConfig.LogLevel)
 }
 
 func (cm *ConfigManager) MergeUpdateLive(partial LiveConfig) {
@@ -386,6 +405,7 @@ func (cm *ConfigManager) MergeUpdateLive(partial LiveConfig) {
 	if err := cm.persistLiveConfigUnlocked(toPersist); err != nil {
 		log.Println("MergeUpdateLive: failed to persist:", err)
 	}
+	ApplyLogLevel(toPersist.LogLevel)
 }
 
 // MergeUpdateLiveJSON overlays a partial config JSON document onto the current live
@@ -412,6 +432,7 @@ func (cm *ConfigManager) MergeUpdateLiveJSON(raw []byte) error {
 		log.Println("MergeUpdateLiveJSON: failed to persist:", err)
 		return err
 	}
+	ApplyLogLevel(toPersist.LogLevel)
 	return nil
 }
 
