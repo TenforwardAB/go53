@@ -1,6 +1,7 @@
 package rtypes
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/miekg/dns"
@@ -119,5 +120,50 @@ func TestTXTRecordDelete_NonExisting(t *testing.T) {
 	err := rr.Delete("nonexistent.go53.test.", "some text")
 	if err != nil {
 		t.Errorf("expected no error for delete on missing record, got: %v", err)
+	}
+}
+
+// TestTXTRecordLongValueChunked is a regression test for the bug where TXT rdata
+// longer than 255 bytes (e.g. a 2048-bit DKIM key) was emitted as a single
+// character-string on the serve path. That fails to pack on the wire, so go53
+// dropped the query and resolvers reported SERVFAIL. The answer must be split
+// into ≤255-byte character-strings that concatenate back to the original value.
+func TestTXTRecordLongValueChunked(t *testing.T) {
+	zone := "go53.test"
+	name := "jul2026._domainkey"
+	// 2048-bit DKIM public key ~= 400+ byte rdata, well over the 255 limit.
+	long := "v=DKIM1;k=rsa;p=" + strings.Repeat("A", 400)
+	fqdn := name + "." + zone + "."
+
+	rr, _ := Get(dns.TypeTXT)
+	if err := rr.Add(zone, name, map[string]interface{}{"text": long}, nil); err != nil {
+		t.Fatalf("Add long TXT: %v", err)
+	}
+
+	results, ok := rr.Lookup(fqdn)
+	if !ok || len(results) == 0 {
+		t.Fatalf("Lookup long TXT returned nothing")
+	}
+	txt := results[0].(*dns.TXT)
+
+	if len(txt.Txt) < 2 {
+		t.Errorf("expected long value split into multiple character-strings, got %d", len(txt.Txt))
+	}
+	for i, s := range txt.Txt {
+		if len(s) > 255 {
+			t.Errorf("character-string %d is %d bytes, exceeds the 255-byte limit", i, len(s))
+		}
+	}
+	if got := strings.Join(txt.Txt, ""); got != long {
+		t.Errorf("concatenated chunks != original\n got %q\nwant %q", got, long)
+	}
+
+	// The actual regression: the RR must pack onto the wire. A single >255-byte
+	// character-string makes Pack fail, which is exactly what dropped queries.
+	msg := new(dns.Msg)
+	msg.SetQuestion(fqdn, dns.TypeTXT)
+	msg.Answer = results
+	if _, err := msg.Pack(); err != nil {
+		t.Fatalf("packing long TXT answer failed (the original bug): %v", err)
 	}
 }

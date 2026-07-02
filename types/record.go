@@ -48,8 +48,9 @@ type NSRecord struct {
 }
 
 type TXTRecord struct {
-	Text string `json:"text"`
-	TTL  uint32 `json:"ttl"`
+	Text   string   `json:"text"`
+	TTL    uint32   `json:"ttl"`
+	Chunks []string `json:"-"`
 }
 
 type SRVRecord struct {
@@ -182,6 +183,9 @@ type NAPTRRecord struct {
 type SPFRecord struct {
 	Text string `json:"text"`
 	TTL  uint32 `json:"ttl"`
+	// Chunks mirrors TXTRecord.Chunks: Text split into ≤255-byte
+	// character-strings, precomputed on write, not persisted.
+	Chunks []string `json:"-"`
 }
 
 type HTTPSRecord struct {

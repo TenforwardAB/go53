@@ -3,9 +3,10 @@ package rtypes
 import (
 	"errors"
 	"fmt"
-	"github.com/miekg/dns"
 	"go53/internal"
 	"go53/types"
+
+	"github.com/miekg/dns"
 )
 
 type TXTRecord struct{}
@@ -70,7 +71,7 @@ func (TXTRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 		}
 	}
 
-	currentList = append(currentList, types.TXTRecord{Text: text, TTL: TTL})
+	currentList = append(currentList, types.TXTRecord{Text: text, TTL: TTL, Chunks: internal.ChunkTXT(text)})
 	return memStore.AddRecord(sanitizedZone, string(types.TypeTXT), key, currentList)
 }
 
@@ -115,6 +116,10 @@ func (TXTRecord) Lookup(host string) ([]dns.RR, bool) {
 
 	var results []dns.RR
 	for _, rec := range recs {
+		chunks := rec.Chunks
+		if len(chunks) == 0 {
+			chunks = internal.ChunkTXT(rec.Text)
+		}
 		results = append(results, &dns.TXT{
 			Hdr: dns.RR_Header{
 				Name:   host,
@@ -122,7 +127,7 @@ func (TXTRecord) Lookup(host string) ([]dns.RR, bool) {
 				Class:  dns.ClassINET,
 				Ttl:    rec.TTL,
 			},
-			Txt: []string{rec.Text},
+			Txt: chunks,
 		})
 	}
 

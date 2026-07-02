@@ -36,6 +36,14 @@ func chunkTXT(s string) []string {
 	return out
 }
 
+// ChunkTXT is the exported entry point for chunkTXT. The serve path
+// (zone/rtypes) must split long TXT/SPF rdata identically to the zone-build and
+// DNSSEC-signing paths, otherwise long records fail to pack (query dropped) or
+// their signatures fail to validate. Both sides call this one implementation.
+func ChunkTXT(s string) []string {
+	return chunkTXT(s)
+}
+
 var RRBuilders = map[string]RRBuilder{
 	"A": func(name string, data any) []dns.RR {
 		var rrs []dns.RR

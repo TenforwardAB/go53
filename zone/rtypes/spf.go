@@ -21,9 +21,10 @@ package rtypes
 import (
 	"errors"
 	"fmt"
-	"github.com/miekg/dns"
 	"go53/internal"
 	"go53/types"
+
+	"github.com/miekg/dns"
 )
 
 type SPFRecord struct{}
@@ -58,8 +59,9 @@ func (SPFRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 	}
 
 	rec := types.SPFRecord{
-		Text: text,
-		TTL:  TTL,
+		Text:   text,
+		TTL:    TTL,
+		Chunks: internal.ChunkTXT(text),
 	}
 	return memStore.AddRecord(sanitizedZone, string(types.TypeSPF), name, rec)
 }
@@ -102,6 +104,11 @@ func (SPFRecord) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
+	chunks := rec.Chunks
+	if len(chunks) == 0 {
+		chunks = internal.ChunkTXT(rec.Text)
+	}
+
 	return []dns.RR{
 		&dns.SPF{
 			Hdr: dns.RR_Header{
@@ -110,7 +117,7 @@ func (SPFRecord) Lookup(host string) ([]dns.RR, bool) {
 				Class:  dns.ClassINET,
 				Ttl:    rec.TTL,
 			},
-			Txt: []string{rec.Text},
+			Txt: chunks,
 		},
 	}, true
 }
