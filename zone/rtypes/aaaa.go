@@ -103,6 +103,16 @@ func (AAAARecord) Lookup(host string) ([]dns.RR, bool) {
 	switch v := val.(type) {
 	case []types.AAAARecord:
 		recs = v
+	case []map[string]interface{}:
+		for _, obj := range v {
+			if ipStr, ok := obj["ip"].(string); ok {
+				ttl := uint32(3600)
+				if t, ok := obj["ttl"].(float64); ok {
+					ttl = uint32(t)
+				}
+				recs = append(recs, types.AAAARecord{IP: ipStr, TTL: ttl})
+			}
+		}
 	case []interface{}:
 		for _, item := range v {
 			if obj, ok := item.(map[string]interface{}); ok {
