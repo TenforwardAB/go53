@@ -93,7 +93,7 @@ func (ARecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 	for _, r := range currentList {
 		listToStore = append(listToStore, map[string]interface{}{
 			"ip":  r.IP,
-			"ttl": r.TTL,
+			"ttl": float64(r.TTL),
 		})
 	}
 

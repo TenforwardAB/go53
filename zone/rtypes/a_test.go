@@ -49,3 +49,24 @@ func TestARecordLifecycle(t *testing.T) {
 		t.Errorf("expected no A record after delete")
 	}
 }
+
+func TestARecordServesConfiguredTTLImmediately(t *testing.T) {
+	zone := "attlfresh.test"
+	ttl := uint32(60)
+
+	rr, ok := Get(dns.TypeA)
+	if !ok {
+		t.Fatalf("A record type not found")
+	}
+	if err := rr.Add(zone, "www", map[string]interface{}{"ip": "192.0.2.60"}, &ttl); err != nil {
+		t.Fatalf("failed to add A record: %v", err)
+	}
+
+	results, ok := rr.Lookup("www." + zone + ".")
+	if !ok || len(results) != 1 {
+		t.Fatalf("expected 1 A record, got %#v ok=%v", results, ok)
+	}
+	if got := results[0].Header().Ttl; got != 60 {
+		t.Fatalf("expected configured TTL 60 to be served immediately after add, got %d", got)
+	}
+}
