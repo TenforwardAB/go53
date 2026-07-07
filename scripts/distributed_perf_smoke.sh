@@ -142,14 +142,31 @@ start_node() {
 	local dns_port="$3"
 	local api_port="$4"
 	local log_file="${WORK_DIR}/${name}.log"
+	local sock="${WORK_DIR}/${name}-admin.sock"
 
+	# Clear any socket left by a prior instance so the connectivity probe below
+	# only succeeds once THIS process has rebound its listener.
+	rm -f "$sock"
 	BADGER_DIR="$db" \
 	BIND_HOST="$LOCAL_HOST" \
 	DNS_PORT=":${dns_port}" \
 	API_PORT=":${api_port}" \
 	STORAGE_BACKEND="badger" \
+	ADMIN_SOCKET="$sock" \
 	"$SERVER_BIN" >"$log_file" 2>&1 &
 	PIDS+=("$!")
+	# The default auth mode ("disabled") closes the TCP API; open it to "none"
+	# through the trusted admin socket so the rest of the run can use HTTP.
+	local sock_deadline=$((SECONDS + 20))
+	until curl -fsS -m 2 --unix-socket "$sock" http://localhost/api/config >/dev/null 2>&1; do
+		if (( SECONDS >= sock_deadline )); then
+			printf 'timeout waiting for admin socket %s\n' "$sock" >&2
+			return 1
+		fi
+		sleep 0.2
+	done
+	curl -fsS -m 5 --unix-socket "$sock" -X PATCH -H 'Content-Type: application/json' \
+		-d '{"auth":{"mode":"none"}}' http://localhost/api/config >/dev/null
 	wait_http "http://${LOCAL_HOST}:${api_port}/api/config"
 }
 
@@ -478,7 +495,7 @@ else
 	start_node_b
 
 	log "creating one-use invite and joining node-b"
-	invite_token="$("$CTL_BIN" cluster invite --api "$NODE_A_API" --usage-count 1 --ttl 15m --sync-bind-host "$LOCAL_HOST" --resync-interval-s 5)"
+	invite_token="$("$CTL_BIN" cluster invite --api "$NODE_A_API" --usage-count 1 --ttl 15m --join-node-id node-b --sync-bind-host "$LOCAL_HOST" --resync-interval-s 5 --auto-accept)"
 	"$CTL_BIN" cluster join --token "$invite_token" --api "$NODE_B_API" --sync-endpoint "$NODE_B_SYNC"
 
 	log "restarting both nodes after join config"
