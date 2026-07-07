@@ -31,7 +31,10 @@ const (
 	TypeURI       RecordType = "URI"
 	TypeAPL       RecordType = "APL"
 	TypeDNAME     RecordType = "DNAME"
+	TypeALIAS     RecordType = "ALIAS"
 )
+
+const AliasTypeCode uint16 = 65280
 
 type ARecord struct {
 	IP  string `json:"ip"`
@@ -84,6 +87,11 @@ type SOARecord struct {
 }
 
 type CNAMERecord struct {
+	Target string `json:"target"`
+	TTL    uint32 `json:"ttl"`
+}
+
+type ALIASRecord struct {
 	Target string `json:"target"`
 	TTL    uint32 `json:"ttl"`
 }

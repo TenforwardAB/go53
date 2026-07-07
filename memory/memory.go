@@ -498,6 +498,9 @@ func (z *InMemoryZoneStore) GetZone(zone string) ([]dns.RR, error) {
 	var allRRs []dns.RR
 
 	for rtype, namesMap := range zoneMap {
+		if rtype == string(types.TypeALIAS) {
+			continue
+		}
 		builder, ok := internal.RRBuilders[rtype]
 		if !ok {
 			slog.Warn("[GetZone] no builder for rtype %s", rtype)
@@ -937,6 +940,10 @@ func (z *InMemoryZoneStore) maybeSignRRSet(zone, rtype, name string) {
 		return
 	} else if config.AppConfig.GetLive().Mode == "secondary" {
 		slog.Warn("[maybeSignRRSet] Is secondary, skipping signing, done in primary only")
+		return
+	}
+
+	if rtype == string(types.TypeALIAS) {
 		return
 	}
 

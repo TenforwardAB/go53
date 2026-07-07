@@ -86,6 +86,7 @@ func main() {
 	go dnsutils.ProcessFetchQueue()
 	// Secondary-mode startup + periodic AXFR refresh. No-op in primary/distributed mode.
 	dnsutils.StartSecondaryRefresh(ctx)
+	dnsutils.StartAliasFlattener(ctx)
 	distributed.Start(ctx)
 
 	go func() {

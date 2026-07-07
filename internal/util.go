@@ -48,7 +48,11 @@ func SplitName(name string) (zone, host string, ok bool) {
 }
 
 func RRTypeStringToUint16(s string) (uint16, error) {
-	t, ok := dns.StringToType[strings.ToUpper(s)]
+	upper := strings.ToUpper(s)
+	if upper == string(types.TypeALIAS) {
+		return types.AliasTypeCode, nil
+	}
+	t, ok := dns.StringToType[upper]
 	if !ok || t == 0 {
 		return 0, fmt.Errorf("unknown RR type: %s", s)
 	}
