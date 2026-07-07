@@ -1,3 +1,11 @@
+## 0.79.2 (July 07, 2026)
+  - test(upgrade): Badger data survives a release upgrade in a pod
+  - test(distributed): unblock perf smoke under socket-gated auth
+  - test(distributed): ALIAS flattening end-to-end test on a two-node cluster
+  - fix(rtypes): serve AAAA records stored in the map shape
+  - fix(rtypes): serve configured A-record TTL immediately after add
+  - feat(rtypes): ALIAS pseudo-record with multi-master A/AAAA flattening
+
 ## 0.79.1 (July 02, 2026)
   - test(e2e): cluster add/delete record convergence guard for #53
   - fix(distributed): canonicalize zone key so events/tombstones match storage
