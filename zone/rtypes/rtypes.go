@@ -92,6 +92,8 @@ func GetRegistry() map[uint16]RRType {
 // "www.go53.test." → "www". Multi-label short labels like "_sip._tcp" or
 // "5.4.3.2.in-addr.arpa" (no trailing dot) pass through unchanged, as does "@".
 func normalizeRecordKey(sanitizedZone, name string) string {
+	// Folding name first makes the zone-suffix strip case-insensitive.
+	name = strings.ToLower(name)
 	if strings.HasSuffix(name, ".") {
 		stripped := strings.TrimSuffix(name, sanitizedZone)
 		stripped = strings.TrimSuffix(stripped, ".")

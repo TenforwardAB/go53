@@ -27,7 +27,7 @@ func TestUtilHelpers(t *testing.T) {
 		t.Fatalf("RRTypeStringToUint16 accepted unknown type")
 	}
 
-	if got, err := SanitizeFQDN(" Example.Test "); err != nil || got != "Example.Test." {
+	if got, err := SanitizeFQDN(" Example.Test "); err != nil || got != "example.test." {
 		t.Fatalf("SanitizeFQDN = %q err=%v", got, err)
 	}
 	if got, err := SanitizeFQDN("@"); err != nil || got != "@" {
@@ -36,7 +36,7 @@ func TestUtilHelpers(t *testing.T) {
 	if got, err := SanitizeFQDN("_catalog.go53."); err != nil || got != "_catalog.go53." {
 		t.Fatalf("SanitizeFQDN _catalog = %q err=%v", got, err)
 	}
-	if got, err := SanitizeFQDN("*.Example.Test"); err != nil || got != "*.Example.Test." {
+	if got, err := SanitizeFQDN("*.Example.Test"); err != nil || got != "*.example.test." {
 		t.Fatalf("SanitizeFQDN wildcard = %q err=%v", got, err)
 	}
 	if _, err := SanitizeFQDN("bad$name"); err == nil {

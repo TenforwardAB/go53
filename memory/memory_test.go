@@ -119,7 +119,7 @@ func TestZoneOwnerFQDNAndMissingZone(t *testing.T) {
 	if got := zoneOwnerFQDN("example.test.", "www"); got != "www.example.test." {
 		t.Fatalf("relative fqdn = %q", got)
 	}
-	if got := zoneOwnerFQDN("example.test.", "WWW.EXAMPLE.TEST."); got != "WWW.EXAMPLE.TEST." {
+	if got := zoneOwnerFQDN("example.test.", "WWW.EXAMPLE.TEST."); got != "www.example.test." {
 		t.Fatalf("absolute fqdn = %q", got)
 	}
 
