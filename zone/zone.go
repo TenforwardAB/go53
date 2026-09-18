@@ -20,7 +20,6 @@ package zone
 import (
 	"fmt"
 	"github.com/miekg/dns"
-	"strings"
 
 	"go53/zone/rtypes"
 	"go53/zonereader"
@@ -112,20 +111,11 @@ func AuthoritativeZoneForName(name string) (string, bool) {
 	if mem == nil {
 		return "", false
 	}
-	qname := strings.ToLower(dns.Fqdn(name))
-	var best string
-	for _, zoneName := range mem.ZoneNamesSnapshot() {
-		z := strings.ToLower(dns.Fqdn(zoneName))
-		if qname == z || strings.HasSuffix(qname, "."+z) {
-			if len(z) > len(best) {
-				best = z
-			}
-		}
-	}
-	if best == "" {
+	zoneName, _, ok := mem.AuthoritativeNameParts(name)
+	if !ok {
 		return "", false
 	}
-	return best, true
+	return zoneName, true
 }
 
 func EnsureSignedRRSet(rrs []dns.RR) ([]dns.RR, error) {

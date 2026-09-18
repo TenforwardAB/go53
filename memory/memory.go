@@ -82,12 +82,46 @@ func (z *InMemoryZoneStore) loadFromStorage() error {
 			log.Printf("failed to decode zone %s: %v", zone, err)
 			continue
 		}
-		z.cache["zones"][zone] = decoded
+		// Lookups rely on exact key matches, so legacy mixed-case keys must
+		// be migrated or they become unreachable.
+		canonical := canonZone(zone)
+		keysChanged := canonicalizeZoneData(decoded)
+		if existing, ok := z.cache["zones"][canonical]; ok {
+			slog.Warn("[memory] merging duplicate zone key %q into canonical zone %q", zone, canonical)
+			for rtype, namesMap := range decoded {
+				if _, ok := existing[rtype]; !ok {
+					existing[rtype] = namesMap
+					continue
+				}
+				for name, value := range namesMap {
+					if _, ok := existing[rtype][name]; !ok {
+						existing[rtype][name] = value
+					}
+				}
+			}
+			keysChanged = true
+		} else {
+			z.cache["zones"][canonical] = decoded
+		}
+		persisted := false
 		if dnssecPrimary {
-			z.rebuildNSECChainLocked(zone)
-			z.rebuildNSEC3ChainLocked(zone)
-			if err := z.persistLocked(zone); err != nil {
-				log.Printf("failed to persist regenerated denial chains for %s: %v", zone, err)
+			z.rebuildNSECChainLocked(canonical)
+			z.rebuildNSEC3ChainLocked(canonical)
+			if err := z.persistLocked(canonical); err != nil {
+				log.Printf("failed to persist regenerated denial chains for %s: %v", canonical, err)
+			} else {
+				persisted = true
+			}
+		}
+		if (keysChanged || canonical != zone) && !persisted {
+			if err := z.persistLocked(canonical); err != nil {
+				log.Printf("failed to persist migrated zone %s: %v", canonical, err)
+				continue
+			}
+		}
+		if canonical != zone {
+			if err := z.storage.DeleteZone(zone); err != nil {
+				log.Printf("failed to delete legacy zone key %s after migration to %s: %v", zone, canonical, err)
 			}
 		}
 	}
@@ -122,6 +156,10 @@ func (z *InMemoryZoneStore) encodeZoneDataLocked(zone string) ([]byte, error) {
 }
 
 func (z *InMemoryZoneStore) AddRecord(zone, rtype, name string, record any) error {
+	zone = canonZone(zone)
+	if !caseSensitiveNameKeys(rtype) {
+		name = canonName(name)
+	}
 	dnssecPrimary := config.AppConfig.GetLive().DNSSECEnabled && config.AppConfig.GetLive().Mode != "secondary"
 
 	z.mu.Lock()
@@ -160,6 +198,10 @@ func (z *InMemoryZoneStore) AddRecord(zone, rtype, name string, record any) erro
 }
 
 func (z *InMemoryZoneStore) PutRecordRaw(zone, rtype, name string, record any) error {
+	zone = canonZone(zone)
+	if !caseSensitiveNameKeys(rtype) {
+		name = canonName(name)
+	}
 	dnssecPrimary := config.AppConfig.GetLive().DNSSECEnabled && config.AppConfig.GetLive().Mode != "secondary"
 
 	z.mu.Lock()
@@ -194,6 +236,10 @@ func (z *InMemoryZoneStore) PutRecordRaw(zone, rtype, name string, record any) e
 }
 
 func (z *InMemoryZoneStore) DeleteRecordRaw(zone, rtype, name string) error {
+	zone = canonZone(zone)
+	if !caseSensitiveNameKeys(rtype) {
+		name = canonName(name)
+	}
 	z.mu.Lock()
 	zones := z.cache["zones"]
 	if recType, ok := zones[zone][rtype]; ok {
@@ -221,43 +267,25 @@ func (z *InMemoryZoneStore) DeleteRecordRaw(zone, rtype, name string) error {
 }
 
 func (z *InMemoryZoneStore) GetRecord(zone, rtype, name string) (string, string, any, bool) {
+	zone = canonZone(zone)
+	if !caseSensitiveNameKeys(rtype) {
+		name = canonName(name)
+	}
 	z.mu.RLock()
 	defer z.mu.RUnlock()
-	zones := z.cache["zones"]
-	zoneMap, ok := zones[zone]
-	if !ok {
-		for candidate, records := range zones {
-			// Match case-insensitively and bridge a missing/extra trailing dot,
-			// so a caller passing "example.com" resolves the zone stored as the
-			// FQDN "example.com." (and vice versa).
-			if strings.EqualFold(candidate, zone) || strings.EqualFold(dns.Fqdn(candidate), dns.Fqdn(zone)) {
-				zone = candidate
-				zoneMap = records
-				ok = true
-				break
-			}
-		}
-	}
+	zoneMap, ok := z.cache["zones"][zone]
 	if !ok {
 		return "", "", nil, false
 	}
-
 	recType, ok := zoneMap[rtype]
 	if !ok {
 		return "", "", nil, false
 	}
 	rec, exists := recType[name]
 	if !exists {
-		for candidate, value := range recType {
-			if strings.EqualFold(candidate, name) {
-				name = candidate
-				rec = value
-				exists = true
-				break
-			}
-		}
+		return "", "", nil, false
 	}
-	return zone, rtype, rec, exists
+	return zone, rtype, rec, true
 }
 
 func (z *InMemoryZoneStore) validateRRSetMutationLocked(zone, rtype, name string, record any) error {
@@ -404,6 +432,7 @@ func ttlFromMap(m map[string]interface{}) (uint32, bool) {
 }
 
 func (z *InMemoryZoneStore) ZoneRecordsSnapshot(zone string) map[string]map[string]any {
+	zone = canonZone(zone)
 	z.mu.RLock()
 	defer z.mu.RUnlock()
 
@@ -446,32 +475,25 @@ func (z *InMemoryZoneStore) authoritativeNamePartsLocked(name string) (string, s
 		return "", "", false
 	}
 
-	qname := dns.Fqdn(name)
-	qLower := strings.ToLower(qname)
-	bestZone := ""
-	bestZoneLower := ""
+	// Zone keys are canonical, so only the query name needs folding.
+	qname := canonZone(name)
+	best := ""
 	for zoneName := range z.cache["zones"] {
-		zoneFQDN := dns.Fqdn(zoneName)
-		zoneLower := strings.ToLower(zoneFQDN)
-		if qLower == zoneLower || strings.HasSuffix(qLower, "."+zoneLower) {
-			if len(zoneLower) > len(bestZoneLower) {
-				bestZone = zoneFQDN
-				bestZoneLower = zoneLower
-			}
+		if len(zoneName) <= len(best) || !strings.HasSuffix(qname, zoneName) {
+			continue
 		}
+		if len(qname) > len(zoneName) && qname[len(qname)-len(zoneName)-1] != '.' {
+			continue
+		}
+		best = zoneName
 	}
-	if bestZone == "" {
+	if best == "" {
 		return "", "", false
 	}
-	if qLower == bestZoneLower {
-		return bestZone, "@", true
+	if len(qname) == len(best) {
+		return best, "@", true
 	}
-
-	host := qname[:len(qname)-len(bestZone)-1]
-	if host == "" {
-		host = "@"
-	}
-	return bestZone, host, true
+	return best, qname[:len(qname)-len(best)-1], true
 }
 
 func (z *InMemoryZoneStore) GetZone(zone string) ([]dns.RR, error) {
@@ -484,13 +506,11 @@ func (z *InMemoryZoneStore) GetZone(zone string) ([]dns.RR, error) {
 	defer z.mu.RUnlock()
 
 	zonesMap, ok := z.cache["zones"]
-	log.Printf("zonesMap: %v with length: %d", zonesMap, len(zonesMap))
 	if !ok {
 		return nil, errors.New("zones cache missing")
 	}
 
 	zoneMap, ok := zonesMap[sanitizedZone]
-	log.Println("zoneMap", zoneMap)
 	if !ok {
 		return nil, errors.New("zone not found")
 	}
@@ -588,6 +608,10 @@ func automaticDNSSECKeyFlowRRs(zone string) []dns.RR {
 }
 
 func (z *InMemoryZoneStore) DeleteRecord(zone, rtype, name string) error {
+	zone = canonZone(zone)
+	if !caseSensitiveNameKeys(rtype) {
+		name = canonName(name)
+	}
 	z.mu.Lock()
 	zones := z.cache["zones"]
 	if recType, ok := zones[zone][rtype]; ok {
@@ -616,6 +640,7 @@ func (z *InMemoryZoneStore) DeleteRecord(zone, rtype, name string) error {
 }
 
 func (z *InMemoryZoneStore) DeleteZone(zone string) error {
+	zone = canonZone(zone)
 	z.mu.Lock()
 	defer z.mu.Unlock()
 
@@ -793,14 +818,14 @@ func (z *InMemoryZoneStore) FindNSECProof(name string) ([]dns.RR, bool) {
 	}
 
 	for ownerName, raw := range nsecMap {
-		owner := strings.ToLower(ownerFQDN(zoneName, ownerName))
+		owner := ownerFQDN(zoneName, ownerName)
 		rec, ok := nsecRecordFromRaw(raw)
 		if !ok {
 			continue
 		}
 		next := strings.ToLower(dns.Fqdn(rec.NextDomain))
 		if owner == qname || nsecCovers(owner, next, qname) {
-			return []dns.RR{nsecRecordToDNS(ownerFQDN(zoneName, ownerName), rec)}, true
+			return []dns.RR{nsecRecordToDNS(owner, rec)}, true
 		}
 	}
 
@@ -1537,19 +1562,19 @@ func (z *InMemoryZoneStore) nsecExactLocked(zone, name string) ([]dns.RR, bool) 
 	if !ok {
 		return nil, false
 	}
-	qname := strings.ToLower(dns.Fqdn(name))
-	for ownerName, raw := range nsecMap {
-		owner := strings.ToLower(ownerFQDN(zone, ownerName))
-		if owner != qname {
-			continue
-		}
-		rec, ok := nsecRecordFromRaw(raw)
-		if !ok {
-			return nil, false
-		}
-		return []dns.RR{nsecRecordToDNS(ownerFQDN(zone, ownerName), rec)}, true
+	rel, ok := relativeOwner(zone, name)
+	if !ok {
+		return nil, false
 	}
-	return nil, false
+	raw, ok := nsecMap[rel]
+	if !ok {
+		return nil, false
+	}
+	rec, ok := nsecRecordFromRaw(raw)
+	if !ok {
+		return nil, false
+	}
+	return []dns.RR{nsecRecordToDNS(ownerFQDN(zone, rel), rec)}, true
 }
 
 func (z *InMemoryZoneStore) nsecCoveringLocked(zone, name string) ([]dns.RR, bool) {
@@ -1559,14 +1584,16 @@ func (z *InMemoryZoneStore) nsecCoveringLocked(zone, name string) ([]dns.RR, boo
 	}
 	qname := strings.ToLower(dns.Fqdn(name))
 	for ownerName, raw := range nsecMap {
-		owner := strings.ToLower(ownerFQDN(zone, ownerName))
+		// NextDomain lives inside persisted record values (not migrated),
+		// so it still gets folded defensively.
+		owner := ownerFQDN(zone, ownerName)
 		rec, ok := nsecRecordFromRaw(raw)
 		if !ok {
 			continue
 		}
 		next := strings.ToLower(dns.Fqdn(rec.NextDomain))
 		if nsecCovers(owner, next, qname) {
-			return []dns.RR{nsecRecordToDNS(ownerFQDN(zone, ownerName), rec)}, true
+			return []dns.RR{nsecRecordToDNS(owner, rec)}, true
 		}
 	}
 	return nil, false

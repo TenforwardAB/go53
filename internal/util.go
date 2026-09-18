@@ -105,7 +105,9 @@ func SanitizeFQDN(fqdn string) (string, error) {
 		return "", errors.New("FQDN contains invalid characters")
 	}
 
-	fqdn = dns.Fqdn(fqdn)
+	// DNS names are case-insensitive; canonicalize to lowercase so the store
+	// can rely on exact key matches.
+	fqdn = strings.ToLower(dns.Fqdn(fqdn))
 
 	return fqdn, nil
 }

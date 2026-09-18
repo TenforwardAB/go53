@@ -131,8 +131,11 @@ func (s *Service) merkleZoneRecords(zone string, entities []string) (map[string]
 				Entity: entity,
 				Zone:   zone,
 				RRType: strings.ToUpper(strings.TrimSpace(rrtype)),
-				Name:   strings.ToLower(strings.TrimSpace(name)),
-				Value:  value,
+				// Name is applied verbatim as the store key on the receiving
+				// node; RRSIG covered-type and NSEC3 hash keys are
+				// case-sensitive, so it must not be folded.
+				Name:  strings.TrimSpace(name),
+				Value: value,
 			}
 		}
 	}

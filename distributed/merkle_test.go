@@ -95,3 +95,29 @@ func newMerkleOnlyService(t *testing.T) *Service {
 	}
 	return &Service{store: mem, storage: backend}
 }
+
+func TestMerkleZoneRecordsPreservesCaseSensitiveNameKeys(t *testing.T) {
+	svc := newMerkleOnlyService(t)
+
+	if err := svc.store.PutRecordRaw("example.test.", "NSEC3", "P0GA1APK4C3STG52M1S4Q8AR2SVCSHRK", map[string]any{"next_hashed": "Q0GA"}); err != nil {
+		t.Fatalf("PutRecordRaw NSEC3: %v", err)
+	}
+	if err := svc.store.PutRecordRaw("example.test.", "RRSIG", "A", map[string]any{"www": []any{}}); err != nil {
+		t.Fatalf("PutRecordRaw RRSIG: %v", err)
+	}
+
+	records, err := svc.MerkleZoneRecords("example.test.", nil)
+	if err != nil {
+		t.Fatalf("MerkleZoneRecords: %v", err)
+	}
+	names := map[string]bool{}
+	for _, rec := range records {
+		names[rec.RRType+"/"+rec.Name] = true
+	}
+	if !names["NSEC3/P0GA1APK4C3STG52M1S4Q8AR2SVCSHRK"] {
+		t.Fatalf("NSEC3 hash key was folded: %#v", names)
+	}
+	if !names["RRSIG/A"] {
+		t.Fatalf("RRSIG covered-type key was folded: %#v", names)
+	}
+}
