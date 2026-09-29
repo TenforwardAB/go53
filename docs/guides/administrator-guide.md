@@ -372,7 +372,20 @@ per POST. go53 appends distinct values to the owner name internally. Use
 `GET /api/zones/{zone}/records/{rrtype}/{name}` to read one owner name and
 `DELETE /api/zones/{zone}/records/{rrtype}/{name}` to delete it. A delete request
 may include a JSON body when only one value in a multi-value RRset should be
-removed.
+removed; it removes exactly that value and leaves the rest of the RRset in
+place.
+
+**Names are case-insensitive.** Zone and owner names are stored in lower case
+and matched that way, so `WWW.Example.COM.` in a POST, a DELETE path, or a DNS
+query all reach the same record. Record *values* keep their case (TXT text, CAA
+values).
+
+| Delete request | Effect |
+|---|---|
+| `DELETE …/records/A/www.example.com.` (no body) | Removes the whole A RRset at `www` |
+| `DELETE …/records/A/www.example.com.` with `"192.0.2.10"` | Removes that one address; the others stay |
+| `DELETE …/records/MX/example.com.` with `{"host":"mail.example.com.","priority":10}` | Removes that one MX value |
+| Value not present | `2xx`, nothing changes |
 
 **Long TXT and SPF values:** pass the full value in a single `text` field. go53
 splits values longer than 255 bytes into 255-byte DNS character-strings on the
@@ -1061,6 +1074,35 @@ data should be loaded into memory at startup and persisted to storage on
 mutations. Badger remains the local persistence layer, while normal query
 handling should avoid storage reads.
 
+### Upgrades
+
+Zone data written by earlier releases is read and, where needed, migrated in
+place on the first start of the new version. Skipping releases is supported and
+is verified before each release (0.79.0, 0.79.2 and 0.80.0 straight to 0.81.0
+with DNSSEC keys and mixed-case zone names on a persistent volume).
+
+| Upgrading to | Migration on first start | Downgrade afterwards |
+|---|---|---|
+| 0.80.x | Zone and owner keys are canonicalised to lower case; legacy keys removed. | Not supported below 0.80 |
+| 0.81.x | None persisted. The owner index is derived at startup. | Supported |
+| 0.82.x (planned) | None persisted. Distributed nodes negotiate the canonical Merkle hash per peer. | Supported |
+| 0.84.x (planned) | Stored record values are rewritten in the typed format once. | Not supported below 0.84 |
+
+**Distributed clusters:** upgrade one node at a time. The only planned upgrade
+with an ordering rule is 0.84, which requires every node to already run 0.82
+or later. Watch `/api/distributed/merkle/roots` on each node after an upgrade;
+roots for the same zone should match once the node has caught up.
+
+Take a backup before upgrading (`go53ctl backup create --out FILE` or `GET /api/backup` over
+the admin socket), see [Backup and Restore](/guides/backup-and-restore/).
+
+### Query Performance
+
+Queries are answered from memory; a single core answers a positive A query in
+about 1 µs and an NXDOMAIN in about 3.6 µs (0.81, DNSSEC off, one zone). See
+[Query Path & Record Storage](/concepts/query-path-and-storage/) for the cost
+model and what changed between releases.
+
 ### Troubleshooting
 
 - If record mutations fail with `503`, check whether `mode` is set to
@@ -1080,6 +1122,10 @@ handling should avoid storage reads.
   `/api/distributed/merkle/roots`; the background sync loop should repair
   differing branches from signed events or current-record fallback for
   pre-existing data.
+- If a DELETE with a body fails with `invalid data format`, the stored RRset
+  could not be decoded and go53 refused rather than delete the whole RRset.
+  Read the RRset with `GET`, then delete it without a body and re-create the
+  values you want to keep.
 - If the TCP API returns `503`, check whether `auth.mode` is `disabled`. Use the
   local admin socket to change it.
 - If the TCP API returns `403` with `auth.mode=x-auth-key`, verify that
