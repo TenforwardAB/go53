@@ -43,7 +43,11 @@ maintainability over feature count.
 
 | Issue | Title | Theme | Status |
 |-------|-------|-------|--------|
-| [#40](https://github.com/TenforwardAB/go53/issues/40) | Enhancement: Cache pre-built RRsets to reduce query-time allocations | Performance | — |
+| [#40](https://github.com/TenforwardAB/go53/issues/40) | Enhancement: Cache pre-built RRsets to reduce query-time allocations | Performance | In Progress |
+| [#57](https://github.com/TenforwardAB/go53/issues/57) | Streamline rtype Lookup value shape handling to remove repeated type switches |  | In Progress |
+| [#59](https://github.com/TenforwardAB/go53/issues/59) | rtypes: Delete with a value wipes the whole RRset when the stored shape is unrecognised |  | — |
+| [#60](https://github.com/TenforwardAB/go53/issues/60) | internal.SanitizeFQDN compiles a regexp on every call (DNS hot path) |  | — |
+| [#62](https://github.com/TenforwardAB/go53/issues/62) | NSEC3: direct query for an NSEC3 owner never matches since #43 (qname lowercased, hash keys uppercase) |  | — |
 
 ### Release 0.82
 
@@ -52,6 +56,7 @@ maintainability over feature count.
 | Issue | Title | Theme | Status |
 |-------|-------|-------|--------|
 | [#41](https://github.com/TenforwardAB/go53/issues/41) | Enhancement: Optimize authoritative zone lookup | Performance | — |
+| [#61](https://github.com/TenforwardAB/go53/issues/61) | RRSIG: API-added signatures are stored in a shape the store cache does not read; Delete unimplemented |  | — |
 
 ### Release 0.83
 
