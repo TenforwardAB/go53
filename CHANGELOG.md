@@ -1,3 +1,7 @@
+## 0.80.0 (September 29, 2026)
+  - Issue43 Fixed (#58)
+  - docs: refresh roadmap from project board
+
 ## 0.79.2 (July 07, 2026)
   - test(upgrade): Badger data survives a release upgrade in a pod
   - test(distributed): unblock perf smoke under socket-gated auth
