@@ -23,6 +23,7 @@ import (
 	"github.com/miekg/dns"
 	"go53/internal"
 	"go53/memory"
+	"go53/recshape"
 	"go53/types"
 )
 
@@ -91,23 +92,8 @@ func (CNAMERecord) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
-	var rec types.CNAMERecord
-	switch v := val.(type) {
-	case types.CNAMERecord:
-		rec = v
-	case map[string]interface{}:
-		rec = types.CNAMERecord{}
-		if tgt, ok := v["target"].(string); ok {
-			rec.Target = tgt
-		}
-		if t, ok := v["ttl"].(float64); ok {
-			rec.TTL = uint32(t)
-		}
-	default:
-		return nil, false
-	}
-
-	if rec.Target == "" {
+	rec, ok := recshape.Single(val, recshape.CNAMERecord)
+	if !ok {
 		return nil, false
 	}
 

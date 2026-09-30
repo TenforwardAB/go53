@@ -122,6 +122,7 @@ func setupDNSSECProofStore(t *testing.T) (*InMemoryZoneStore, string) {
 		},
 	}
 	store.mu.Lock()
+	store.rebuildOwnerIndexLocked(zone) // seeded the map directly, bypassing AddRecord
 	store.rebuildNSECChainLocked(zone)
 	store.rebuildNSEC3ChainLocked(zone)
 	store.mu.Unlock()

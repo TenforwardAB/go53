@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"go53/internal"
+	"go53/recshape"
 	"go53/types"
 
 	"github.com/miekg/dns"
@@ -49,26 +50,7 @@ func (NSRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 	var current []types.NSRecord
 	_, _, existing, found := memStore.GetRecord(sanitizedZone, string(types.TypeNS), key)
 	if found {
-		switch list := existing.(type) {
-		case []types.NSRecord:
-			current = list
-		case []interface{}:
-			for _, item := range list {
-				obj, ok := item.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				ns, _ := obj["ns"].(string)
-				if ns == "" {
-					continue
-				}
-				ttl := uint32(3600)
-				if t, ok := obj["ttl"].(float64); ok {
-					ttl = uint32(t)
-				}
-				current = append(current, types.NSRecord{NS: ns, TTL: ttl})
-			}
-		}
+		current, _ = recshape.Decode(existing, recshape.NSRecord)
 	}
 
 	for _, item := range current {
@@ -77,7 +59,7 @@ func (NSRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 		}
 	}
 
-	current = append(current, types.NSRecord{
+	current = append(current[:len(current):len(current)], types.NSRecord{
 		NS:  sanitizedNS,
 		TTL: TTL,
 	})
@@ -108,25 +90,9 @@ func (NSRecord) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
-	records, ok := val.([]types.NSRecord)
+	records, ok := recshape.Decode(val, recshape.NSRecord)
 	if !ok {
-		if list, ok := val.([]interface{}); ok {
-			for _, raw := range list {
-				item, ok := raw.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				ns, _ := item["ns"].(string)
-				if ns == "" {
-					continue
-				}
-				ttl := uint32(3600)
-				if t, ok := item["ttl"].(float64); ok {
-					ttl = uint32(t)
-				}
-				records = append(records, types.NSRecord{NS: ns, TTL: ttl})
-			}
-		}
+		return nil, false
 	}
 	if len(records) == 0 {
 		return nil, false
@@ -184,22 +150,10 @@ func (NSRecord) Delete(host string, value interface{}) error {
 		return nil
 	}
 
-	var records []types.NSRecord
-	switch v := raw.(type) {
-	case []types.NSRecord:
-		records = v
-	case []interface{}:
-		for _, item := range v {
-			if obj, ok := item.(map[string]interface{}); ok {
-				if nsStr, ok := obj["ns"].(string); ok {
-					ttl := uint32(3600)
-					if t, ok := obj["ttl"].(float64); ok {
-						ttl = uint32(t)
-					}
-					records = append(records, types.NSRecord{NS: nsStr, TTL: ttl})
-				}
-			}
-		}
+	records, ok := recshape.Decode(raw, recshape.NSRecord)
+	if !ok {
+		// Unknown shape: refuse rather than fall through to deleting the key.
+		return fmt.Errorf("NSRecord Delete: invalid data format: %T", raw)
 	}
 
 	var filtered []types.NSRecord

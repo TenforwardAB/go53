@@ -7,6 +7,7 @@ import (
 	"github.com/miekg/dns"
 	"go53/config"
 	"go53/internal"
+	"go53/recshape"
 	"go53/types"
 	"strings"
 )
@@ -160,39 +161,7 @@ func (SOARecord) Type() uint16 {
 }
 
 func soaRecordFromRaw(raw interface{}) (types.SOARecord, bool) {
-	switch v := raw.(type) {
-	case types.SOARecord:
-		return v, true
-	case map[string]interface{}:
-		rec := types.SOARecord{}
-		if ns, ok := soaString(v, "ns"); ok {
-			rec.Ns = dns.Fqdn(ns)
-		}
-		if mbox, ok := soaString(v, "mbox"); ok {
-			rec.Mbox = dns.Fqdn(mbox)
-		}
-		if serial, ok := soaUint32(v, "serial"); ok {
-			rec.Serial = serial
-		}
-		if refresh, ok := soaUint32(v, "refresh"); ok {
-			rec.Refresh = refresh
-		}
-		if retry, ok := soaUint32(v, "retry"); ok {
-			rec.Retry = retry
-		}
-		if expire, ok := soaUint32(v, "expire"); ok {
-			rec.Expire = expire
-		}
-		if minimum, ok := soaUint32(v, "minimum"); ok {
-			rec.Minimum = minimum
-		}
-		if ttl, ok := soaUint32(v, "ttl"); ok {
-			rec.TTL = ttl
-		}
-		return rec, rec.Ns != "" && rec.Mbox != ""
-	default:
-		return types.SOARecord{}, false
-	}
+	return recshape.Single(raw, recshape.SOARecord)
 }
 
 func soaString(cfg map[string]interface{}, key string) (string, bool) {
@@ -205,37 +174,13 @@ func soaString(cfg map[string]interface{}, key string) (string, bool) {
 }
 
 func soaUint32(cfg map[string]interface{}, key string) (uint32, bool) {
-	var raw interface{}
-	var ok bool
+	row := recshape.Row(cfg)
 	for _, candidate := range soaKeyCandidates(key) {
-		raw, ok = cfg[candidate]
-		if ok {
-			break
+		if _, present := cfg[candidate]; present {
+			return row.Uint32(candidate)
 		}
 	}
-	if !ok {
-		return 0, false
-	}
-	switch v := raw.(type) {
-	case float64:
-		return uint32(v), true
-	case float32:
-		return uint32(v), true
-	case int:
-		return uint32(v), true
-	case int64:
-		return uint32(v), true
-	case int32:
-		return uint32(v), true
-	case uint:
-		return uint32(v), true
-	case uint64:
-		return uint32(v), true
-	case uint32:
-		return v, true
-	default:
-		return 0, false
-	}
+	return 0, false
 }
 
 func soaKeyCandidates(key string) []string {

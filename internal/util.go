@@ -6,7 +6,6 @@ import (
 	"github.com/miekg/dns"
 	"go53/types"
 	"reflect"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -23,24 +22,29 @@ func SetSplitNameResolver(fn func(string) (string, string, bool)) {
 	splitNameResolver.Unlock()
 }
 
+// SplitName splits a query name into its authoritative zone and the owner
+// relative to it ("@" at the apex). The zone is returned as an absolute,
+// canonical name: callers pass it straight to SanitizeFQDN, which is then a
+// no-op instead of re-adding a trailing dot on every DNS query (#40).
 func SplitName(name string) (zone, host string, ok bool) {
 	splitNameResolver.RLock()
 	resolver := splitNameResolver.fn
 	splitNameResolver.RUnlock()
 	if resolver != nil {
 		if zone, host, ok := resolver(name); ok {
-			return strings.TrimSuffix(zone, "."), host, true
+			return zone, host, true
 		}
 	}
 
+	// No store attached (tests, tooling): last two labels form the zone.
 	name = strings.TrimSuffix(name, ".")
 	parts := strings.Split(name, ".")
 	if len(parts) < 2 {
 		return "", "", false // cannot form a zone from less than 2 parts
 	}
 
-	zone = strings.Join(parts[len(parts)-2:], ".") // last 2 parts = zone
-	host = strings.Join(parts[:len(parts)-2], ".") // remaining = host
+	zone = strings.Join(parts[len(parts)-2:], ".") + "." // last 2 parts = zone
+	host = strings.Join(parts[:len(parts)-2], ".")       // remaining = host
 	if host == "" {
 		host = "@" // root of zone
 	}
@@ -83,7 +87,6 @@ func SanitizeFQDN(fqdn string) (string, error) {
 		return "@", nil
 	}
 
-	var validFQDN = regexp.MustCompile(`(?i)^[a-z0-9-_\.]+$`)
 	fqdn = strings.TrimSpace(fqdn)
 
 	if fqdn == "" {
@@ -101,7 +104,7 @@ func SanitizeFQDN(fqdn string) (string, error) {
 		return "*." + rest, nil
 	}
 
-	if !validFQDN.MatchString(fqdn) {
+	if !validFQDNChars(fqdn) {
 		return "", errors.New("FQDN contains invalid characters")
 	}
 
@@ -110,6 +113,21 @@ func SanitizeFQDN(fqdn string) (string, error) {
 	fqdn = strings.ToLower(dns.Fqdn(fqdn))
 
 	return fqdn, nil
+}
+
+// validFQDNChars reports whether s consists only of [A-Za-z0-9._-]. It runs on
+// every DNS query, so it is a byte loop rather than a regexp (which used to be
+// compiled per call and dominated Lookup's cost, #60).
+func validFQDNChars(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9', c == '-', c == '_', c == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func MergeStructs(dst, src interface{}) {
@@ -156,31 +174,6 @@ func MergeStructs(dst, src interface{}) {
 			}
 		}
 	}
-}
-
-func ParseToDNSKEYRecord(m map[string]interface{}) (types.DNSKEYRecord, bool) {
-	rec := types.DNSKEYRecord{
-		TTL:      3600,
-		Protocol: 3,
-	}
-
-	if f, ok := m["flags"].(float64); ok {
-		rec.Flags = uint16(f)
-	}
-	if p, ok := m["protocol"].(float64); ok {
-		rec.Protocol = uint8(p)
-	}
-	if a, ok := m["algorithm"].(float64); ok {
-		rec.Algorithm = uint8(a)
-	}
-	if pk, ok := m["public_key"].(string); ok {
-		rec.PublicKey = pk
-	}
-	if t, ok := m["ttl"].(float64); ok {
-		rec.TTL = uint32(t)
-	}
-
-	return rec, rec.PublicKey != ""
 }
 
 func isZeroValue(v reflect.Value) bool {

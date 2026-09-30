@@ -612,7 +612,7 @@ func resetDNSHandlerTestConfig() {
 	config.AppConfig.LiveForTest().DNSSECEnabled = false
 }
 
-func setupDNSHandlerTestStore(t *testing.T) {
+func setupDNSHandlerTestStore(t testing.TB) {
 	t.Helper()
 	resetDNSHandlerTestConfig()
 	backend := &storage.MockStorage{}

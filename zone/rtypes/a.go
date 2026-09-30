@@ -3,10 +3,12 @@ package rtypes
 import (
 	"errors"
 	"fmt"
+	"net"
+
 	"github.com/miekg/dns"
 	"go53/internal"
+	"go53/recshape"
 	"go53/types"
-	"net"
 )
 
 type ARecord struct{}
@@ -52,33 +54,7 @@ func (ARecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 
 	var currentList []types.ARecord
 	if found {
-		switch v := val.(type) {
-		case []types.ARecord:
-			currentList = v
-		case []interface{}:
-			for _, item := range v {
-				switch obj := item.(type) {
-				case map[string]interface{}:
-					ipStr, _ := obj["ip"].(string)
-					ttlVal := uint32(3600)
-					if t, ok := obj["ttl"].(float64); ok {
-						ttlVal = uint32(t)
-					}
-					currentList = append(currentList, types.ARecord{IP: ipStr, TTL: ttlVal})
-				case types.ARecord: // ← detta behövs om det finns gamla records kvar som struct
-					currentList = append(currentList, obj)
-				}
-			}
-		case []map[string]interface{}: // ← NYTT CASE
-			for _, obj := range v {
-				ipStr, _ := obj["ip"].(string)
-				ttlVal := uint32(3600)
-				if t, ok := obj["ttl"].(float64); ok {
-					ttlVal = uint32(t)
-				}
-				currentList = append(currentList, types.ARecord{IP: ipStr, TTL: ttlVal})
-			}
-		}
+		currentList, _ = recshape.Decode(val, recshape.ARecord)
 	}
 
 	for _, existing := range currentList {
@@ -87,7 +63,8 @@ func (ARecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 		}
 	}
 
-	currentList = append(currentList, types.ARecord{IP: ip, TTL: TTL})
+	// Full slice expression: never append into the slice the store still holds.
+	currentList = append(currentList[:len(currentList):len(currentList)], types.ARecord{IP: ip, TTL: TTL})
 
 	var listToStore []map[string]interface{}
 	for _, r := range currentList {
@@ -116,59 +93,26 @@ func (ARecord) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
-	var results []dns.RR
-
-	switch v := val.(type) {
-	case []map[string]interface{}:
-		for _, item := range v {
-			ipStr, _ := item["ip"].(string)
-			ip := net.ParseIP(ipStr).To4()
-			if ip == nil {
-				continue
-			}
-			ttl := uint32(3600)
-			if t, ok := item["ttl"].(float64); ok {
-				ttl = uint32(t)
-			}
-			results = append(results, &dns.A{
-				Hdr: dns.RR_Header{
-					Name:   host,
-					Rrtype: dns.TypeA,
-					Class:  dns.ClassINET,
-					Ttl:    ttl,
-				},
-				A: ip,
-			})
-		}
-
-	case []interface{}:
-		for _, raw := range v {
-			item, ok := raw.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			ipStr, _ := item["ip"].(string)
-			ip := net.ParseIP(ipStr).To4()
-			if ip == nil {
-				continue
-			}
-			ttl := uint32(3600)
-			if t, ok := item["ttl"].(float64); ok {
-				ttl = uint32(t)
-			}
-			results = append(results, &dns.A{
-				Hdr: dns.RR_Header{
-					Name:   host,
-					Rrtype: dns.TypeA,
-					Class:  dns.ClassINET,
-					Ttl:    ttl,
-				},
-				A: ip,
-			})
-		}
-
-	default:
+	recs, ok := recshape.Decode(val, recshape.ARecord)
+	if !ok {
 		return nil, false
+	}
+
+	results := make([]dns.RR, 0, len(recs))
+	for _, rec := range recs {
+		ip := net.ParseIP(rec.IP).To4()
+		if ip == nil {
+			continue
+		}
+		results = append(results, &dns.A{
+			Hdr: dns.RR_Header{
+				Name:   host,
+				Rrtype: dns.TypeA,
+				Class:  dns.ClassINET,
+				Ttl:    rec.TTL,
+			},
+			A: ip,
+		})
 	}
 
 	return results, len(results) > 0
@@ -202,25 +146,19 @@ func (ARecord) Delete(host string, value interface{}) error {
 		return nil
 	}
 
-	var records []map[string]interface{}
-	switch v := raw.(type) {
-	case []map[string]interface{}:
-		records = v
-	case []interface{}:
-		for _, item := range v {
-			if obj, ok := item.(map[string]interface{}); ok {
-				records = append(records, obj)
-			}
-		}
-	default:
+	records, ok := recshape.Decode(raw, recshape.ARecord)
+	if !ok {
+		// Unknown shape: refuse rather than fall through to deleting the key.
 		return fmt.Errorf("Delete: invalid data format for A record: %T", raw)
 	}
 
 	var filtered []map[string]interface{}
 	for _, rec := range records {
-		ipStr, _ := rec["ip"].(string)
-		if ipStr != targetIP {
-			filtered = append(filtered, rec)
+		if rec.IP != targetIP {
+			filtered = append(filtered, map[string]interface{}{
+				"ip":  rec.IP,
+				"ttl": float64(rec.TTL),
+			})
 		}
 	}
 

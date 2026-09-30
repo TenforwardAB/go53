@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"go53/internal"
+	"go53/recshape"
 	"go53/types"
 
 	"github.com/TenforwardAB/slog"
@@ -12,37 +13,6 @@ import (
 )
 
 type CAARecord struct{}
-
-// caaFromAny normalizes a stored CAA value (typed slice or JSON-decoded
-// freshly added records and records reloaded from disk behave identically.
-func caaFromAny(val interface{}) []types.CAARecord {
-	var recs []types.CAARecord
-	switch v := val.(type) {
-	case []types.CAARecord:
-		recs = v
-	case []interface{}:
-		for _, item := range v {
-			obj, ok := item.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			flag, _ := obj["flag"].(float64)
-			tag, _ := obj["tag"].(string)
-			value, _ := obj["value"].(string)
-			t := uint32(3600)
-			if tt, ok := obj["ttl"].(float64); ok {
-				t = uint32(tt)
-			}
-			recs = append(recs, types.CAARecord{
-				Flag:  uint8(flag),
-				Tag:   tag,
-				Value: value,
-				TTL:   t,
-			})
-		}
-	}
-	return recs
-}
 
 func (CAARecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 	sanitizedZone, err := internal.SanitizeFQDN(zone)
@@ -101,7 +71,7 @@ func (CAARecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 
 	var currentList []types.CAARecord
 	if found {
-		currentList = caaFromAny(existing)
+		currentList, _ = recshape.Decode(existing, recshape.CAARecord)
 	}
 
 	for _, rec := range currentList {
@@ -110,7 +80,7 @@ func (CAARecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 		}
 	}
 
-	currentList = append(currentList, types.CAARecord{
+	currentList = append(currentList[:len(currentList):len(currentList)], types.CAARecord{
 		Flag:  flag,
 		Tag:   tag,
 		Value: val,
@@ -139,7 +109,10 @@ func (CAARecord) Lookup(name string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
-	recs := caaFromAny(val)
+	recs, ok := recshape.Decode(val, recshape.CAARecord)
+	if !ok {
+		return nil, false
+	}
 
 	var results []dns.RR
 	for _, rec := range recs {
@@ -193,7 +166,11 @@ func (CAARecord) Delete(host string, value interface{}) error {
 		return nil
 	}
 
-	records := caaFromAny(raw)
+	records, ok := recshape.Decode(raw, recshape.CAARecord)
+	if !ok {
+		// Unknown shape: refuse rather than fall through to deleting the key.
+		return fmt.Errorf("CAARecord Delete: invalid data format: %T", raw)
+	}
 
 	var filtered []types.CAARecord
 	for _, r := range records {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/miekg/dns"
 	"go53/internal"
+	"go53/recshape"
 	"go53/types"
 	"go53/zone"
 	"go53/zone/rtypes"
@@ -29,22 +30,8 @@ func UpdateSOASerial(zoneName string) error {
 		return fmt.Errorf("SOA not found for zone %s", zoneName)
 	}
 
-	var existing types.SOARecord
-	switch v := raw.(type) {
-	case types.SOARecord:
-		existing = v
-	case map[string]interface{}:
-		existing = types.SOARecord{
-			Ns:      v["ns"].(string),
-			Mbox:    v["mbox"].(string),
-			Serial:  uint32(v["serial"].(float64)),
-			Refresh: uint32(v["refresh"].(float64)),
-			Retry:   uint32(v["retry"].(float64)),
-			Expire:  uint32(v["expire"].(float64)),
-			Minimum: uint32(v["minimum"].(float64)),
-			TTL:     uint32(v["ttl"].(float64)),
-		}
-	default:
+	existing, ok := recshape.Single(raw, recshape.SOARecord)
+	if !ok {
 		return fmt.Errorf("invalid SOA record format")
 	}
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/miekg/dns"
 	"go53/internal"
+	"go53/recshape"
 	"go53/types"
 	"sort"
 )
@@ -79,24 +80,8 @@ func (NSEC) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
-	var rec types.NSECRecord
-	switch v := raw.(type) {
-	case types.NSECRecord:
-		rec = v
-	case map[string]interface{}:
-		rec.NextDomain, _ = v["next_domain"].(string)
-		rec.TTL = 3600
-		if f, ok := v["ttl"].(float64); ok {
-			rec.TTL = uint32(f)
-		}
-		if arr, ok := v["types"].([]interface{}); ok {
-			for _, t := range arr {
-				if s, ok := t.(string); ok {
-					rec.Types = append(rec.Types, s)
-				}
-			}
-		}
-	default:
+	rec, ok := recshape.Single(raw, recshape.NSECRecord)
+	if !ok {
 		return nil, false
 	}
 

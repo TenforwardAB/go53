@@ -145,3 +145,50 @@ Each release includes `checksums.txt` to verify file integrity:
 ```bash
 sha256sum -c checksums.txt
 ```
+
+## Release Highlights
+
+Full change lists are in `CHANGELOG.md`; this section records what an operator
+should know per release.
+
+### 0.81.0 — Performance foundation
+
+The query path was measured end to end and rebuilt where it mattered; the
+protocol, API and storage format are unchanged.
+
+| Answer type | 0.80.0 | 0.81.0 |
+|---|---|---|
+| A (3 addresses) | 6.6 µs · 101 allocs | **1.1 µs · 14 allocs** |
+| NODATA | 23.6 µs · 338 allocs | **2.0 µs · 10 allocs** |
+| NXDOMAIN | 38.5 µs · 683 allocs | **3.6 µs · 13 allocs** |
+
+- **Name validation** no longer compiles a regular expression on every lookup.
+- **Owner index** per zone: existence, wildcard, referral and DNSSEC-denial
+  checks are one map lookup per label instead of a scan of every record type.
+- **One record decoder** for the query path, zone transfers and DNSSEC signing,
+  so the three always agree on a zone's contents. Records written in a shape
+  that only some readers understood (for example AAAA records produced by
+  ALIAS flattening) are now served, signed and transferred consistently.
+- **Deletes are safer:** deleting one value from an RRset refuses instead of
+  emptying the RRset when the stored value cannot be decoded.
+- **Direct NSEC3 queries** (`QTYPE=NSEC3` for a hash owner) match again; a
+  regression since 0.80.0 that did not affect authenticated denial.
+
+Behaviour to be aware of:
+
+- A stored record without a `ttl` is served with 3600 seconds on every path
+  (some paths used to serve 0).
+- A DS/CDS stored with `ttl: 0` is served with 0 rather than 3600.
+- No data migration; downgrading to 0.80.x is possible.
+
+Upgrade path verified from 0.79.0, 0.79.2 and 0.80.0 directly to 0.81.0. See
+[Query Path & Record Storage](/concepts/query-path-and-storage/) for the cost
+model and the storage roadmap (0.82 canonical Merkle hash, 0.84 storage format
+v2).
+
+### 0.80.0 — Canonical names
+
+- Zone and owner names are stored and matched in lower case. On the first
+  start, keys written in mixed case are migrated and legacy keys removed;
+  do not downgrade below 0.80 afterwards.
+- Fallback case-insensitive scans on the query path are gone.

@@ -10,6 +10,7 @@ import (
 
 	"go53/config"
 	"go53/distributed"
+	"go53/recshape"
 	"go53/types"
 	"go53/zone/rtypes"
 )
@@ -220,21 +221,15 @@ func allEntriesAliasMarked(raw any) bool {
 	return true
 }
 
-func recordEntries(raw any) []map[string]interface{} {
-	switch v := raw.(type) {
-	case []map[string]interface{}:
-		return v
-	case []interface{}:
-		out := make([]map[string]interface{}, 0, len(v))
-		for _, entry := range v {
-			if item, ok := entry.(map[string]interface{}); ok {
-				out = append(out, item)
-			}
-		}
-		return out
-	default:
+// recordEntries returns the flattener's own map rows (with their alias and
+// resolved_at markers). nil for a typed RRset, which is by definition not
+// flattener-owned.
+func recordEntries(raw any) []recshape.Row {
+	rows, ok := recshape.Rows(raw)
+	if !ok {
 		return nil
 	}
+	return rows
 }
 
 type flattenedState struct {
@@ -252,17 +247,17 @@ func currentFlattenedState(snap map[string]map[string]any, rtype, name string) f
 	state := flattenedState{marked: true}
 	entries := recordEntries(raw)
 	if entries == nil {
-		switch v := raw.(type) {
-		case []types.ARecord:
-			for _, r := range v {
+		// Typed RRset written by the API, never by the flattener.
+		if recs, ok := recshape.Decode(raw, recshape.ARecord); ok {
+			for _, r := range recs {
 				state.ips = append(state.ips, r.IP)
 				if state.ttl == 0 {
 					state.ttl = r.TTL
 				}
 			}
 			state.marked = false
-		case []types.AAAARecord:
-			for _, r := range v {
+		} else if recs, ok := recshape.Decode(raw, recshape.AAAARecord); ok {
+			for _, r := range recs {
 				state.ips = append(state.ips, r.IP)
 				if state.ttl == 0 {
 					state.ttl = r.TTL
@@ -278,7 +273,7 @@ func currentFlattenedState(snap map[string]map[string]any, rtype, name string) f
 		}
 		state.ips = append(state.ips, ip)
 		if state.ttl == 0 {
-			state.ttl = ttlFromAny(item["ttl"])
+			state.ttl = item.TTL(0)
 		}
 		if m, _ := item["alias"].(bool); !m {
 			state.marked = false
@@ -289,19 +284,6 @@ func currentFlattenedState(snap map[string]map[string]any, rtype, name string) f
 	}
 	sort.Strings(state.ips)
 	return state
-}
-
-func ttlFromAny(v any) uint32 {
-	switch t := v.(type) {
-	case float64:
-		return uint32(t)
-	case uint32:
-		return t
-	case int:
-		return uint32(t)
-	default:
-		return 0
-	}
 }
 
 func equalStringSlices(a, b []string) bool {

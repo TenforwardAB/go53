@@ -7,6 +7,7 @@ import (
 
 	"github.com/miekg/dns"
 	"go53/internal"
+	"go53/recshape"
 	"go53/types"
 )
 
@@ -108,21 +109,7 @@ func GetALIAS(zone, name string) (types.ALIASRecord, bool) {
 }
 
 func aliasFromStored(val any) (types.ALIASRecord, bool) {
-	switch v := val.(type) {
-	case types.ALIASRecord:
-		return v, v.Target != ""
-	case map[string]interface{}:
-		rec := types.ALIASRecord{TTL: 60}
-		if tgt, ok := v["target"].(string); ok {
-			rec.Target = tgt
-		}
-		if t, ok := v["ttl"].(float64); ok {
-			rec.TTL = uint32(t)
-		}
-		return rec, rec.Target != ""
-	default:
-		return types.ALIASRecord{}, false
-	}
+	return recshape.Single(val, recshape.ALIASRecord)
 }
 
 func init() {

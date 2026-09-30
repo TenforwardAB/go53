@@ -6,6 +6,7 @@ import (
 	"github.com/TenforwardAB/slog"
 	"github.com/miekg/dns"
 	"go53/internal"
+	"go53/recshape"
 	"go53/types"
 )
 
@@ -60,26 +61,7 @@ func (MXRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 
 	var currentList []types.MXRecord
 	if found {
-		switch v := val.(type) {
-		case []types.MXRecord:
-			currentList = v
-		case []interface{}:
-			for _, item := range v {
-				if obj, ok := item.(map[string]interface{}); ok {
-					h, _ := obj["host"].(string)
-					p, _ := obj["priority"].(float64)
-					t := uint32(3600)
-					if tt, ok := obj["ttl"].(float64); ok {
-						t = uint32(tt)
-					}
-					currentList = append(currentList, types.MXRecord{
-						Host:     h,
-						Priority: uint16(p),
-						TTL:      t,
-					})
-				}
-			}
-		}
+		currentList, _ = recshape.Decode(val, recshape.MXRecord)
 	}
 
 	for _, rec := range currentList {
@@ -88,7 +70,7 @@ func (MXRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 		}
 	}
 
-	currentList = append(currentList, types.MXRecord{
+	currentList = append(currentList[:len(currentList):len(currentList)], types.MXRecord{
 		Host:     sanitizedHost,
 		Priority: priority,
 		TTL:      TTL,
@@ -117,27 +99,8 @@ func (MXRecord) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
-	var recs []types.MXRecord
-	switch v := val.(type) {
-	case []types.MXRecord:
-		recs = v
-	case []interface{}:
-		for _, item := range v {
-			if obj, ok := item.(map[string]interface{}); ok {
-				h, _ := obj["host"].(string)
-				p, _ := obj["priority"].(float64)
-				t := uint32(3600)
-				if tt, ok := obj["ttl"].(float64); ok {
-					t = uint32(tt)
-				}
-				recs = append(recs, types.MXRecord{
-					Host:     h,
-					Priority: uint16(p),
-					TTL:      t,
-				})
-			}
-		}
-	default:
+	recs, ok := recshape.Decode(val, recshape.MXRecord)
+	if !ok {
 		return nil, false
 	}
 
@@ -199,26 +162,10 @@ func (MXRecord) Delete(host string, value interface{}) error {
 		return nil
 	}
 
-	var records []types.MXRecord
-	switch v := raw.(type) {
-	case []types.MXRecord:
-		records = v
-	case []interface{}:
-		for _, item := range v {
-			if o, ok := item.(map[string]interface{}); ok {
-				h, _ := o["host"].(string)
-				p, _ := o["priority"].(float64)
-				t := uint32(3600)
-				if tt, ok := o["ttl"].(float64); ok {
-					t = uint32(tt)
-				}
-				records = append(records, types.MXRecord{
-					Host:     h,
-					Priority: uint16(p),
-					TTL:      t,
-				})
-			}
-		}
+	records, ok := recshape.Decode(raw, recshape.MXRecord)
+	if !ok {
+		// Unknown shape: refuse rather than fall through to deleting the key.
+		return fmt.Errorf("MXRecord Delete: invalid data format: %T", raw)
 	}
 
 	var filtered []types.MXRecord

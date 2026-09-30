@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/miekg/dns"
 	"go53/internal"
+	"go53/recshape"
 	"go53/types"
 	"sort"
 	"strings"
@@ -124,43 +125,21 @@ func (NSEC3) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
-	_, _, raw, found := memStore.GetRecord(sanitizedZone, string(types.TypeNSEC3), name)
+	// NSEC3 owners are base32hex hashes, case-insensitive on the wire. The
+	// store keys them case-sensitively: the chain writer uses upper case,
+	// while SplitName lower-cases the query name (#43), so an unmodified
+	// lookup could never hit a chain record (#62). Try the chain convention
+	// first, then the name as given (API-added records).
+	_, _, raw, found := memStore.GetRecord(sanitizedZone, string(types.TypeNSEC3), strings.ToUpper(name))
+	if !found {
+		_, _, raw, found = memStore.GetRecord(sanitizedZone, string(types.TypeNSEC3), name)
+	}
 	if !found {
 		return nil, false
 	}
 
-	var rec types.NSEC3Record
-	switch v := raw.(type) {
-	case types.NSEC3Record:
-		rec = v
-	case map[string]interface{}:
-		// Decode the JSON-shaped map used by the storage layer.
-		if s, ok := v["next_hashed"].(string); ok {
-			rec.NextHashed = s
-		}
-		if s, ok := v["salt"].(string); ok {
-			rec.Salt = s
-		}
-		if f, ok := v["hash_algorithm"].(float64); ok {
-			rec.HashAlg = uint8(f)
-		}
-		if f, ok := v["flags"].(float64); ok {
-			rec.Flags = uint8(f)
-		}
-		if f, ok := v["iterations"].(float64); ok {
-			rec.Iterations = uint16(f)
-		}
-		if f, ok := v["ttl"].(float64); ok {
-			rec.TTL = uint32(f)
-		}
-		if arr, ok := v["types"].([]interface{}); ok {
-			for _, t := range arr {
-				if s, ok := t.(string); ok {
-					rec.Types = append(rec.Types, s)
-				}
-			}
-		}
-	default:
+	rec, ok := recshape.Single(raw, recshape.NSEC3Record)
+	if !ok {
 		return nil, false
 	}
 	if !validNSEC3Hash(rec.NextHashed) {

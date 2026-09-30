@@ -7,6 +7,7 @@ import (
 
 	"github.com/miekg/dns"
 	"go53/internal"
+	"go53/recshape"
 	"go53/types"
 )
 
@@ -56,7 +57,7 @@ func (DSRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 	var current []types.DSRecord
 	_, _, existing, found := memStore.GetRecord(sanitizedZone, string(types.TypeDS), key)
 	if found {
-		current = dsRecordsFromRaw(existing)
+		current, _ = dsRecordsFromRaw(existing)
 	}
 
 	rec := types.DSRecord{
@@ -72,7 +73,7 @@ func (DSRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 		}
 	}
 
-	current = append(current, rec)
+	current = append(current[:len(current):len(current)], rec)
 	return memStore.AddRecord(sanitizedZone, string(types.TypeDS), key, current)
 }
 
@@ -91,8 +92,8 @@ func (DSRecord) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
-	records := dsRecordsFromRaw(raw)
-	if len(records) == 0 {
+	records, ok := dsRecordsFromRaw(raw)
+	if !ok || len(records) == 0 {
 		return nil, false
 	}
 
@@ -140,67 +141,37 @@ func init() {
 	Register(DSRecord{})
 }
 
-func dsRecordsFromRaw(raw any) []types.DSRecord {
-	switch v := raw.(type) {
-	case []types.DSRecord:
-		return append([]types.DSRecord(nil), v...)
-	case []interface{}:
-		var records []types.DSRecord
-		for _, item := range v {
-			obj, ok := item.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			records = append(records, types.DSRecord{
-				KeyTag:     uint16(rawFloat64(obj["key_tag"])),
-				Algorithm:  uint8(rawFloat64(obj["algorithm"])),
-				DigestType: uint8(rawFloat64(obj["digest_type"])),
-				Digest:     strings.ToUpper(strings.TrimSpace(fmt.Sprint(obj["digest"]))),
-				TTL:        rawTTL(obj),
-			})
-		}
-		return records
-	default:
-		return nil
+// dsRecordsFromRaw decodes a stored DS value; CDS-typed values are accepted
+// too (shared wire format). ok=false means the shape is unknown.
+func dsRecordsFromRaw(raw any) ([]types.DSRecord, bool) {
+	if recs, ok := recshape.Decode(raw, recshape.DSRecord); ok {
+		return recs, true
 	}
+	cds, ok := recshape.Decode(raw, recshape.CDSRecord)
+	if !ok {
+		return nil, false
+	}
+	out := make([]types.DSRecord, 0, len(cds))
+	for _, rec := range cds {
+		out = append(out, types.DSRecord(rec))
+	}
+	return out, true
 }
 
 func uint16Field(m map[string]interface{}, key string) (uint16, error) {
-	v, ok := m[key].(float64)
+	v, ok := recshape.Row(m).Uint16(key)
 	if !ok {
 		return 0, fmt.Errorf("DSRecord expects numeric field '%s'", key)
 	}
-	return uint16(v), nil
+	return v, nil
 }
 
 func uint8Field(m map[string]interface{}, key string) (uint8, error) {
-	v, ok := m[key].(float64)
+	v, ok := recshape.Row(m).Uint8(key)
 	if !ok {
 		return 0, fmt.Errorf("DSRecord expects numeric field '%s'", key)
 	}
-	return uint8(v), nil
-}
-
-func rawFloat64(v interface{}) float64 {
-	switch n := v.(type) {
-	case float64:
-		return n
-	case int:
-		return float64(n)
-	case uint16:
-		return float64(n)
-	case uint8:
-		return float64(n)
-	default:
-		return 0
-	}
-}
-
-func rawTTL(m map[string]interface{}) uint32 {
-	if ttl := rawFloat64(m["ttl"]); ttl > 0 {
-		return uint32(ttl)
-	}
-	return 3600
+	return v, nil
 }
 
 func dedupeDSLike(rrs []dns.RR) []dns.RR {

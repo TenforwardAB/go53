@@ -315,7 +315,7 @@ For each zone, go53 builds a Merkle tree with two layers:
 
 - **Leaves:** One leaf per entity (a zone, RRtype, and name combination). Each
   leaf is a SHA-256 hash of the entity's JSON representation (including the RRset
-  value).
+  value **exactly as stored** — see the note below).
 - **Branches:** Leaves are grouped by a 2-character prefix (derived from the
   entity key), and each prefix gets a branch hash computed as SHA-256 of the
   sorted leaf hashes in that branch.
@@ -343,6 +343,21 @@ graph BT
   Branch1 --> Root
   Branch2 --> Root
 ```
+
+#### The Leaf Hash And The Stored Value
+
+The leaf hashes the RRset value as it sits in the node's store, not a
+normalised form. Two nodes that hold the same records but store them in a
+different shape (for example one written through the API and one applied from
+a replicated event) would therefore compute different leaves and repair each
+other back and forth. go53 avoids this today by never rewriting stored values
+(see [Query Path & Record Storage](/concepts/query-path-and-storage/)), which
+also means the on-disk shape is part of the replication protocol.
+
+| Release | Change | Rolling-upgrade rule |
+|---|---|---|
+| 0.82 | Leaves hash the **decoded records** in a canonical form. Each node advertises support; a pair of peers uses the canonical hash only when both support it, otherwise today's. | Any order. Mixed clusters keep comparing with the old hash until every node is on 0.82. |
+| 0.84 | Storage format v2: every writer stores typed values, older data migrates on first start. | **Every node must run 0.82 or later first.** |
 
 ### Repair Protocol
 

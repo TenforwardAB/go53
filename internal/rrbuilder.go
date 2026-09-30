@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/TenforwardAB/slog"
 	"github.com/miekg/dns"
+	"go53/recshape"
 	"go53/types"
 	"net"
 	"reflect"
@@ -44,641 +45,220 @@ func ChunkTXT(s string) []string {
 	return chunkTXT(s)
 }
 
+// Every builder decodes the stored value through recshape, so AXFR and DNSSEC
+// signing read exactly the shapes the query path (zone/rtypes) reads. Only the
+// dns.RR construction is per type. Targets are made absolute here as they
+// always were on this path.
 var RRBuilders = map[string]RRBuilder{
 	"A": func(name string, data any) []dns.RR {
-		var rrs []dns.RR
-
-		switch v := data.(type) {
-		case []types.ARecord:
-			for _, rec := range v {
-				rrs = append(rrs, &dns.A{
-					Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: rec.TTL},
-					A:   net.ParseIP(rec.IP).To4(),
-				})
+		recs, _ := recshape.Decode(data, recshape.ARecord)
+		rrs := make([]dns.RR, 0, len(recs))
+		for _, rec := range recs {
+			ip := net.ParseIP(rec.IP).To4()
+			if ip == nil {
+				continue
 			}
-		case []map[string]interface{}:
-			for _, rec := range v {
-				ip := net.ParseIP(rec["ip"].(string)).To4()
-				ttl := toTTL(rec)
-				rrs = append(rrs, &dns.A{
-					Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: ttl},
-					A:   ip,
-				})
-			}
-		case []interface{}:
-			for _, raw := range v {
-				if rec, ok := raw.(map[string]interface{}); ok {
-					ip := net.ParseIP(rec["ip"].(string)).To4()
-					ttl := toTTL(rec)
-					rrs = append(rrs, &dns.A{
-						Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: ttl},
-						A:   ip,
-					})
-				}
-			}
+			rrs = append(rrs, &dns.A{
+				Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: rec.TTL},
+				A:   ip,
+			})
 		}
-
 		return rrs
 	},
 
 	"AAAA": func(name string, data any) []dns.RR {
-		var rrs []dns.RR
-
-		switch v := data.(type) {
-		case []types.AAAARecord:
-			for _, rec := range v {
-				ip := net.ParseIP(rec.IP)
-				if ip == nil || ip.To4() != nil {
-					continue
-				}
-				rrs = append(rrs, &dns.AAAA{
-					Hdr:  dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: rec.TTL},
-					AAAA: ip,
-				})
+		recs, _ := recshape.Decode(data, recshape.AAAARecord)
+		rrs := make([]dns.RR, 0, len(recs))
+		for _, rec := range recs {
+			ip := net.ParseIP(rec.IP)
+			if ip == nil || ip.To4() != nil {
+				continue
 			}
-		case []interface{}:
-			for _, raw := range v {
-				rec, ok := raw.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				ipStr, _ := rec["ip"].(string)
-				ip := net.ParseIP(ipStr)
-				if ip == nil || ip.To4() != nil {
-					continue
-				}
-				rrs = append(rrs, &dns.AAAA{
-					Hdr:  dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: toTTL(rec)},
-					AAAA: ip,
-				})
-			}
+			rrs = append(rrs, &dns.AAAA{
+				Hdr:  dns.RR_Header{Name: name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: rec.TTL},
+				AAAA: ip,
+			})
 		}
-
 		return rrs
 	},
 
 	"NS": func(name string, data any) []dns.RR {
-		//fqdn, _ := SanitizeFQDN(name)
-		var rrs []dns.RR
-
-		switch v := data.(type) {
-		case []types.NSRecord:
-			for _, rec := range v {
-				rrs = append(rrs, &dns.NS{
-					Hdr: dns.RR_Header{
-						Name:   name,
-						Rrtype: dns.TypeNS,
-						Class:  dns.ClassINET,
-						Ttl:    rec.TTL,
-					},
-					Ns: dns.Fqdn(rec.NS),
-				})
-			}
-		case []map[string]interface{}:
-			for _, rec := range v {
-				ns := rec["ns"].(string)
-				ttl := toTTL(rec)
-				rrs = append(rrs, &dns.NS{
-					Hdr: dns.RR_Header{
-						Name:   name,
-						Rrtype: dns.TypeNS,
-						Class:  dns.ClassINET,
-						Ttl:    ttl,
-					},
-					Ns: dns.Fqdn(ns),
-				})
-			}
-		case []interface{}:
-			for _, raw := range v {
-				if rec, ok := raw.(map[string]interface{}); ok {
-					ns := rec["ns"].(string)
-					ttl := toTTL(rec)
-					rrs = append(rrs, &dns.NS{
-						Hdr: dns.RR_Header{
-							Name:   name,
-							Rrtype: dns.TypeNS,
-							Class:  dns.ClassINET,
-							Ttl:    ttl,
-						},
-						Ns: dns.Fqdn(ns),
-					})
-				}
-			}
+		recs, _ := recshape.Decode(data, recshape.NSRecord)
+		rrs := make([]dns.RR, 0, len(recs))
+		for _, rec := range recs {
+			rrs = append(rrs, &dns.NS{
+				Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeNS, Class: dns.ClassINET, Ttl: rec.TTL},
+				Ns:  dns.Fqdn(rec.NS),
+			})
 		}
-
 		return rrs
 	},
 
 	"DS": func(name string, data any) []dns.RR {
-		var rrs []dns.RR
-
-		switch v := data.(type) {
-		case []types.DSRecord:
-			for _, rec := range v {
-				rrs = append(rrs, &dns.DS{
-					Hdr:        dns.RR_Header{Name: name, Rrtype: dns.TypeDS, Class: dns.ClassINET, Ttl: rec.TTL},
-					KeyTag:     rec.KeyTag,
-					Algorithm:  rec.Algorithm,
-					DigestType: rec.DigestType,
-					Digest:     strings.ToUpper(rec.Digest),
-				})
-			}
-		case []interface{}:
-			for _, raw := range v {
-				rec, ok := raw.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				rrs = append(rrs, &dns.DS{
-					Hdr:        dns.RR_Header{Name: name, Rrtype: dns.TypeDS, Class: dns.ClassINET, Ttl: toTTL(rec)},
-					KeyTag:     uint16(getFloat64(rec["key_tag"])),
-					Algorithm:  uint8(getFloat64(rec["algorithm"])),
-					DigestType: uint8(getFloat64(rec["digest_type"])),
-					Digest:     strings.ToUpper(fmt.Sprint(rec["digest"])),
-				})
-			}
+		recs, _ := recshape.Decode(data, recshape.DSRecord)
+		rrs := make([]dns.RR, 0, len(recs))
+		for _, rec := range recs {
+			rrs = append(rrs, &dns.DS{
+				Hdr:        dns.RR_Header{Name: name, Rrtype: dns.TypeDS, Class: dns.ClassINET, Ttl: rec.TTL},
+				KeyTag:     rec.KeyTag,
+				Algorithm:  rec.Algorithm,
+				DigestType: rec.DigestType,
+				Digest:     strings.ToUpper(rec.Digest),
+			})
 		}
-
 		return rrs
 	},
 
 	"CDS": func(name string, data any) []dns.RR {
-		var rrs []dns.RR
-
-		switch v := data.(type) {
-		case []types.CDSRecord:
-			for _, rec := range v {
-				rrs = append(rrs, &dns.CDS{DS: dns.DS{
-					Hdr:        dns.RR_Header{Name: name, Rrtype: dns.TypeCDS, Class: dns.ClassINET, Ttl: rec.TTL},
-					KeyTag:     rec.KeyTag,
-					Algorithm:  rec.Algorithm,
-					DigestType: rec.DigestType,
-					Digest:     strings.ToUpper(rec.Digest),
-				}})
-			}
-		case []interface{}:
-			for _, raw := range v {
-				rec, ok := raw.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				rrs = append(rrs, &dns.CDS{DS: dns.DS{
-					Hdr:        dns.RR_Header{Name: name, Rrtype: dns.TypeCDS, Class: dns.ClassINET, Ttl: toTTL(rec)},
-					KeyTag:     uint16(getFloat64(rec["key_tag"])),
-					Algorithm:  uint8(getFloat64(rec["algorithm"])),
-					DigestType: uint8(getFloat64(rec["digest_type"])),
-					Digest:     strings.ToUpper(fmt.Sprint(rec["digest"])),
-				}})
-			}
+		recs, _ := recshape.Decode(data, recshape.CDSRecord)
+		rrs := make([]dns.RR, 0, len(recs))
+		for _, rec := range recs {
+			rrs = append(rrs, &dns.CDS{DS: dns.DS{
+				Hdr:        dns.RR_Header{Name: name, Rrtype: dns.TypeCDS, Class: dns.ClassINET, Ttl: rec.TTL},
+				KeyTag:     rec.KeyTag,
+				Algorithm:  rec.Algorithm,
+				DigestType: rec.DigestType,
+				Digest:     strings.ToUpper(rec.Digest),
+			}})
 		}
-
 		return rrs
 	},
 
 	"MX": func(name string, data any) []dns.RR {
-		var rrs []dns.RR
-
-		switch v := data.(type) {
-		case []types.MXRecord:
-			for _, rec := range v {
-				rrs = append(rrs, &dns.MX{
-					Hdr:        dns.RR_Header{Name: name, Rrtype: dns.TypeMX, Class: dns.ClassINET, Ttl: rec.TTL},
-					Preference: rec.Priority,
-					Mx:         dns.Fqdn(rec.Host),
-				})
-			}
-		case []map[string]interface{}:
-			for _, rec := range v {
-				host := rec["host"].(string)
-				priority := uint16(getFloat64(rec["priority"]))
-				ttl := toTTL(rec)
-				rrs = append(rrs, &dns.MX{
-					Hdr:        dns.RR_Header{Name: name, Rrtype: dns.TypeMX, Class: dns.ClassINET, Ttl: ttl},
-					Preference: priority,
-					Mx:         dns.Fqdn(host),
-				})
-			}
-		case []interface{}:
-			for _, raw := range v {
-				if rec, ok := raw.(map[string]interface{}); ok {
-					host := rec["host"].(string)
-					priority := uint16(getFloat64(rec["priority"]))
-					ttl := toTTL(rec)
-					rrs = append(rrs, &dns.MX{
-						Hdr:        dns.RR_Header{Name: name, Rrtype: dns.TypeMX, Class: dns.ClassINET, Ttl: ttl},
-						Preference: priority,
-						Mx:         dns.Fqdn(host),
-					})
-				}
-			}
+		recs, _ := recshape.Decode(data, recshape.MXRecord)
+		rrs := make([]dns.RR, 0, len(recs))
+		for _, rec := range recs {
+			rrs = append(rrs, &dns.MX{
+				Hdr:        dns.RR_Header{Name: name, Rrtype: dns.TypeMX, Class: dns.ClassINET, Ttl: rec.TTL},
+				Preference: rec.Priority,
+				Mx:         dns.Fqdn(rec.Host),
+			})
 		}
-
 		return rrs
 	},
 
 	"TXT": func(name string, data any) []dns.RR {
-		var rrs []dns.RR
-
-		switch v := data.(type) {
-		case []map[string]interface{}:
-			for _, rec := range v {
-				text, ok := rec["text"].(string)
-				if !ok {
-					continue
-				}
-				ttl := toTTL(rec)
-				rrs = append(rrs, &dns.TXT{
-					Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: ttl},
-					Txt: chunkTXT(text),
-				})
-			}
-		case []interface{}:
-			for _, item := range v {
-				switch rec := item.(type) {
-				case map[string]interface{}:
-					text, ok := rec["text"].(string)
-					if !ok {
-						continue
-					}
-					ttl := toTTL(rec)
-					rrs = append(rrs, &dns.TXT{
-						Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: ttl},
-						Txt: chunkTXT(text),
-					})
-				case types.TXTRecord:
-					rrs = append(rrs, &dns.TXT{
-						Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: rec.TTL},
-						Txt: chunkTXT(rec.Text),
-					})
-				}
-			}
-		case []types.TXTRecord:
-			for _, rec := range v {
-				rrs = append(rrs, &dns.TXT{
-					Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: rec.TTL},
-					Txt: chunkTXT(rec.Text),
-				})
-			}
+		recs, _ := recshape.Decode(data, recshape.TXTRecord)
+		rrs := make([]dns.RR, 0, len(recs))
+		for _, rec := range recs {
+			rrs = append(rrs, &dns.TXT{
+				Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: rec.TTL},
+				Txt: chunkTXT(rec.Text),
+			})
 		}
-
 		return rrs
 	},
 
 	"SRV": func(name string, data any) []dns.RR {
-		var rrs []dns.RR
-
-		switch v := data.(type) {
-		case []map[string]interface{}:
-			for _, m := range v {
-				ttl := toTTL(m)
-				priority, _ := m["priority"].(float64)
-				weight, _ := m["weight"].(float64)
-				port, _ := m["port"].(float64)
-				target, _ := m["target"].(string)
-
-				rrs = append(rrs, &dns.SRV{
-					Hdr: dns.RR_Header{
-						Name:   name,
-						Rrtype: dns.TypeSRV,
-						Class:  dns.ClassINET,
-						Ttl:    ttl,
-					},
-					Priority: uint16(priority),
-					Weight:   uint16(weight),
-					Port:     uint16(port),
-					Target:   dns.Fqdn(target),
-				})
-			}
-
-		case []types.SRVRecord:
-			for _, rec := range v {
-				rrs = append(rrs, &dns.SRV{
-					Hdr: dns.RR_Header{
-						Name:   name,
-						Rrtype: dns.TypeSRV,
-						Class:  dns.ClassINET,
-						Ttl:    rec.TTL,
-					},
-					Priority: rec.Priority,
-					Weight:   rec.Weight,
-					Port:     rec.Port,
-					Target:   dns.Fqdn(rec.Target),
-				})
-			}
-
-		case []interface{}:
-			for _, item := range v {
-				switch rec := item.(type) {
-				case map[string]interface{}:
-					ttl := toTTL(rec)
-					priority, _ := rec["priority"].(float64)
-					weight, _ := rec["weight"].(float64)
-					port, _ := rec["port"].(float64)
-					target, _ := rec["target"].(string)
-
-					rrs = append(rrs, &dns.SRV{
-						Hdr: dns.RR_Header{
-							Name:   name,
-							Rrtype: dns.TypeSRV,
-							Class:  dns.ClassINET,
-							Ttl:    ttl,
-						},
-						Priority: uint16(priority),
-						Weight:   uint16(weight),
-						Port:     uint16(port),
-						Target:   dns.Fqdn(target),
-					})
-
-				case []interface{}:
-					// Handle tuple-like form: [priority, weight, port, target, ttl]
-					if len(rec) >= 5 {
-						priority, _ := rec[0].(float64)
-						weight, _ := rec[1].(float64)
-						port, _ := rec[2].(float64)
-						target, _ := rec[3].(string)
-						ttl, _ := rec[4].(float64)
-
-						rrs = append(rrs, &dns.SRV{
-							Hdr: dns.RR_Header{
-								Name:   name,
-								Rrtype: dns.TypeSRV,
-								Class:  dns.ClassINET,
-								Ttl:    uint32(ttl),
-							},
-							Priority: uint16(priority),
-							Weight:   uint16(weight),
-							Port:     uint16(port),
-							Target:   dns.Fqdn(target),
-						})
-					}
-				}
-			}
+		recs, _ := recshape.Decode(data, recshape.SRVRecord)
+		rrs := make([]dns.RR, 0, len(recs))
+		for _, rec := range recs {
+			rrs = append(rrs, &dns.SRV{
+				Hdr:      dns.RR_Header{Name: name, Rrtype: dns.TypeSRV, Class: dns.ClassINET, Ttl: rec.TTL},
+				Priority: rec.Priority,
+				Weight:   rec.Weight,
+				Port:     rec.Port,
+				Target:   dns.Fqdn(rec.Target),
+			})
 		}
-
 		return rrs
 	},
 
 	"PTR": func(name string, data any) []dns.RR {
-		var rrs []dns.RR
-
-		switch v := data.(type) {
-		case map[string]interface{}:
-			ptr, _ := v["ptr"].(string)
-			ttl := toTTL(v)
+		recs, _ := recshape.Decode(data, recshape.PTRRecord)
+		rrs := make([]dns.RR, 0, len(recs))
+		for _, rec := range recs {
 			rrs = append(rrs, &dns.PTR{
-				Hdr: dns.RR_Header{
-					Name:   name,
-					Rrtype: dns.TypePTR,
-					Class:  dns.ClassINET,
-					Ttl:    ttl,
-				},
-				Ptr: dns.Fqdn(ptr),
+				Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypePTR, Class: dns.ClassINET, Ttl: rec.TTL},
+				Ptr: dns.Fqdn(rec.Ptr),
 			})
-
-		case []map[string]interface{}:
-			for _, rec := range v {
-				ptr, _ := rec["ptr"].(string)
-				ttl := toTTL(rec)
-				rrs = append(rrs, &dns.PTR{
-					Hdr: dns.RR_Header{
-						Name:   name,
-						Rrtype: dns.TypePTR,
-						Class:  dns.ClassINET,
-						Ttl:    ttl,
-					},
-					Ptr: dns.Fqdn(ptr),
-				})
-			}
-
-		case []interface{}:
-			for _, raw := range v {
-				switch rec := raw.(type) {
-				case map[string]interface{}:
-					ptr, _ := rec["ptr"].(string)
-					ttl := toTTL(rec)
-					rrs = append(rrs, &dns.PTR{
-						Hdr: dns.RR_Header{
-							Name:   name,
-							Rrtype: dns.TypePTR,
-							Class:  dns.ClassINET,
-							Ttl:    ttl,
-						},
-						Ptr: dns.Fqdn(ptr),
-					})
-				case []interface{}: // e.g. [{api.go53.test. 3600}]
-					if len(rec) >= 2 {
-						ptr, _ := rec[0].(string)
-						ttlF, _ := rec[1].(float64)
-						rrs = append(rrs, &dns.PTR{
-							Hdr: dns.RR_Header{
-								Name:   name,
-								Rrtype: dns.TypePTR,
-								Class:  dns.ClassINET,
-								Ttl:    uint32(ttlF),
-							},
-							Ptr: dns.Fqdn(ptr),
-						})
-					}
-				}
-			}
-
-		case []types.PTRRecord:
-			for _, rec := range v {
-				rrs = append(rrs, &dns.PTR{
-					Hdr: dns.RR_Header{
-						Name:   name,
-						Rrtype: dns.TypePTR,
-						Class:  dns.ClassINET,
-						Ttl:    rec.TTL,
-					},
-					Ptr: dns.Fqdn(rec.Ptr),
-				})
-			}
 		}
-
 		return rrs
 	},
 
 	"CNAME": func(name string, data any) []dns.RR {
-		switch v := data.(type) {
-		case types.CNAMERecord:
-			return []dns.RR{&dns.CNAME{
-				Hdr:    dns.RR_Header{Name: name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: v.TTL},
-				Target: dns.Fqdn(v.Target),
-			}}
-		case map[string]interface{}:
-			target := v["target"].(string)
-			ttl := toTTL(v)
-			return []dns.RR{&dns.CNAME{
-				Hdr:    dns.RR_Header{Name: name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: ttl},
-				Target: dns.Fqdn(target),
-			}}
-		default:
+		rec, ok := recshape.Single(data, recshape.CNAMERecord)
+		if !ok {
 			return nil
 		}
+		return []dns.RR{&dns.CNAME{
+			Hdr:    dns.RR_Header{Name: name, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: rec.TTL},
+			Target: dns.Fqdn(rec.Target),
+		}}
 	},
 
 	"DNAME": func(name string, data any) []dns.RR {
-		switch v := data.(type) {
-		case types.DNAMERecord:
-			return []dns.RR{&dns.DNAME{
-				Hdr:    dns.RR_Header{Name: name, Rrtype: dns.TypeDNAME, Class: dns.ClassINET, Ttl: v.TTL},
-				Target: dns.Fqdn(v.Target),
-			}}
-		case map[string]interface{}:
-			target := v["target"].(string)
-			ttl := toTTL(v)
-			return []dns.RR{&dns.DNAME{
-				Hdr:    dns.RR_Header{Name: name, Rrtype: dns.TypeDNAME, Class: dns.ClassINET, Ttl: ttl},
-				Target: dns.Fqdn(target),
-			}}
-		default:
+		rec, ok := recshape.Single(data, recshape.DNAMERecord)
+		if !ok {
 			return nil
 		}
+		return []dns.RR{&dns.DNAME{
+			Hdr:    dns.RR_Header{Name: name, Rrtype: dns.TypeDNAME, Class: dns.ClassINET, Ttl: rec.TTL},
+			Target: dns.Fqdn(rec.Target),
+		}}
 	},
 
 	"CAA": func(name string, data any) []dns.RR {
-		var rrs []dns.RR
-
-		appendRec := func(flag uint8, tag, value string, ttl uint32) {
+		recs, _ := recshape.Decode(data, recshape.CAARecord)
+		rrs := make([]dns.RR, 0, len(recs))
+		for _, rec := range recs {
 			rrs = append(rrs, &dns.CAA{
-				Hdr:   dns.RR_Header{Name: name, Rrtype: dns.TypeCAA, Class: dns.ClassINET, Ttl: ttl},
-				Flag:  flag,
-				Tag:   tag,
-				Value: value,
+				Hdr:   dns.RR_Header{Name: name, Rrtype: dns.TypeCAA, Class: dns.ClassINET, Ttl: rec.TTL},
+				Flag:  rec.Flag,
+				Tag:   rec.Tag,
+				Value: rec.Value,
 			})
 		}
-
-		switch v := data.(type) {
-		case []types.CAARecord:
-			for _, rec := range v {
-				appendRec(rec.Flag, rec.Tag, rec.Value, rec.TTL)
-			}
-		case []map[string]interface{}:
-			for _, rec := range v {
-				tag, _ := rec["tag"].(string)
-				value, _ := rec["value"].(string)
-				appendRec(uint8(getFloat64(rec["flag"])), tag, value, toTTL(rec))
-			}
-		case []interface{}:
-			for _, raw := range v {
-				if rec, ok := raw.(map[string]interface{}); ok {
-					tag, _ := rec["tag"].(string)
-					value, _ := rec["value"].(string)
-					appendRec(uint8(getFloat64(rec["flag"])), tag, value, toTTL(rec))
-				}
-			}
-		}
-
 		return rrs
 	},
 
 	"SPF": func(name string, data any) []dns.RR {
-		switch v := data.(type) {
-		case types.SPFRecord:
-			return []dns.RR{&dns.SPF{
-				Hdr: dns.RR_Header{
-					Name:   name,
-					Rrtype: dns.TypeSPF,
-					Class:  dns.ClassINET,
-					Ttl:    v.TTL,
-				},
-				Txt: chunkTXT(v.Text),
-			}}
-		case map[string]interface{}:
-			text := v["text"].(string)
-			ttl := toTTL(v)
-			return []dns.RR{&dns.SPF{
-				Hdr: dns.RR_Header{
-					Name:   name,
-					Rrtype: dns.TypeSPF,
-					Class:  dns.ClassINET,
-					Ttl:    ttl,
-				},
-				Txt: chunkTXT(text),
-			}}
-		default:
+		rec, ok := recshape.Single(data, recshape.SPFRecord)
+		if !ok {
 			return nil
 		}
+		return []dns.RR{&dns.SPF{
+			Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeSPF, Class: dns.ClassINET, Ttl: rec.TTL},
+			Txt: chunkTXT(rec.Text),
+		}}
 	},
 
 	"SOA": func(name string, data any) []dns.RR {
-		switch v := data.(type) {
-		case types.SOARecord:
-			return []dns.RR{&dns.SOA{
-				Hdr:     dns.RR_Header{Name: name, Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: v.TTL},
-				Ns:      dns.Fqdn(v.Ns),
-				Mbox:    dns.Fqdn(v.Mbox),
-				Serial:  v.Serial,
-				Refresh: v.Refresh,
-				Retry:   v.Retry,
-				Expire:  v.Expire,
-				Minttl:  v.Minimum,
-			}}
-		case map[string]interface{}:
-			return []dns.RR{&dns.SOA{
-				Hdr:     dns.RR_Header{Name: name, Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: toTTL(v)},
-				Ns:      dns.Fqdn(v["ns"].(string)),
-				Mbox:    dns.Fqdn(v["mbox"].(string)),
-				Serial:  uint32(getFloat64(v["serial"])),
-				Refresh: uint32(getFloat64(v["refresh"])),
-				Retry:   uint32(getFloat64(v["retry"])),
-				Expire:  uint32(getFloat64(v["expire"])),
-				Minttl:  uint32(getFloat64(v["minimum"])),
-			}}
-		default:
+		rec, ok := recshape.Single(data, recshape.SOARecord)
+		if !ok {
 			return nil
 		}
+		return []dns.RR{&dns.SOA{
+			Hdr:     dns.RR_Header{Name: name, Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: rec.TTL},
+			Ns:      dns.Fqdn(rec.Ns),
+			Mbox:    dns.Fqdn(rec.Mbox),
+			Serial:  rec.Serial,
+			Refresh: rec.Refresh,
+			Retry:   rec.Retry,
+			Expire:  rec.Expire,
+			Minttl:  rec.Minimum,
+		}}
 	},
 
 	"NSEC": func(name string, data any) []dns.RR {
-		var rec types.NSECRecord
-		switch v := data.(type) {
-		case types.NSECRecord:
-			rec = v
-		case map[string]interface{}:
-			if err := decodeRecord(v, &rec); err != nil {
-				return nil
-			}
-		default:
+		rec, ok := recshape.Single(data, recshape.NSECRecord)
+		if !ok {
 			return nil
 		}
-
 		return []dns.RR{&dns.NSEC{
-			Hdr: dns.RR_Header{
-				Name:   dns.Fqdn(name),
-				Rrtype: dns.TypeNSEC,
-				Class:  dns.ClassINET,
-				Ttl:    rec.TTL,
-			},
+			Hdr:        dns.RR_Header{Name: dns.Fqdn(name), Rrtype: dns.TypeNSEC, Class: dns.ClassINET, Ttl: rec.TTL},
 			NextDomain: dns.Fqdn(rec.NextDomain),
 			TypeBitMap: typeBitmap(rec.Types),
 		}}
 	},
 
 	"NSEC3": func(name string, data any) []dns.RR {
-		var rec types.NSEC3Record
-		switch v := data.(type) {
-		case types.NSEC3Record:
-			rec = v
-		case map[string]interface{}:
-			if err := decodeRecord(v, &rec); err != nil {
-				return nil
-			}
-		default:
+		rec, ok := recshape.Single(data, recshape.NSEC3Record)
+		if !ok || !validNSEC3Hash(rec.NextHashed) {
 			return nil
 		}
-		if !validNSEC3Hash(rec.NextHashed) {
-			return nil
-		}
-
 		return []dns.RR{&dns.NSEC3{
-			Hdr: dns.RR_Header{
-				Name:   dns.Fqdn(name),
-				Rrtype: dns.TypeNSEC3,
-				Class:  dns.ClassINET,
-				Ttl:    rec.TTL,
-			},
+			Hdr:        dns.RR_Header{Name: dns.Fqdn(name), Rrtype: dns.TypeNSEC3, Class: dns.ClassINET, Ttl: rec.TTL},
 			Hash:       rec.HashAlg,
 			Flags:      rec.Flags,
 			Iterations: rec.Iterations,
@@ -691,25 +271,12 @@ var RRBuilders = map[string]RRBuilder{
 	},
 
 	"NSEC3PARAM": func(name string, data any) []dns.RR {
-		var rec types.NSEC3ParamRecord
-		switch v := data.(type) {
-		case types.NSEC3ParamRecord:
-			rec = v
-		case map[string]interface{}:
-			if err := decodeRecord(v, &rec); err != nil {
-				return nil
-			}
-		default:
+		rec, ok := recshape.Single(data, recshape.NSEC3ParamRecord)
+		if !ok {
 			return nil
 		}
-
 		return []dns.RR{&dns.NSEC3PARAM{
-			Hdr: dns.RR_Header{
-				Name:   dns.Fqdn(name),
-				Rrtype: dns.TypeNSEC3PARAM,
-				Class:  dns.ClassINET,
-				Ttl:    rec.TTL,
-			},
+			Hdr:        dns.RR_Header{Name: dns.Fqdn(name), Rrtype: dns.TypeNSEC3PARAM, Class: dns.ClassINET, Ttl: rec.TTL},
 			Hash:       rec.HashAlgorithm,
 			Flags:      rec.Flags,
 			Iterations: rec.Iterations,
@@ -719,189 +286,33 @@ var RRBuilders = map[string]RRBuilder{
 	},
 
 	"DNSKEY": func(name string, data any) []dns.RR {
-		switch v := data.(type) {
-		case []types.DNSKEYRecord:
-			var out []dns.RR
-			for _, v := range data.([]types.DNSKEYRecord) {
-				out = append(out, &dns.DNSKEY{
-					Hdr: dns.RR_Header{
-						Name:   dns.Fqdn(name),
-						Rrtype: dns.TypeDNSKEY,
-						Class:  dns.ClassINET,
-						Ttl:    v.TTL,
-					},
-					Flags:     v.Flags,
-					Protocol:  v.Protocol,
-					Algorithm: v.Algorithm,
-					PublicKey: v.PublicKey,
-				})
-			}
-			return out
-
-		case types.DNSKEYRecord:
-			return []dns.RR{&dns.DNSKEY{
-				Hdr: dns.RR_Header{
-					Name:   dns.Fqdn(name),
-					Rrtype: dns.TypeDNSKEY,
-					Class:  dns.ClassINET,
-					Ttl:    v.TTL,
-				},
-				Flags:     v.Flags,
-				Protocol:  v.Protocol,
-				Algorithm: v.Algorithm,
-				PublicKey: v.PublicKey,
-			}}
-
-		case map[string]interface{}:
-			// single DNSKEY entry
-			flags := uint16(v["flags"].(float64))
-			protocol := uint8(3)
-			if p, ok := v["protocol"].(float64); ok {
-				protocol = uint8(p)
-			}
-			algorithm := uint8(v["algorithm"].(float64))
-			publicKey := v["public_key"].(string)
-			ttl := toTTL(v)
-
-			return []dns.RR{&dns.DNSKEY{
-				Hdr: dns.RR_Header{
-					Name:   dns.Fqdn(name),
-					Rrtype: dns.TypeDNSKEY,
-					Class:  dns.ClassINET,
-					Ttl:    ttl,
-				},
-				Flags:     flags,
-				Protocol:  protocol,
-				Algorithm: algorithm,
-				PublicKey: publicKey,
-			}}
-
-		case []interface{}:
-			// multiple DNSKEY entries
-			var out []dns.RR
-			for _, item := range v {
-				m, ok := item.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				flags := uint16(m["flags"].(float64))
-				protocol := uint8(3)
-				if p, ok := m["protocol"].(float64); ok {
-					protocol = uint8(p)
-				}
-				algorithm := uint8(m["algorithm"].(float64))
-				publicKey := m["public_key"].(string)
-				ttl := toTTL(m)
-
-				out = append(out, &dns.DNSKEY{
-					Hdr: dns.RR_Header{
-						Name:   dns.Fqdn(name),
-						Rrtype: dns.TypeDNSKEY,
-						Class:  dns.ClassINET,
-						Ttl:    ttl,
-					},
-					Flags:     flags,
-					Protocol:  protocol,
-					Algorithm: algorithm,
-					PublicKey: publicKey,
-				})
-			}
-			return out
+		recs, _ := recshape.Decode(data, recshape.DNSKEYRecord)
+		rrs := make([]dns.RR, 0, len(recs))
+		for _, rec := range recs {
+			rrs = append(rrs, &dns.DNSKEY{
+				Hdr:       dns.RR_Header{Name: dns.Fqdn(name), Rrtype: dns.TypeDNSKEY, Class: dns.ClassINET, Ttl: rec.TTL},
+				Flags:     rec.Flags,
+				Protocol:  rec.Protocol,
+				Algorithm: rec.Algorithm,
+				PublicKey: rec.PublicKey,
+			})
 		}
-
-		return nil
+		return rrs
 	},
 
 	"CDNSKEY": func(name string, data any) []dns.RR {
-		switch v := data.(type) {
-		case []types.CDNSKEYRecord:
-			var out []dns.RR
-			for _, v := range data.([]types.CDNSKEYRecord) {
-				out = append(out, &dns.CDNSKEY{DNSKEY: dns.DNSKEY{
-					Hdr: dns.RR_Header{
-						Name:   dns.Fqdn(name),
-						Rrtype: dns.TypeCDNSKEY,
-						Class:  dns.ClassINET,
-						Ttl:    v.TTL,
-					},
-					Flags:     v.Flags,
-					Protocol:  v.Protocol,
-					Algorithm: v.Algorithm,
-					PublicKey: v.PublicKey,
-				}})
-			}
-			return out
-
-		case types.CDNSKEYRecord:
-			return []dns.RR{&dns.CDNSKEY{DNSKEY: dns.DNSKEY{
-				Hdr: dns.RR_Header{
-					Name:   dns.Fqdn(name),
-					Rrtype: dns.TypeCDNSKEY,
-					Class:  dns.ClassINET,
-					Ttl:    v.TTL,
-				},
-				Flags:     v.Flags,
-				Protocol:  v.Protocol,
-				Algorithm: v.Algorithm,
-				PublicKey: v.PublicKey,
-			}}}
-
-		case map[string]interface{}:
-			flags := uint16(v["flags"].(float64))
-			protocol := uint8(3)
-			if p, ok := v["protocol"].(float64); ok {
-				protocol = uint8(p)
-			}
-			algorithm := uint8(v["algorithm"].(float64))
-			publicKey := v["public_key"].(string)
-			ttl := toTTL(v)
-
-			return []dns.RR{&dns.CDNSKEY{DNSKEY: dns.DNSKEY{
-				Hdr: dns.RR_Header{
-					Name:   dns.Fqdn(name),
-					Rrtype: dns.TypeCDNSKEY,
-					Class:  dns.ClassINET,
-					Ttl:    ttl,
-				},
-				Flags:     flags,
-				Protocol:  protocol,
-				Algorithm: algorithm,
-				PublicKey: publicKey,
-			}}}
-
-		case []interface{}:
-			var out []dns.RR
-			for _, item := range v {
-				m, ok := item.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				flags := uint16(m["flags"].(float64))
-				protocol := uint8(3)
-				if p, ok := m["protocol"].(float64); ok {
-					protocol = uint8(p)
-				}
-				algorithm := uint8(m["algorithm"].(float64))
-				publicKey := m["public_key"].(string)
-				ttl := toTTL(m)
-
-				out = append(out, &dns.CDNSKEY{DNSKEY: dns.DNSKEY{
-					Hdr: dns.RR_Header{
-						Name:   dns.Fqdn(name),
-						Rrtype: dns.TypeCDNSKEY,
-						Class:  dns.ClassINET,
-						Ttl:    ttl,
-					},
-					Flags:     flags,
-					Protocol:  protocol,
-					Algorithm: algorithm,
-					PublicKey: publicKey,
-				}})
-			}
-			return out
+		recs, _ := recshape.Decode(data, recshape.CDNSKEYRecord)
+		rrs := make([]dns.RR, 0, len(recs))
+		for _, rec := range recs {
+			rrs = append(rrs, &dns.CDNSKEY{DNSKEY: dns.DNSKEY{
+				Hdr:       dns.RR_Header{Name: dns.Fqdn(name), Rrtype: dns.TypeCDNSKEY, Class: dns.ClassINET, Ttl: rec.TTL},
+				Flags:     rec.Flags,
+				Protocol:  rec.Protocol,
+				Algorithm: rec.Algorithm,
+				PublicKey: rec.PublicKey,
+			}})
 		}
-
-		return nil
+		return rrs
 	},
 
 	"RRSIG": func(name string, data any) []dns.RR {
@@ -1113,28 +524,6 @@ func RRToZoneData(rrs []dns.RR) types.ZoneData {
 	}
 	slog.Crazy("[rrbuilder.go:RRToZoneData] zoneData: %v", zd)
 	return zd
-}
-
-func toTTL(m map[string]interface{}) uint32 {
-	if t, ok := m["ttl"].(float64); ok {
-		return uint32(t)
-	}
-	return 3600
-}
-
-func getFloat64(v interface{}) float64 {
-	if f, ok := v.(float64); ok {
-		return f
-	}
-	return 0
-}
-
-func decodeRecord(raw map[string]interface{}, out interface{}) error {
-	data, err := json.Marshal(raw)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, out)
 }
 
 func typeBitmap(types []string) []uint16 {

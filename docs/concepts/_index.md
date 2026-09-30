@@ -15,3 +15,7 @@ Explanatory deep-dives into how go53 works under the hood:
 - **[Distributed Mode](/concepts/distributed-mode/)** — multi-node replication:
   architecture, Ed25519 signing, the frame protocol, vector clocks, and
   Merkle-tree integrity repair.
+- **[Query Path & Record Storage](/concepts/query-path-and-storage/)** — how a
+  query is answered, the owner index behind negative answers and wildcards,
+  the record decode layer, how zone data is stored and canonicalised, and what
+  upgrades migrate.
