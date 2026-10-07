@@ -21,6 +21,16 @@ The demo runs go53 with a resettable `go53.demo.` DNSSEC zone and is intended
 for quick evaluation of zone management, records, DNSSEC keys, distributed mode,
 and the webadmin workflow.
 
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/TenforwardAB/go53/main/scripts/install.sh | sudo bash
+```
+
+This installs the `go53` server and the `go53ctl` CLI with a systemd unit. See
+[Installation](docs/INSTALLATION.md) for manual binaries, [Containers](docs/CONTAINER.md)
+for Docker/Compose, and [Releases](docs/RELEASES.md) for per-release upgrade notes.
+
 ## Why go53?
 
 Many existing DNS solutions attempt to cover both recursive and authoritative functionality, often resulting in bloated systems with steep learning curves or poor automation support. In contrast, `go53` is built from scratch to provide a clean, authoritative-only DNS server that is easy to manage through a structured API.
@@ -30,68 +40,115 @@ The goal of go53 is to bring clarity to authoritative DNS management, enabling s
 ## Architecture
 
 - **Written in Go**: A modern systems language with built-in concurrency and static binaries.
-- **In-memory zone handling**: All active zones are managed in-memory for ultra-fast lookup performance.
-- **Pluggable storage backend**:
-    - **BadgerDB (default)**: A fast, embeddable key-value store with no external dependencies.
-    - **PostgreSQL**: Optional support for environments requiring shared state, high availability, or external DB integration.
+- **In-memory read path**: All active zones are served from memory. Storage is read at startup and written on mutation; the query path never touches disk.
+- **Embedded storage**: [BadgerDB](https://github.com/hypermodeinc/badger) keyed by zone name, with no external database to operate.
+- **API first**: Zones, records, TSIG keys, DNSSEC keys, backups and runtime config are all managed over HTTP, with a local Unix admin socket as the break-glass path.
 
 ## Project Snapshot
 
 - **Authoritative DNS**: UDP/TCP DNS serving with zone data managed through HTTP API routes.
 - **DNSSEC**: Query-time signing, cached RRSIGs, NSEC/NSEC3 denial, and key lifecycle metadata.
 - **Distributed mode**: Persistent TLS socket replication with signed events, vector clocks, and Merkle repair.
+- **Operations**: Full backups, WAL export and point-in-time restore, health probes, and per-client rate limiting.
 
 ## Implemented
 
-Completed items are shown as struck-through roadmap entries with the RFCs or protocol references they target.
-
-- ~~**Authoritative DNS over UDP and TCP**~~
+- **Authoritative DNS over UDP and TCP**
   Authoritative query handling, TCP fallback paths, CHAOS version response, and no recursive service scope.
   References: RFC 1034, RFC 1035, RFC 7766.
 
-- ~~**EDNS-aware responses**~~
-  Configurable EDNS enablement and UDP payload sizing for modern resolver interoperability.
+- **EDNS-aware responses**
+  Configurable EDNS enablement, UDP payload sizing, and EDNS COOKIE/OPT validation for modern resolver interoperability.
   References: RFC 6891.
 
-- ~~**API-managed zones and RRsets**~~
+- **NSID support**
+  EDNS0 NSID responses for node identification, emitted only when the client signals interest. Disabled by default via the `nsid` config knob.
+  References: RFC 5001.
+
+- **ANY-query policy**
+  Configurable `any_query_policy`: a minimal HINFO answer or `REFUSED`, to limit amplification exposure.
+  References: RFC 8482.
+
+- **API-managed zones and RRsets**
   HTTP API routes for zone record creation, lookup, deletion, TSIG keys, DNSSEC keys, and runtime config.
   References: RFC 1035, JSON API.
 
-- ~~**AXFR, IXFR, and NOTIFY paths**~~
+- **API key authentication**
+  Selectable API auth mode (`disabled`, `none`, `x-auth-key`) with constant-time key comparison on the TCP listener, and the local Unix admin socket as the always-available break-glass path gated by filesystem permissions.
+  References: X-Auth-Key, operational.
+
+- **Zone-file import and export**
+  Import master-file zones and export the served zone through the API, including for DNSSEC-signed zones.
+  References: RFC 1035, JSON API.
+
+- **AXFR, IXFR, and NOTIFY paths**
   Zone transfer handling, SOA serial behavior, transfer ACLs, DNSSEC material in AXFR, and NOTIFY scheduling.
   References: RFC 1995, RFC 1996, RFC 5936.
 
-- ~~**TSIG validation and key API**~~
+- **TSIG validation and key API**
   TSIG key storage, API management, transfer enforcement option, and distributed TSIG key replication.
   References: RFC 2845, RFC 4635.
 
-- ~~**DNSSEC signing and denial**~~
+- **Catalog zones**
+  Catalog-zone workflow for secondary provisioning, including multi-primary membership and catalog primary TSIG.
+  References: RFC 9432.
+
+- **DNSSEC signing and denial**
   DNSKEY/RRSIG support, query-time signing cache, NSEC/NSEC3 chains, wildcard denial, and no-data proofs.
   References: RFC 4033, RFC 4034, RFC 4035, RFC 5155.
 
-- ~~**DNSSEC key lifecycle and parent signaling**~~
+- **DNSSEC key lifecycle and parent signaling**
   KSK/ZSK metadata, rollover helpers, revoke/retire timing, DS, CDS, and CDNSKEY endpoints.
   References: RFC 5011, RFC 7344, RFC 8078.
 
-- ~~**CNAME and DNAME DNSSEC chains**~~
+- **CNAME and DNAME DNSSEC chains**
   Signed answer-chain handling and denial coverage around target and no-data cases.
   References: RFC 6672, RFC 4035.
 
-- ~~**Canonical DNSSEC ordering**~~
+- **Canonical DNSSEC ordering**
   Canonical owner-name comparison for escaped labels, case folding, IDNA, root, and wildcard names.
   References: RFC 4034.
 
-- ~~**Distributed mode**~~
+- **CAA records**
+  Certificate Authority Authorization RRsets over the API and the signed query path.
+  References: RFC 8659.
+
+- **ALIAS records**
+  Apex-safe ALIAS pseudo-records flattened to A/AAAA from multiple resolvers, refreshed on a freshness window and served like ordinary signed RRsets.
+  References: pseudo-RR, operational.
+
+- **Distributed mode**
   Signed event replication over persistent TCP/TLS, vector clocks, Merkle repair, and config/key/zone event coverage.
   References: TLS 1.3, Ed25519, internal go53 frame protocol.
 
-- ~~**go53ctl cluster onboarding**~~
-  JWT invite creation, one-time invite consume, self-registering joins, and generated distributed node keys.
+- **go53ctl cluster onboarding**
+  JWT invite creation, one-time invite consume, self-registering joins, generated distributed node keys, and cluster node removal.
   References: RFC 7519, EdDSA.
 
-- ~~**In-memory read path with persistent mutations**~~
+- **Backup, WAL, and point-in-time restore**
+  Full backups and write-ahead-log exports over the local admin socket, archiver-aware retention, and restore to a point in time including DNSSEC key state.
+  References: `go53ctl backup`, operational.
+
+- **Health and readiness probes**
+  Unauthenticated `/healthz` and `/readyz` HTTP endpoints for liveness and readiness checks behind load balancers and orchestrators.
+  References: operational, Kubernetes.
+
+- **Per-client rate limiting**
+  Opt-in per-source-IP token bucket on the UDP query path via `rate_limit_qps`; disabled by default.
+  References: operational.
+
+- **In-memory read path with persistent mutations**
   Zone and DNSSEC key material are loaded for read-heavy serving, while Badger persists changes.
   References: BadgerDB, go53 storage model.
+
+- **Canonical, case-insensitive names**
+  Zone and owner names are stored and matched in canonical lower case with exact key lookups; existing data is migrated in place on upgrade.
+  References: RFC 4343.
+
+- **Query-path performance foundation**
+  A per-zone owner index for existence, wildcard, referral and DNSSEC-denial checks; one shared record decoder for serving, transfers and signing; and an allocation-free name validator (23 ns, zero allocations). Positive answers 0.8-1.6 µs, NODATA 1.9 µs, NXDOMAIN 3.5 µs.
+  Measured on an AMD Ryzen AI 9 365 (`GOMAXPROCS=20`) with records in the `encoding/json` storage shape, using the single-goroutine benchmarks in `dns/handler_bench_test.go`. These are best-case single-query latencies and are sensitive to `GOMAXPROCS`, so treat them as a floor rather than a capacity figure. Further benchmarking on server-grade CPUs is planned for a later release.
+  References: performance, [notes](docs/internal/performance.md).
 
 ## DNSSEC and Replication
 
@@ -103,10 +160,10 @@ Distributed mode is go53's multi-node replication mode. Nodes exchange signed ev
 
 ## Future Work
 
-These items remain planned or intentionally deferred until the beta test surface is stable.
+These items remain planned or intentionally deferred until the beta test surface is stable. See the [roadmap](docs/roadmap.md) for the per-release breakdown.
 
-- **API authentication and authorization**
-  Define production auth for all API routes, including operator roles, token lifecycle, and secure automation.
+- **API roles and token lifecycle**
+  Operator roles, scoped tokens with rotation and expiry, and OIDC, on top of the existing API key authentication.
 
 - **Resolver interoperability matrix**
   Automated validation against BIND, Knot, Unbound, PowerDNS Recursor, and common secondary setups.
@@ -115,29 +172,24 @@ These items remain planned or intentionally deferred until the beta test surface
   Native DNS-over-TLS listener for authoritative service once the core DNS and auth surfaces settle.
   Reference: RFC 7858.
 
-- **Metrics and structured observability**
-  Prometheus metrics, structured query/error logging, and operational health endpoints.
+- **Metrics**
+  Prometheus metrics for queries, DNSSEC signing and cache behavior, and structured query/error logging. Health and readiness endpoints are already in place.
 
-- **NSID support**
-  EDNS NSID response support for node identification and anycast-style operations.
-  Reference: RFC 5001.
-
-- **ANY-query policy**
-  Controlled ANY response behavior to reduce amplification exposure while preserving useful diagnostics.
-  Reference: RFC 8482.
-
-- **Catalog zones**
-  Optional catalog-zone workflow for secondary provisioning and fleet-scale zone membership.
-  Reference: RFC 9432.
-
-- **Import/export tooling**
-  Zone-file import/export and safer administrative workflows around bulk changes.
+- **Large-scale zone hosting and typed storage**
+  Zone resolution independent of zone count, a canonical Merkle leaf hash negotiated per peer, and a single typed storage format with in-place migration.
 
 ## Documentation
 
-- [Administrator Guide](docs/admin_guide/) - primary/secondary/distributed setup, API examples, DNSSEC, TSIG, transfers, and `go53ctl` workflows.
-- [Config Reference](docs/config/) - every environment and live config parameter with type, default, and implementation effect.
-- [Storage Notes](docs/internal/storage.md) - internal notes for persistence behavior and storage layout.
+- [Installation](docs/INSTALLATION.md) - install methods, systemd service, and first-run quickstart.
+- [Containers](docs/CONTAINER.md) - container images and Compose deployment.
+- [Administrator Guide](docs/guides/administrator-guide.md) - primary/secondary/distributed setup, API examples, DNSSEC, TSIG, transfers, and `go53ctl` workflows.
+- [Backup and Restore](docs/guides/backup-and-restore.md) - backups, WAL retention, and point-in-time restore.
+- [Config Reference](docs/reference/configuration.md) - every environment and live config parameter with type, default, and implementation effect.
+- [API Reference](docs/api/openapi.yaml) - OpenAPI spec for the admin API.
+- [Concepts](docs/concepts/) - DNSSEC behavior, distributed replication, and the query path and record storage model.
+- [Internals](docs/internal/) - storage layout, zone model, RFC compliance, and performance notes.
+- [Releases](docs/RELEASES.md) - release process and per-release operator notes.
+- [Roadmap](docs/roadmap.md) - planned work per release.
 
 ## When NOT to use go53
 
@@ -150,14 +202,13 @@ If you're looking for a DNS server that supports:
 
 ...then [**CoreDNS**](https://coredns.io) may be a better fit. It supports a wide range of plugins and is designed to work well in containerized and service-mesh environments.
 
----
-
-© Copyleft ↄ 2025 go53 Project — Released under an open source license (to be announced).
 ## License
+
+Copyright 2025 go53 Project.
 
 This project is licensed under the EUPL-1.2.
 See the [LICENSE](./LICENSE) file for details.
 
 It also includes third-party software:
-- `miekg/dns` (BSD-3-Clause) – see [NOTICE](./NOTICE) and [LICENSES/](./LICENSES)
-- `hypermodeinc/bardger` (Apache-2 Common License) – see [NOTICE](./NOTICE) and [LICENSES/](./LICENSES)
+- `miekg/dns` (BSD-3-Clause) - see [NOTICE](./NOTICE) and [LICENSES/](./LICENSES)
+- `hypermodeinc/badger` (Apache License 2.0) - see [NOTICE](./NOTICE) and [LICENSES/](./LICENSES)

@@ -22,8 +22,7 @@ Deployment parameters are read from environment variables during process startup
 | `BIND_HOST` | string | `0.0.0.0` | Bind address used when starting the DNS UDP/TCP listeners and the HTTP API listener. |
 | `DNS_PORT` | string | `:2053` | Port or host-port suffix used for the authoritative DNS UDP/TCP listeners. |
 | `API_PORT` | string | `:8053` | Port or host-port suffix used for the HTTP API listener. |
-| `STORAGE_BACKEND` | string | `badger` | Selects the storage implementation passed to `storage.Init`; currently `badger` is the implemented backend. |
-| `POSTGRES_DSN` | string | `host=localhost port=5432 user=postgres password=postgres dbname=go53 sslmode=disable` | Stored in base config for a Postgres backend; current storage initialization does not enable Postgres. |
+| `STORAGE_BACKEND` | string | `badger` | Selects the storage implementation passed to `storage.Init`. `badger` is the only accepted value; any other value makes startup fail with `unsupported backend type`. |
 | `BADGER_DIR` | string | `/data/go53` | Filesystem directory opened by the Badger storage backend. |
 | `ADMIN_SOCKET` | string | `/run/go53/admin.sock` | Path to the local admin Unix socket serving the full API gated by filesystem permissions instead of API tokens (break-glass local admin). Empty disables it. |
 | `ADMIN_SOCKET_GROUP` | string | `go53_admin` | OS group granted access to the admin socket (mode `0660`). A missing group falls back to owner-only access. |

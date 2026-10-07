@@ -13,8 +13,8 @@ as of **0.81**; the last section covers the changes planned for 0.82 and 0.84.
 
 ## The Query Path
 
-Every query is served from memory. Storage (Badger or Postgres) is only read at
-startup and written on mutation; the query path never touches it.
+Every query is served from memory. Storage (the embedded Badger store) is only
+read at startup and written on mutation; the query path never touches it.
 
 ```mermaid
 flowchart TD
@@ -143,7 +143,7 @@ flowchart LR
   subgraph Memory["Memory"]
     Z["zones"] --> T["record type"] --> N["owner name"] --> RS["RRset value"]
   end
-  subgraph Disk["Storage (Badger / Postgres)"]
+  subgraph Disk["Storage (Badger)"]
     ZJ["one JSON document per zone"]
   end
   RS -->|"persist on every mutation"| ZJ

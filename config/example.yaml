@@ -44,11 +44,8 @@ cluster:
 
 # Storage Configuration (for future use)
 storage:
-  # Backend type: memory, postgres, etc.
-  type: "memory"
-
-  # PostgreSQL connection string (if using postgres backend)
-  # postgres_dsn: "host=localhost port=5432 user=postgres password=postgres dbname=go53 sslmode=disable"
+  # Backend type: badger is the only implemented backend.
+  type: "badger"
 
 # Security Configuration
 security:

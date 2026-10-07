@@ -162,6 +162,22 @@ protocol, API and storage format are unchanged.
 | NODATA | 23.6 µs · 338 allocs | **2.0 µs · 10 allocs** |
 | NXDOMAIN | 38.5 µs · 683 allocs | **3.6 µs · 13 allocs** |
 
+Measured on an AMD Ryzen AI 9 365 (`GOMAXPROCS=20`) with records in the
+`encoding/json` storage shape — the shape every zone has after a restart or
+replication — using the single-goroutine benchmarks in
+`dns/handler_bench_test.go`. Times are rounded up; allocations are exact.
+
+Read these as best-case latency for one query, not as a capacity figure. The
+benchmark drives the query path from a single goroutine, so a high `GOMAXPROCS`
+adds garbage-collector and scheduler coordination without the concurrency the
+real server gets from it: the same build measures roughly twice the per-query
+time for allocation-bound answers at `GOMAXPROCS=24` as it does pinned to one
+physical core, while compute-bound denial answers barely move. Allocations per
+operation are deterministic and reproduce on any machine; the microsecond
+figures do not, so compare them only against runs under the same conditions.
+
+Further benchmarking on server-grade CPUs is planned for a later release.
+
 - **Name validation** no longer compiles a regular expression on every lookup.
 - **Owner index** per zone: existence, wildcard, referral and DNSSEC-denial
   checks are one map lookup per label instead of a scan of every record type.

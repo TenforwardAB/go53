@@ -122,7 +122,6 @@ func TestInitBaseConfig(t *testing.T) {
 	os.Setenv("BIND_HOST", "127.0.0.1")
 	os.Setenv("API_PORT", ":9000")
 	os.Setenv("STORAGE_BACKEND", "mock")
-	os.Setenv("POSTGRES_DSN", "some_dsn")
 
 	cfg := &config.ConfigManager{}
 	cfg.Base = config.BaseConfig{
@@ -130,7 +129,6 @@ func TestInitBaseConfig(t *testing.T) {
 		BindHost:       config.MustEnv("BIND_HOST", config.DefaultBaseConfig.BindHost),
 		APIPort:        config.MustEnv("API_PORT", config.DefaultBaseConfig.APIPort),
 		StorageBackend: config.MustEnv("STORAGE_BACKEND", config.DefaultBaseConfig.StorageBackend),
-		PostgresDSN:    config.MustEnv("POSTGRES_DSN", config.DefaultBaseConfig.PostgresDSN),
 	}
 
 	if cfg.Base.DNSPort != ":5353" {
