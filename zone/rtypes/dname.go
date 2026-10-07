@@ -6,6 +6,7 @@ import (
 
 	"github.com/miekg/dns"
 	"go53/internal"
+	"go53/recshape"
 	"go53/types"
 )
 
@@ -69,24 +70,10 @@ func (DNAMERecord) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
-	var rec types.DNAMERecord
-	switch v := val.(type) {
-	case types.DNAMERecord:
-		rec = v
-	case map[string]interface{}:
-		if tgt, ok := v["target"].(string); ok {
-			rec.Target = tgt
-		}
-		if t, ok := v["ttl"].(float64); ok {
-			rec.TTL = uint32(t)
-		}
-	default:
+	rec, ok := recshape.Single(val, recshape.DNAMERecord)
+	if !ok {
 		return nil, false
 	}
-	if rec.Target == "" {
-		return nil, false
-	}
-
 	return []dns.RR{&dns.DNAME{
 		Hdr: dns.RR_Header{
 			Name:   dns.Fqdn(host),

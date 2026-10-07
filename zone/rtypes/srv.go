@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/miekg/dns"
 	"go53/internal"
+	"go53/recshape"
 	"go53/types"
 )
 
@@ -62,40 +63,7 @@ func (SRV) Add(zone, name string, value interface{}, ttl *uint32) error {
 
 	var current []types.SRVRecord
 	if found {
-		switch v := val.(type) {
-		case []types.SRVRecord:
-			current = v
-		case []interface{}:
-			for _, item := range v {
-				if obj, ok := item.(map[string]interface{}); ok {
-					p := uint16(0)
-					w := uint16(0)
-					port := uint16(0)
-					tgt := ""
-					ttlVal := uint32(3600)
-
-					if v, ok := obj["priority"].(float64); ok {
-						p = uint16(v)
-					}
-					if v, ok := obj["weight"].(float64); ok {
-						w = uint16(v)
-					}
-					if v, ok := obj["port"].(float64); ok {
-						port = uint16(v)
-					}
-					if v, ok := obj["target"].(string); ok {
-						tgt = v
-					}
-					if v, ok := obj["ttl"].(float64); ok {
-						ttlVal = uint32(v)
-					}
-
-					current = append(current, types.SRVRecord{
-						Priority: p, Weight: w, Port: port, Target: tgt, TTL: ttlVal,
-					})
-				}
-			}
-		}
+		current, _ = recshape.Decode(val, recshape.SRVRecord)
 	}
 
 	for _, existing := range current {
@@ -104,7 +72,7 @@ func (SRV) Add(zone, name string, value interface{}, ttl *uint32) error {
 		}
 	}
 
-	current = append(current, r)
+	current = append(current[:len(current):len(current)], r)
 	return memStore.AddRecord(sanitizedZone, string(types.TypeSRV), key, current)
 }
 
@@ -127,34 +95,8 @@ func (SRV) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
-	var recs []types.SRVRecord
-	switch v := val.(type) {
-	case []types.SRVRecord:
-		recs = v
-	case []interface{}:
-		for _, item := range v {
-			if obj, ok := item.(map[string]interface{}); ok {
-				r := types.SRVRecord{}
-				if f, ok := obj["priority"].(float64); ok {
-					r.Priority = uint16(f)
-				}
-				if f, ok := obj["weight"].(float64); ok {
-					r.Weight = uint16(f)
-				}
-				if f, ok := obj["port"].(float64); ok {
-					r.Port = uint16(f)
-				}
-				if s, ok := obj["target"].(string); ok {
-					r.Target = s
-				}
-				r.TTL = 3600
-				if f, ok := obj["ttl"].(float64); ok {
-					r.TTL = uint32(f)
-				}
-				recs = append(recs, r)
-			}
-		}
-	default:
+	recs, ok := recshape.Decode(val, recshape.SRVRecord)
+	if !ok {
 		return nil, false
 	}
 
@@ -207,33 +149,10 @@ func (SRV) Delete(host string, value interface{}) error {
 		return nil
 	}
 
-	var recs []types.SRVRecord
-	switch v := raw.(type) {
-	case []types.SRVRecord:
-		recs = v
-	case []interface{}:
-		for _, item := range v {
-			if obj, ok := item.(map[string]interface{}); ok {
-				r := types.SRVRecord{}
-				if f, ok := obj["priority"].(float64); ok {
-					r.Priority = uint16(f)
-				}
-				if f, ok := obj["weight"].(float64); ok {
-					r.Weight = uint16(f)
-				}
-				if f, ok := obj["port"].(float64); ok {
-					r.Port = uint16(f)
-				}
-				if s, ok := obj["target"].(string); ok {
-					r.Target = s
-				}
-				r.TTL = 3600
-				if f, ok := obj["ttl"].(float64); ok {
-					r.TTL = uint32(f)
-				}
-				recs = append(recs, r)
-			}
-		}
+	recs, ok := recshape.Decode(raw, recshape.SRVRecord)
+	if !ok {
+		// Unknown shape: refuse rather than fall through to deleting the key.
+		return fmt.Errorf("SRVRecord Delete: invalid data format: %T", raw)
 	}
 
 	var filtered []types.SRVRecord

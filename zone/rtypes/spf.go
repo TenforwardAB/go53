@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"go53/internal"
+	"go53/recshape"
 	"go53/types"
 
 	"github.com/miekg/dns"
@@ -84,23 +85,8 @@ func (SPFRecord) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
-	var rec types.SPFRecord
-	switch v := val.(type) {
-	case types.SPFRecord:
-		rec = v
-	case map[string]interface{}:
-		rec = types.SPFRecord{}
-		if txt, ok := v["text"].(string); ok {
-			rec.Text = txt
-		}
-		if t, ok := v["ttl"].(float64); ok {
-			rec.TTL = uint32(t)
-		}
-	default:
-		return nil, false
-	}
-
-	if rec.Text == "" {
+	rec, ok := recshape.Single(val, recshape.SPFRecord)
+	if !ok {
 		return nil, false
 	}
 

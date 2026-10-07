@@ -7,6 +7,7 @@ import (
 	"github.com/TenforwardAB/slog"
 	"github.com/miekg/dns"
 	"go53/internal"
+	"go53/recshape"
 	"go53/security"
 	"go53/types"
 )
@@ -45,7 +46,7 @@ func (CDNSKEYRecord) Add(zone, name string, value interface{}, ttl *uint32) erro
 	var current []types.CDNSKEYRecord
 	_, _, existing, found := memStore.GetRecord(sz, string(types.TypeCDNSKEY), key)
 	if found {
-		current = cdnskeyRecordsFromRaw(existing)
+		current, _ = cdnskeyRecordsFromRaw(existing)
 	}
 
 	for _, r := range current {
@@ -54,7 +55,7 @@ func (CDNSKEYRecord) Add(zone, name string, value interface{}, ttl *uint32) erro
 		}
 	}
 
-	current = append(current, types.CDNSKEYRecord(rec))
+	current = append(current[:len(current):len(current)], types.CDNSKEYRecord(rec))
 	return memStore.AddRecord(sz, string(types.TypeCDNSKEY), key, current)
 }
 
@@ -70,7 +71,9 @@ func (CDNSKEYRecord) Lookup(host string) ([]dns.RR, bool) {
 
 	var records []types.CDNSKEYRecord
 	if _, _, val, ok := memStore.GetRecord(sz, string(types.TypeCDNSKEY), name); ok {
-		records = append(records, cdnskeyRecordsFromRaw(val)...)
+		if recs, ok := cdnskeyRecordsFromRaw(val); ok {
+			records = append(records, recs...)
+		}
 	}
 
 	var out []dns.RR
@@ -120,7 +123,7 @@ func (CDNSKEYRecord) Delete(host string, value interface{}) error {
 	if !ok {
 		return fmt.Errorf("CDNSKEYRecord Delete expects a JSON object, got %T", value)
 	}
-	target, ok := internal.ParseToDNSKEYRecord(obj)
+	target, ok := recshape.DNSKEYRecord(obj)
 	if !ok {
 		return errors.New("CDNSKEYRecord Delete: invalid CDNSKEY structure")
 	}
@@ -130,8 +133,13 @@ func (CDNSKEYRecord) Delete(host string, value interface{}) error {
 		return nil
 	}
 
+	stored, ok := cdnskeyRecordsFromRaw(existing)
+	if !ok {
+		// Unknown shape: refuse rather than fall through to deleting the key.
+		return fmt.Errorf("CDNSKEYRecord Delete: invalid data format: %T", existing)
+	}
 	var remaining []types.CDNSKEYRecord
-	for _, rec := range cdnskeyRecordsFromRaw(existing) {
+	for _, rec := range stored {
 		if rec.PublicKey != target.PublicKey || rec.Algorithm != target.Algorithm || rec.Flags != target.Flags {
 			remaining = append(remaining, rec)
 		}
@@ -151,11 +159,19 @@ func init() {
 	Register(CDNSKEYRecord{})
 }
 
-func cdnskeyRecordsFromRaw(raw any) []types.CDNSKEYRecord {
-	dnskeyRecords := dnskeyRecordsFromRaw(raw)
-	out := make([]types.CDNSKEYRecord, 0, len(dnskeyRecords))
-	for _, rec := range dnskeyRecords {
+// cdnskeyRecordsFromRaw decodes a stored CDNSKEY value; DNSKEY-typed values
+// are accepted too (shared wire format). ok=false means the shape is unknown.
+func cdnskeyRecordsFromRaw(raw any) ([]types.CDNSKEYRecord, bool) {
+	if recs, ok := recshape.Decode(raw, recshape.CDNSKEYRecord); ok {
+		return recs, true
+	}
+	dk, ok := recshape.Decode(raw, recshape.DNSKEYRecord)
+	if !ok {
+		return nil, false
+	}
+	out := make([]types.CDNSKEYRecord, 0, len(dk))
+	for _, rec := range dk {
 		out = append(out, types.CDNSKEYRecord(rec))
 	}
-	return out
+	return out, true
 }

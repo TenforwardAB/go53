@@ -6,6 +6,7 @@ import (
 
 	"github.com/miekg/dns"
 	"go53/internal"
+	"go53/recshape"
 	"go53/types"
 )
 
@@ -47,22 +48,7 @@ func (PTR) Add(zone, name string, value interface{}, ttl *uint32) error {
 
 	var currentList []types.PTRRecord
 	if found {
-		switch v := val.(type) {
-		case []types.PTRRecord:
-			currentList = v
-		case []interface{}:
-			for _, item := range v {
-				if obj, ok := item.(map[string]interface{}); ok {
-					if s, ok := obj["ptr"].(string); ok {
-						ttlVal := uint32(3600)
-						if t, ok := obj["ttl"].(float64); ok {
-							ttlVal = uint32(t)
-						}
-						currentList = append(currentList, types.PTRRecord{Ptr: s, TTL: ttlVal})
-					}
-				}
-			}
-		}
+		currentList, _ = recshape.Decode(val, recshape.PTRRecord)
 	}
 
 	for _, existing := range currentList {
@@ -71,7 +57,7 @@ func (PTR) Add(zone, name string, value interface{}, ttl *uint32) error {
 		}
 	}
 
-	currentList = append(currentList, types.PTRRecord{Ptr: ptr, TTL: TTL})
+	currentList = append(currentList[:len(currentList):len(currentList)], types.PTRRecord{Ptr: ptr, TTL: TTL})
 	return memStore.AddRecord(sanitizedZone, string(types.TypePTR), key, currentList)
 }
 
@@ -91,23 +77,8 @@ func (PTR) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
-	var recs []types.PTRRecord
-	switch v := val.(type) {
-	case []types.PTRRecord:
-		recs = v
-	case []interface{}:
-		for _, item := range v {
-			if obj, ok := item.(map[string]interface{}); ok {
-				if ptrStr, ok := obj["ptr"].(string); ok {
-					ttl := uint32(3600)
-					if t, ok := obj["ttl"].(float64); ok {
-						ttl = uint32(t)
-					}
-					recs = append(recs, types.PTRRecord{Ptr: ptrStr, TTL: ttl})
-				}
-			}
-		}
-	default:
+	recs, ok := recshape.Decode(val, recshape.PTRRecord)
+	if !ok {
 		return nil, false
 	}
 
@@ -154,22 +125,10 @@ func (PTR) Delete(host string, value interface{}) error {
 		return nil
 	}
 
-	var records []types.PTRRecord
-	switch v := raw.(type) {
-	case []types.PTRRecord:
-		records = v
-	case []interface{}:
-		for _, item := range v {
-			if obj, ok := item.(map[string]interface{}); ok {
-				if s, ok := obj["ptr"].(string); ok {
-					ttl := uint32(3600)
-					if t, ok := obj["ttl"].(float64); ok {
-						ttl = uint32(t)
-					}
-					records = append(records, types.PTRRecord{Ptr: s, TTL: ttl})
-				}
-			}
-		}
+	records, ok := recshape.Decode(raw, recshape.PTRRecord)
+	if !ok {
+		// Unknown shape: refuse rather than fall through to deleting the key.
+		return fmt.Errorf("PTRRecord Delete: invalid data format: %T", raw)
 	}
 
 	var filtered []types.PTRRecord

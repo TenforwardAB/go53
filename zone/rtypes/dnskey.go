@@ -6,6 +6,7 @@ import (
 	"github.com/TenforwardAB/slog"
 	"github.com/miekg/dns"
 	"go53/internal"
+	"go53/recshape"
 	"go53/security"
 	"go53/types"
 	"strings"
@@ -49,19 +50,7 @@ func (DNSKEYRecord) Add(zone, name string, value interface{}, ttl *uint32) error
 
 	var current []types.DNSKEYRecord
 	if found {
-		switch v := existing.(type) {
-		case []types.DNSKEYRecord:
-			current = v
-		case []interface{}:
-			for _, item := range v {
-				if obj, ok := item.(map[string]interface{}); ok {
-					parsed, ok := internal.ParseToDNSKEYRecord(obj)
-					if ok {
-						current = append(current, parsed)
-					}
-				}
-			}
-		}
+		current, _ = dnskeyRecordsFromRaw(existing)
 	}
 
 	for _, r := range current {
@@ -70,7 +59,7 @@ func (DNSKEYRecord) Add(zone, name string, value interface{}, ttl *uint32) error
 		}
 	}
 
-	current = append(current, rec)
+	current = append(current[:len(current):len(current)], rec)
 	return memStore.AddRecord(sz, string(types.TypeDNSKEY), key, current)
 }
 
@@ -91,7 +80,7 @@ func (DNSKEYRecord) Lookup(host string) ([]dns.RR, bool) {
 
 	var records []types.DNSKEYRecord
 	if _, _, val, ok := memStore.GetRecord(sz, string(types.TypeDNSKEY), name); ok {
-		records = dnskeyRecordsFromRaw(val)
+		records, _ = dnskeyRecordsFromRaw(val)
 	}
 
 	if name == "@" {
@@ -158,7 +147,7 @@ func (DNSKEYRecord) Delete(host string, value interface{}) error {
 		return fmt.Errorf("DNSKEYRecord Delete expects a JSON object, got %T", value)
 	}
 
-	target, ok := internal.ParseToDNSKEYRecord(obj)
+	target, ok := recshape.DNSKEYRecord(obj)
 	if !ok {
 		return errors.New("DNSKEYRecord Delete: invalid DNSKEY structure")
 	}
@@ -168,22 +157,15 @@ func (DNSKEYRecord) Delete(host string, value interface{}) error {
 		return nil
 	}
 
+	stored, ok := dnskeyRecordsFromRaw(existing)
+	if !ok {
+		// Unknown shape: refuse rather than fall through to deleting the key.
+		return fmt.Errorf("DNSKEYRecord Delete: invalid data format: %T", existing)
+	}
 	var remaining []types.DNSKEYRecord
-	switch v := existing.(type) {
-	case []types.DNSKEYRecord:
-		for _, r := range v {
-			if r.PublicKey != target.PublicKey || r.Algorithm != target.Algorithm || r.Flags != target.Flags {
-				remaining = append(remaining, r)
-			}
-		}
-	case []interface{}:
-		for _, item := range v {
-			if obj, ok := item.(map[string]interface{}); ok {
-				rec, ok := internal.ParseToDNSKEYRecord(obj)
-				if ok && (rec.PublicKey != target.PublicKey || rec.Algorithm != target.Algorithm || rec.Flags != target.Flags) {
-					remaining = append(remaining, rec)
-				}
-			}
+	for _, r := range stored {
+		if r.PublicKey != target.PublicKey || r.Algorithm != target.Algorithm || r.Flags != target.Flags {
+			remaining = append(remaining, r)
 		}
 	}
 
@@ -201,96 +183,71 @@ func init() {
 	Register(DNSKEYRecord{})
 }
 
+// dnskeyRecordFromMap validates an API payload. Field parsing goes through
+// recshape's getters so a payload accepts the same numeric kinds as a stored
+// value; a present field of the wrong type or out of range is an error.
 func dnskeyRecordFromMap(m map[string]interface{}, ttl *uint32) (types.DNSKEYRecord, error) {
+	row := recshape.Row(m)
 	rec := types.DNSKEYRecord{
 		TTL:      3600,
 		Protocol: 3,
 	}
-
 	if ttl != nil {
 		rec.TTL = *ttl
 	}
 
-	if f, ok := m["flags"]; ok {
-		switch v := f.(type) {
-		case float64:
-			rec.Flags = uint16(v)
-		case int:
-			rec.Flags = uint16(v)
-		case uint16:
-			rec.Flags = v
-		default:
-			return rec, fmt.Errorf("DNSKEYRecord: invalid 'flags' type %T", v)
+	flags, ok := row.Uint16("flags")
+	if !ok {
+		if _, present := m["flags"]; !present {
+			return rec, errors.New("DNSKEYRecord: missing 'flags'")
 		}
-	} else {
-		return rec, errors.New("DNSKEYRecord: missing 'flags'")
+		return rec, fmt.Errorf("DNSKEYRecord: invalid 'flags' type %T", m["flags"])
 	}
+	rec.Flags = flags
 
-	if p, ok := m["protocol"]; ok {
-		switch v := p.(type) {
-		case float64:
-			rec.Protocol = uint8(v)
-		case int:
-			rec.Protocol = uint8(v)
-		case uint8:
-			rec.Protocol = v
+	if _, present := m["protocol"]; present {
+		if p, ok := row.Uint8("protocol"); ok {
+			rec.Protocol = p
 		}
 	}
 
-	if a, ok := m["algorithm"]; ok {
-		switch v := a.(type) {
-		case float64:
-			rec.Algorithm = uint8(v)
-		case int:
-			rec.Algorithm = uint8(v)
-		case uint8:
-			rec.Algorithm = v
-		default:
-			return rec, fmt.Errorf("DNSKEYRecord: invalid 'algorithm' type %T", v)
+	algorithm, ok := row.Uint8("algorithm")
+	if !ok {
+		if _, present := m["algorithm"]; !present {
+			return rec, errors.New("DNSKEYRecord: missing 'algorithm'")
 		}
-	} else {
-		return rec, errors.New("DNSKEYRecord: missing 'algorithm'")
+		return rec, fmt.Errorf("DNSKEYRecord: invalid 'algorithm' type %T", m["algorithm"])
 	}
+	rec.Algorithm = algorithm
 
-	if pk, ok := m["public_key"].(string); ok && strings.TrimSpace(pk) != "" {
-		rec.PublicKey = pk
-	} else {
+	pk, ok := row.String("public_key")
+	if !ok || strings.TrimSpace(pk) == "" {
 		return rec, errors.New("DNSKEYRecord: missing or invalid 'public_key'")
 	}
-	if t, ok := m["ttl"].(float64); ok {
-		rec.TTL = uint32(t)
-	}
+	rec.PublicKey = pk
 
+	if t, ok := row.Uint32("ttl"); ok {
+		rec.TTL = t
+	}
 	return rec, nil
 }
 
-func dnskeyRecordsFromRaw(raw any) []types.DNSKEYRecord {
-	var records []types.DNSKEYRecord
-	switch v := raw.(type) {
-	case []types.DNSKEYRecord:
-		return append([]types.DNSKEYRecord(nil), v...)
-	case []types.CDNSKEYRecord:
-		for _, rec := range v {
-			records = append(records, types.DNSKEYRecord(rec))
-		}
-	case []interface{}:
-		for _, item := range v {
-			if obj, ok := item.(map[string]interface{}); ok {
-				if rec, ok := internal.ParseToDNSKEYRecord(obj); ok {
-					records = append(records, rec)
-				}
-			}
-		}
-	case map[string]interface{}:
-		if rec, ok := internal.ParseToDNSKEYRecord(v); ok {
-			records = append(records, rec)
-		}
-	case types.DNSKEYRecord:
-		records = append(records, v)
-	case types.CDNSKEYRecord:
-		records = append(records, types.DNSKEYRecord(v))
+// dnskeyRecordsFromRaw decodes a stored DNSKEY value. CDNSKEY-typed values
+// are accepted too: the two types share a wire format and cdnskey.go reads
+// through this helper. ok=false means the shape is unknown.
+func dnskeyRecordsFromRaw(raw any) ([]types.DNSKEYRecord, bool) {
+	if recs, ok := recshape.Decode(raw, recshape.DNSKEYRecord); ok {
+		return recs, true
 	}
-	return records
+	cd, ok := recshape.Decode(raw, recshape.CDNSKEYRecord)
+	if !ok {
+		return nil, false
+	}
+	out := make([]types.DNSKEYRecord, 0, len(cd))
+	for _, rec := range cd {
+		out = append(out, types.DNSKEYRecord(rec))
+	}
+	return out, true
 }
 
 func dedupeDNSKEYLike(rrs []dns.RR) []dns.RR {

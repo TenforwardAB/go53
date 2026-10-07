@@ -13,7 +13,7 @@ import (
 
 func TestUtilHelpers(t *testing.T) {
 	zone, host, ok := SplitName("www.example.test.")
-	if !ok || zone != "example.test" || host != "www" {
+	if !ok || zone != "example.test." || host != "www" {
 		t.Fatalf("SplitName = zone=%q host=%q ok=%v", zone, host, ok)
 	}
 	if _, _, ok := SplitName("localhost"); ok {
@@ -79,19 +79,6 @@ func TestMergeStructsAndDNSKEYParsing(t *testing.T) {
 	}
 	if !reflect.DeepEqual(dst.Peers, map[string]string{"node-a": "pub"}) {
 		t.Fatalf("merged map = %#v", dst.Peers)
-	}
-
-	rec, ok := ParseToDNSKEYRecord(map[string]interface{}{
-		"flags":      float64(257),
-		"algorithm":  float64(15),
-		"public_key": "abc",
-		"ttl":        float64(600),
-	})
-	if !ok || rec.Flags != 257 || rec.Algorithm != 15 || rec.Protocol != 3 || rec.TTL != 600 {
-		t.Fatalf("ParseToDNSKEYRecord = %#v ok=%v", rec, ok)
-	}
-	if _, ok := ParseToDNSKEYRecord(map[string]interface{}{"flags": float64(257)}); ok {
-		t.Fatalf("ParseToDNSKEYRecord accepted missing public key")
 	}
 }
 

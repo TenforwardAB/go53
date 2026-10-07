@@ -10,6 +10,7 @@ import (
 	"github.com/miekg/dns"
 	"go53/config"
 	"go53/internal"
+	"go53/recshape"
 	"go53/security"
 	"go53/storage"
 	"go53/types"
@@ -26,6 +27,8 @@ type InMemoryZoneStore struct {
 	cache   map[string]map[string]map[string]map[string]any // "zones" -> zone -> type -> name -> record
 	storage storage.Storage
 	mu      sync.RWMutex
+	// ownerIdx answers owner/type existence per zone in O(1); see ownerindex.go.
+	ownerIdx map[string]ownerIndex
 	// signWG tracks in-flight async DNSSEC signing/denial goroutines so callers
 	// (notably restore) can wait for them to finish persisting before they
 	// replace zone data underneath them.
@@ -54,7 +57,8 @@ func NewZoneStore(s storage.Storage) (*InMemoryZoneStore, error) {
 		cache: map[string]map[string]map[string]map[string]any{
 			"zones": {},
 		},
-		storage: s,
+		storage:  s,
+		ownerIdx: map[string]ownerIndex{},
 	}
 	if err := zs.loadFromStorage(); err != nil {
 		return nil, err
@@ -126,6 +130,9 @@ func (z *InMemoryZoneStore) loadFromStorage() error {
 		}
 	}
 
+	for zone := range z.cache["zones"] {
+		z.rebuildOwnerIndexLocked(zone)
+	}
 	return nil
 }
 
@@ -175,6 +182,7 @@ func (z *InMemoryZoneStore) AddRecord(zone, rtype, name string, record any) erro
 		zones[zone][rtype] = make(map[string]any)
 	}
 	zones[zone][rtype][name] = record
+	z.indexOwnerLocked(zone, rtype, name)
 	if dnssecPrimary {
 		z.invalidateRRSIGLocked(zone, rtype, name)
 		if shouldMaintainNSEC(rtype) {
@@ -213,6 +221,7 @@ func (z *InMemoryZoneStore) PutRecordRaw(zone, rtype, name string, record any) e
 		zones[zone][rtype] = make(map[string]any)
 	}
 	zones[zone][rtype][name] = record
+	z.indexOwnerLocked(zone, rtype, name)
 	if dnssecPrimary {
 		z.invalidateRRSIGLocked(zone, rtype, name)
 		if shouldMaintainNSEC(rtype) {
@@ -244,6 +253,7 @@ func (z *InMemoryZoneStore) DeleteRecordRaw(zone, rtype, name string) error {
 	zones := z.cache["zones"]
 	if recType, ok := zones[zone][rtype]; ok {
 		delete(recType, name)
+		z.unindexOwnerLocked(zone, rtype, name)
 		dnssecPrimary := config.AppConfig.GetLive().DNSSECEnabled && config.AppConfig.GetLive().Mode != "secondary"
 		if dnssecPrimary {
 			z.invalidateRRSIGLocked(zone, rtype, name)
@@ -401,32 +411,20 @@ func firstRecordTTL(record any) (uint32, bool) {
 		return v.TTL, true
 	case types.RRSIGRecord:
 		return v.TTL, true
-	case map[string]interface{}:
-		return ttlFromMap(v)
-	case []map[string]interface{}:
-		if len(v) > 0 {
-			return ttlFromMap(v[0])
+	case map[string]interface{}, []map[string]interface{}:
+		rows, _ := recshape.Rows(v)
+		for _, r := range rows {
+			if ttl, ok := r.Uint32("ttl"); ok {
+				return ttl, true
+			}
 		}
 	case []interface{}:
+		// Items may be maps or typed structs; either way the cases above apply.
 		for _, item := range v {
 			if ttl, ok := firstRecordTTL(item); ok {
 				return ttl, true
 			}
 		}
-	}
-	return 0, false
-}
-
-func ttlFromMap(m map[string]interface{}) (uint32, bool) {
-	switch v := m["ttl"].(type) {
-	case float64:
-		return uint32(v), true
-	case int:
-		return uint32(v), true
-	case uint32:
-		return v, true
-	case uint64:
-		return uint32(v), true
 	}
 	return 0, false
 }
@@ -616,6 +614,7 @@ func (z *InMemoryZoneStore) DeleteRecord(zone, rtype, name string) error {
 	zones := z.cache["zones"]
 	if recType, ok := zones[zone][rtype]; ok {
 		delete(recType, name)
+		z.unindexOwnerLocked(zone, rtype, name)
 		dnssecPrimary := config.AppConfig.GetLive().DNSSECEnabled && config.AppConfig.GetLive().Mode != "secondary"
 		if dnssecPrimary {
 			z.invalidateRRSIGLocked(zone, rtype, name)
@@ -647,6 +646,7 @@ func (z *InMemoryZoneStore) DeleteZone(zone string) error {
 	zones := z.cache["zones"]
 	if _, exists := zones[zone]; exists {
 		delete(zones, zone)
+		delete(z.ownerIdx, zone)
 		return z.storage.DeleteZone(zone)
 	}
 
@@ -1643,50 +1643,6 @@ func (z *InMemoryZoneStore) nsec3CoveringLocked(zone, name string, params types.
 	return nil, false
 }
 
-func (z *InMemoryZoneStore) closestEncloserLocked(zone, name string) (string, string, string, bool) {
-	qname := dns.Fqdn(name)
-	zoneFQDN := dns.Fqdn(zone)
-	if !strings.HasSuffix(strings.ToLower(qname), strings.ToLower(zoneFQDN)) {
-		return "", "", "", false
-	}
-
-	labels := dns.SplitDomainName(qname)
-	for i := 0; i < len(labels); i++ {
-		candidate := dns.Fqdn(strings.Join(labels[i:], "."))
-		if !z.ownerExistsLocked(zone, candidate) {
-			continue
-		}
-		nextCloser := qname
-		if i > 0 {
-			nextCloser = dns.Fqdn(strings.Join(labels[i-1:], "."))
-		}
-		wildcard := dns.Fqdn("*." + candidate)
-		return candidate, nextCloser, wildcard, true
-	}
-
-	return "", "", "", false
-}
-
-func (z *InMemoryZoneStore) closestDelegationLocked(zone, name string) (string, bool) {
-	qname := dns.Fqdn(name)
-	zoneFQDN := dns.Fqdn(zone)
-	if !strings.HasSuffix(strings.ToLower(qname), strings.ToLower(zoneFQDN)) {
-		return "", false
-	}
-
-	labels := dns.SplitDomainName(qname)
-	for i := 0; i < len(labels); i++ {
-		candidate := dns.Fqdn(strings.Join(labels[i:], "."))
-		if strings.EqualFold(candidate, zoneFQDN) {
-			return "", false
-		}
-		if z.ownerHasTypeLocked(zone, candidate, string(types.TypeNS)) && !z.ownerHasTypeLocked(zone, candidate, string(types.TypeSOA)) {
-			return candidate, true
-		}
-	}
-	return "", false
-}
-
 func (z *InMemoryZoneStore) nsRecordsLocked(zone, name string) ([]dns.RR, bool) {
 	rel, ok := relativeOwner(zone, name)
 	if !ok {
@@ -1701,27 +1657,7 @@ func (z *InMemoryZoneStore) nsRecordsLocked(zone, name string) ([]dns.RR, bool) 
 		return nil, false
 	}
 
-	var records []types.NSRecord
-	switch v := raw.(type) {
-	case []types.NSRecord:
-		records = append(records, v...)
-	case []interface{}:
-		for _, item := range v {
-			obj, ok := item.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			ns, _ := obj["ns"].(string)
-			if ns == "" {
-				continue
-			}
-			ttl := uint32(3600)
-			if t, ok := obj["ttl"].(float64); ok {
-				ttl = uint32(t)
-			}
-			records = append(records, types.NSRecord{NS: dns.Fqdn(ns), TTL: ttl})
-		}
-	}
+	records, _ := recshape.Decode(raw, recshape.NSRecord)
 	if len(records) == 0 {
 		return nil, false
 	}
@@ -1739,56 +1675,6 @@ func (z *InMemoryZoneStore) nsRecordsLocked(zone, name string) ([]dns.RR, bool) 
 		})
 	}
 	return out, true
-}
-
-func (z *InMemoryZoneStore) ownerExistsLocked(zone, name string) bool {
-	rel, ok := relativeOwner(zone, name)
-	if !ok {
-		return false
-	}
-	zoneMap, ok := z.cache["zones"][zone]
-	if !ok {
-		return false
-	}
-	for rtype, namesMap := range zoneMap {
-		if !shouldMaintainNSEC(rtype) {
-			continue
-		}
-		if _, ok := namesMap[rel]; ok {
-			return true
-		}
-	}
-	return false
-}
-
-func (z *InMemoryZoneStore) ownerHasTypeLocked(zone, name, rtype string) bool {
-	rel, ok := relativeOwner(zone, name)
-	if !ok {
-		return false
-	}
-	zoneMap, ok := z.cache["zones"][zone]
-	if !ok {
-		return false
-	}
-	namesMap, ok := zoneMap[rtype]
-	if !ok {
-		return false
-	}
-	_, ok = namesMap[rel]
-	return ok
-}
-
-func relativeOwner(zone, name string) (string, bool) {
-	fqdn := strings.ToLower(dns.Fqdn(name))
-	zoneFQDN := strings.ToLower(dns.Fqdn(zone))
-	switch {
-	case fqdn == zoneFQDN:
-		return "@", true
-	case strings.HasSuffix(fqdn, "."+zoneFQDN):
-		return strings.TrimSuffix(fqdn[:len(fqdn)-len(zoneFQDN)-1], "."), true
-	default:
-		return "", false
-	}
 }
 
 func uniqueRRs(rrs []dns.RR) []dns.RR {
@@ -1809,26 +1695,7 @@ func uniqueRRs(rrs []dns.RR) []dns.RR {
 }
 
 func nsecRecordFromRaw(raw any) (types.NSECRecord, bool) {
-	switch v := raw.(type) {
-	case types.NSECRecord:
-		return v, true
-	case map[string]interface{}:
-		rec := types.NSECRecord{TTL: 3600}
-		rec.NextDomain, _ = v["next_domain"].(string)
-		if f, ok := v["ttl"].(float64); ok {
-			rec.TTL = uint32(f)
-		}
-		if arr, ok := v["types"].([]interface{}); ok {
-			for _, item := range arr {
-				if s, ok := item.(string); ok {
-					rec.Types = append(rec.Types, s)
-				}
-			}
-		}
-		return rec, rec.NextDomain != ""
-	default:
-		return types.NSECRecord{}, false
-	}
+	return recshape.Single(raw, recshape.NSECRecord)
 }
 
 func nsecRecordToDNS(owner string, rec types.NSECRecord) *dns.NSEC {
@@ -1873,71 +1740,31 @@ func (z *InMemoryZoneStore) nsec3ParamsLocked(zone string) (types.NSEC3ParamReco
 }
 
 func nsec3ParamFromRaw(raw any) (types.NSEC3ParamRecord, bool) {
-	switch v := raw.(type) {
-	case types.NSEC3ParamRecord:
-		return v, true
-	case map[string]interface{}:
-		rec := types.NSEC3ParamRecord{TTL: 3600}
-		if f, ok := v["hash_algorithm"].(float64); ok {
-			rec.HashAlgorithm = uint8(f)
-		}
-		if f, ok := v["flags"].(float64); ok {
-			rec.Flags = uint8(f)
-		}
-		if f, ok := v["iterations"].(float64); ok {
-			rec.Iterations = uint16(f)
-		}
-		if s, ok := v["salt"].(string); ok {
-			rec.Salt = strings.TrimSpace(s)
-			if rec.Salt == "-" {
-				rec.Salt = ""
-			}
-		}
-		if f, ok := v["ttl"].(float64); ok {
-			rec.TTL = uint32(f)
-		}
-		return rec, rec.HashAlgorithm != 0
-	default:
+	rec, ok := recshape.Single(raw, recshape.NSEC3ParamRecord)
+	if !ok {
 		return types.NSEC3ParamRecord{}, false
 	}
+	rec.Salt = normalizeNSEC3Salt(rec.Salt)
+	return rec, rec.HashAlgorithm != 0
+}
+
+// normalizeNSEC3Salt maps the presentation form for "no salt" ("-") to the
+// empty string the hashing code expects.
+func normalizeNSEC3Salt(salt string) string {
+	salt = strings.TrimSpace(salt)
+	if salt == "-" {
+		return ""
+	}
+	return salt
 }
 
 func nsec3RecordFromRaw(raw any) (types.NSEC3Record, bool) {
-	switch v := raw.(type) {
-	case types.NSEC3Record:
-		return v, true
-	case map[string]interface{}:
-		rec := types.NSEC3Record{TTL: 3600}
-		if f, ok := v["hash_algorithm"].(float64); ok {
-			rec.HashAlg = uint8(f)
-		}
-		if f, ok := v["flags"].(float64); ok {
-			rec.Flags = uint8(f)
-		}
-		if f, ok := v["iterations"].(float64); ok {
-			rec.Iterations = uint16(f)
-		}
-		if s, ok := v["salt"].(string); ok {
-			rec.Salt = strings.TrimSpace(s)
-			if rec.Salt == "-" {
-				rec.Salt = ""
-			}
-		}
-		rec.NextHashed, _ = v["next_hashed"].(string)
-		if arr, ok := v["types"].([]interface{}); ok {
-			for _, item := range arr {
-				if s, ok := item.(string); ok {
-					rec.Types = append(rec.Types, s)
-				}
-			}
-		}
-		if f, ok := v["ttl"].(float64); ok {
-			rec.TTL = uint32(f)
-		}
-		return rec, rec.HashAlg != 0 && rec.NextHashed != ""
-	default:
+	rec, ok := recshape.Single(raw, recshape.NSEC3Record)
+	if !ok {
 		return types.NSEC3Record{}, false
 	}
+	rec.Salt = normalizeNSEC3Salt(rec.Salt)
+	return rec, rec.HashAlg != 0 && rec.NextHashed != ""
 }
 
 func nsec3RecordToDNS(hash, zone string, rec types.NSEC3Record) *dns.NSEC3 {

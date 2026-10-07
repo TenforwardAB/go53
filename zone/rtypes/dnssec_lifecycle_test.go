@@ -1,6 +1,7 @@
 package rtypes
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/miekg/dns"
@@ -8,6 +9,7 @@ import (
 	"go53/config"
 	"go53/memory"
 	"go53/storage"
+	"go53/types"
 )
 
 func TestDNSSECRTypesLifecycle(t *testing.T) {
@@ -170,4 +172,26 @@ func setupRTypesLifecycleStore(t *testing.T) {
 	}
 	InitMemoryStore(mem)
 	store = mem
+}
+
+// #62: the NSEC3 chain stores owner hashes upper-case while query names are
+// lower-cased, so a direct NSEC3 query must still find the record.
+func TestNSEC3LookupFindsUppercaseChainOwner(t *testing.T) {
+	zone := "nsec3case.test."
+	hash := "0P9MHAVEQVM6T7VBL5LOP2U3T4RH46HU"
+	rec := types.NSEC3Record{HashAlg: 1, Flags: 0, Iterations: 0, Salt: "-", NextHashed: "2T7B4G4VSA5SMI47K61MV5BV1A22BOJR", Types: []string{"A", "RRSIG"}, TTL: 300}
+	if err := GetMemStore().AddRecord(zone, string(types.TypeNSEC3), hash, rec); err != nil {
+		t.Fatal(err)
+	}
+	GetMemStore().WaitForSigning()
+	rr, _ := Get(dns.TypeNSEC3)
+	for _, q := range []string{hash + "." + zone, strings.ToLower(hash) + "." + zone} {
+		got, ok := rr.Lookup(q)
+		if !ok || len(got) != 1 {
+			t.Fatalf("Lookup(%q) = %v, %v; want the chain record", q, got, ok)
+		}
+		if n, ok := got[0].(*dns.NSEC3); !ok || n.NextDomain != rec.NextHashed {
+			t.Fatalf("Lookup(%q) returned %v", q, got[0])
+		}
+	}
 }

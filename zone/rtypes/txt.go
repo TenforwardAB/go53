@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"go53/internal"
+	"go53/recshape"
 	"go53/types"
 
 	"github.com/miekg/dns"
@@ -47,22 +48,7 @@ func (TXTRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 
 	var currentList []types.TXTRecord
 	if found {
-		switch v := val.(type) {
-		case []types.TXTRecord:
-			currentList = v
-		case []interface{}:
-			for _, item := range v {
-				if obj, ok := item.(map[string]interface{}); ok {
-					if txtStr, ok := obj["text"].(string); ok {
-						ttlVal := uint32(3600)
-						if t, ok := obj["ttl"].(float64); ok {
-							ttlVal = uint32(t)
-						}
-						currentList = append(currentList, types.TXTRecord{Text: txtStr, TTL: ttlVal})
-					}
-				}
-			}
-		}
+		currentList, _ = recshape.Decode(val, recshape.TXTRecord)
 	}
 
 	for _, existing := range currentList {
@@ -71,7 +57,7 @@ func (TXTRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 		}
 	}
 
-	currentList = append(currentList, types.TXTRecord{Text: text, TTL: TTL, Chunks: internal.ChunkTXT(text)})
+	currentList = append(currentList[:len(currentList):len(currentList)], types.TXTRecord{Text: text, TTL: TTL, Chunks: internal.ChunkTXT(text)})
 	return memStore.AddRecord(sanitizedZone, string(types.TypeTXT), key, currentList)
 }
 
@@ -94,23 +80,8 @@ func (TXTRecord) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
-	var recs []types.TXTRecord
-	switch v := val.(type) {
-	case []types.TXTRecord:
-		recs = v
-	case []interface{}:
-		for _, item := range v {
-			if obj, ok := item.(map[string]interface{}); ok {
-				if txtStr, ok := obj["text"].(string); ok {
-					ttl := uint32(3600)
-					if t, ok := obj["ttl"].(float64); ok {
-						ttl = uint32(t)
-					}
-					recs = append(recs, types.TXTRecord{Text: txtStr, TTL: ttl})
-				}
-			}
-		}
-	default:
+	recs, ok := recshape.Decode(val, recshape.TXTRecord)
+	if !ok {
 		return nil, false
 	}
 
@@ -161,22 +132,10 @@ func (TXTRecord) Delete(host string, value interface{}) error {
 		return nil
 	}
 
-	var records []types.TXTRecord
-	switch v := raw.(type) {
-	case []types.TXTRecord:
-		records = v
-	case []interface{}:
-		for _, item := range v {
-			if obj, ok := item.(map[string]interface{}); ok {
-				if txtStr, ok := obj["text"].(string); ok {
-					ttl := uint32(3600)
-					if t, ok := obj["ttl"].(float64); ok {
-						ttl = uint32(t)
-					}
-					records = append(records, types.TXTRecord{Text: txtStr, TTL: ttl})
-				}
-			}
-		}
+	records, ok := recshape.Decode(raw, recshape.TXTRecord)
+	if !ok {
+		// Unknown shape: refuse rather than fall through to deleting the key.
+		return fmt.Errorf("TXTRecord Delete: invalid data format: %T", raw)
 	}
 
 	var filtered []types.TXTRecord

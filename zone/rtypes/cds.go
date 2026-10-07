@@ -7,6 +7,7 @@ import (
 
 	"github.com/miekg/dns"
 	"go53/internal"
+	"go53/recshape"
 	"go53/security"
 	"go53/types"
 )
@@ -56,7 +57,7 @@ func (CDSRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 	var current []types.CDSRecord
 	_, _, existing, found := memStore.GetRecord(sanitizedZone, string(types.TypeCDS), key)
 	if found {
-		current = cdsRecordsFromRaw(existing)
+		current, _ = cdsRecordsFromRaw(existing)
 	}
 
 	rec := types.CDSRecord{
@@ -72,7 +73,7 @@ func (CDSRecord) Add(zone, name string, value interface{}, ttl *uint32) error {
 		}
 	}
 
-	current = append(current, rec)
+	current = append(current[:len(current):len(current)], rec)
 	return memStore.AddRecord(sanitizedZone, string(types.TypeCDS), key, current)
 }
 
@@ -88,7 +89,8 @@ func (CDSRecord) Lookup(host string) ([]dns.RR, bool) {
 
 	var out []dns.RR
 	if _, _, raw, found := memStore.GetRecord(sanitizedZone, string(types.TypeCDS), name); found {
-		for _, rec := range cdsRecordsFromRaw(raw) {
+		stored, _ := cdsRecordsFromRaw(raw)
+		for _, rec := range stored {
 			out = append(out, &dns.CDS{DS: dns.DS{
 				Hdr: dns.RR_Header{
 					Name:   dns.Fqdn(host),
@@ -141,14 +143,19 @@ func init() {
 	Register(CDSRecord{})
 }
 
-func cdsRecordsFromRaw(raw any) []types.CDSRecord {
-	if records, ok := raw.([]types.CDSRecord); ok {
-		return append([]types.CDSRecord(nil), records...)
+// cdsRecordsFromRaw decodes a stored CDS value; DS-typed values are accepted
+// too (shared wire format). ok=false means the shape is unknown.
+func cdsRecordsFromRaw(raw any) ([]types.CDSRecord, bool) {
+	if recs, ok := recshape.Decode(raw, recshape.CDSRecord); ok {
+		return recs, true
 	}
-	dsRecords := dsRecordsFromRaw(raw)
-	out := make([]types.CDSRecord, 0, len(dsRecords))
-	for _, rec := range dsRecords {
+	ds, ok := recshape.Decode(raw, recshape.DSRecord)
+	if !ok {
+		return nil, false
+	}
+	out := make([]types.CDSRecord, 0, len(ds))
+	for _, rec := range ds {
 		out = append(out, types.CDSRecord(rec))
 	}
-	return out
+	return out, true
 }

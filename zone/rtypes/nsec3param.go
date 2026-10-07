@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/miekg/dns"
 	"go53/internal"
+	"go53/recshape"
 	"go53/types"
 )
 
@@ -100,27 +101,8 @@ func (NSEC3PARAM) Lookup(host string) ([]dns.RR, bool) {
 		return nil, false
 	}
 
-	var rec types.NSEC3ParamRecord
-	switch v := raw.(type) {
-	case types.NSEC3ParamRecord:
-		rec = v
-	case map[string]interface{}:
-		if f, ok := v["hash_algorithm"].(float64); ok {
-			rec.HashAlgorithm = uint8(f)
-		}
-		if f, ok := v["flags"].(float64); ok {
-			rec.Flags = uint8(f)
-		}
-		if f, ok := v["iterations"].(float64); ok {
-			rec.Iterations = uint16(f)
-		}
-		if s, ok := v["salt"].(string); ok {
-			rec.Salt = s
-		}
-		if f, ok := v["ttl"].(float64); ok {
-			rec.TTL = uint32(f)
-		}
-	default:
+	rec, ok := recshape.Single(raw, recshape.NSEC3ParamRecord)
+	if !ok {
 		return nil, false
 	}
 
