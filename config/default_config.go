@@ -71,7 +71,6 @@ var DefaultBaseConfig = BaseConfig{
 	BindHost:         "0.0.0.0",
 	APIPort:          ":8053",
 	StorageBackend:   "badger",
-	PostgresDSN:      "host=localhost port=5432 user=postgres password=postgres dbname=go53 sslmode=disable",
 	AdminSocket:      "/run/go53/admin.sock",
 	AdminSocketGroup: "go53_admin",
 }

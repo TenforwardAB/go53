@@ -41,7 +41,6 @@ type BaseConfig struct {
 	DNSPort        string
 	APIPort        string
 	StorageBackend string
-	PostgresDSN    string
 	// AdminSocket is the path to the local admin Unix domain socket. It serves the
 	// full admin API gated by filesystem permissions instead of API tokens, acting as
 	// the break-glass local administration path when the external IdP is unreachable.
@@ -158,7 +157,6 @@ func (cm *ConfigManager) Init() {
 		BindHost:         MustEnv("BIND_HOST", DefaultBaseConfig.BindHost),
 		APIPort:          MustEnv("API_PORT", DefaultBaseConfig.APIPort),
 		StorageBackend:   MustEnv("STORAGE_BACKEND", DefaultBaseConfig.StorageBackend),
-		PostgresDSN:      MustEnv("POSTGRES_DSN", DefaultBaseConfig.PostgresDSN),
 		AdminSocket:      MustEnv("ADMIN_SOCKET", DefaultBaseConfig.AdminSocket),
 		AdminSocketGroup: MustEnv("ADMIN_SOCKET_GROUP", DefaultBaseConfig.AdminSocketGroup),
 	}

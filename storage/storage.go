@@ -67,8 +67,8 @@ var Backend Storage
 // Init initializes the configured storage backend based on the backendType.
 //
 // Supported backend types:
-//   - "badger": Uses BadgerDB for embedded local key-value storage.
-//   - (others may be added in the future, e.g., "postgres").
+//   - "badger": Uses BadgerDB for embedded local key-value storage. This is
+//     the only implemented backend; any other value is rejected.
 //
 // Parameters:
 //   - backendType: A string identifier for the desired backend.
@@ -79,8 +79,6 @@ func Init(backendType string) error {
 	switch backendType {
 	case "badger":
 		Backend = badger.NewBadgerStorage()
-	//case "postgres":
-	//	Backend = postgres.NewPostgresStorage()
 	default:
 		return fmt.Errorf("unsupported backend type: %s", backendType)
 	}

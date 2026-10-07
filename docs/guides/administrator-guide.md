@@ -290,8 +290,7 @@ them.
 | `DNS_PORT` | `:2053` | DNS listener port. Include the leading colon unless you provide a complete host-port elsewhere. |
 | `BIND_HOST` | `0.0.0.0` | Address used by both DNS and API listeners. |
 | `API_PORT` | `:8053` | HTTP API listener port. |
-| `STORAGE_BACKEND` | `badger` | Storage backend. Current deployments normally use Badger for local persistence. |
-| `POSTGRES_DSN` | `host=localhost port=5432 user=postgres password=postgres dbname=go53 sslmode=disable` | PostgreSQL connection string when a Postgres backend is used. |
+| `STORAGE_BACKEND` | `badger` | Storage backend. `badger` is the only supported value; go53 persists zone data to the embedded Badger store at `BADGER_DIR`. |
 | `ADMIN_SOCKET` | `/run/go53/admin.sock` | Path to the local admin Unix socket that serves the full API gated by filesystem permissions instead of API tokens. Set empty to disable. |
 | `ADMIN_SOCKET_GROUP` | `go53_admin` | OS group granted access to the admin socket (mode `0660`). If the group does not exist the socket falls back to owner-only access. |
 
