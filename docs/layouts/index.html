@@ -344,7 +344,7 @@
   <main>
     <section aria-labelledby="snapshot-title">
       <h2 id="snapshot-title">Project Snapshot</h2>
-      <p class="section-lead">go53 focuses on authoritative DNS only. The server keeps zone data in memory for read performance and persists changes through Badger-backed storage.</p>
+      <p class="section-lead">go53 focuses on authoritative DNS only. The server keeps zone data in memory for read performance and persists changes through Badger or PostgreSQL storage.</p>
       <div class="summary-grid">
         <div class="metric">
           <strong>Authoritative</strong>
@@ -469,6 +469,31 @@
           <p>Unauthenticated <code>/healthz</code> and <code>/readyz</code> HTTP endpoints for liveness and readiness checks behind load balancers and orchestrators.</p>
           <div class="rfc-list"><span class="rfc">Operational</span><span class="rfc">Kubernetes</span></div>
         </article>
+        <article class="feature">
+          <header><h3><del>Backup, WAL, and point-in-time restore</del></h3><span class="status done">done</span></header>
+          <p>Full backups and write-ahead-log exports over the local admin socket, archiver-aware retention, and restore to a point in time including DNSSEC key state.</p>
+          <div class="rfc-list"><span class="rfc">go53ctl backup</span><span class="rfc">Operational</span></div>
+        </article>
+        <article class="feature">
+          <header><h3><del>Zone-file import and export</del></h3><span class="status done">done</span></header>
+          <p>Import master-file zones and export the served zone through the API, including for DNSSEC-signed zones.</p>
+          <div class="rfc-list"><span class="rfc">RFC 1035</span><span class="rfc">JSON API</span></div>
+        </article>
+        <article class="feature">
+          <header><h3><del>ALIAS records</del></h3><span class="status done">done</span></header>
+          <p>Apex-safe ALIAS pseudo-records flattened to A/AAAA from multiple resolvers, refreshed on a freshness window and served like ordinary signed RRsets.</p>
+          <div class="rfc-list"><span class="rfc">Pseudo-RR</span><span class="rfc">Operational</span></div>
+        </article>
+        <article class="feature">
+          <header><h3><del>Canonical, case-insensitive names</del></h3><span class="status done">done</span></header>
+          <p>Zone and owner names are stored and matched in canonical lower case with exact key lookups; existing data is migrated in place on upgrade.</p>
+          <div class="rfc-list"><span class="rfc">RFC 4343</span><span class="rfc">0.80</span></div>
+        </article>
+        <article class="feature">
+          <header><h3><del>API key authentication</del></h3><span class="status done">done</span></header>
+          <p>Selectable API auth mode (<code>disabled</code>, <code>none</code>, <code>x-auth-key</code>) on the TCP listener, with the local Unix admin socket as the always-available break-glass path.</p>
+          <div class="rfc-list"><span class="rfc">X-Auth-Key</span><span class="rfc">Operational</span></div>
+        </article>
       </div>
     </section>
 
@@ -486,8 +511,8 @@
       <p class="section-lead">These items remain planned or intentionally deferred until the beta test surface is stable.</p>
       <div class="roadmap-grid">
         <article class="roadmap">
-          <header><h3>API authentication and authorization</h3><span class="status next">next</span></header>
-          <p>Define production auth for all API routes, including operator roles, token lifecycle, and secure automation.</p>
+          <header><h3>API roles and token lifecycle</h3><span class="status next">next</span></header>
+          <p>Operator roles, scoped tokens with rotation and expiry, and secure automation on top of the existing API key authentication.</p>
         </article>
         <article class="roadmap">
           <header><h3>Resolver interoperability matrix</h3><span class="status next">next</span></header>
@@ -503,8 +528,14 @@
           <p>Prometheus metrics and structured query/error logging. Operational health and readiness endpoints are already in place.</p>
         </article>
         <article class="roadmap">
-          <header><h3>Import/export tooling</h3><span class="status next">planned</span></header>
-          <p>Zone-file import/export and safer administrative workflows around bulk changes.</p>
+          <header><h3>Query-path performance foundation</h3><span class="status next">next</span></header>
+          <p>Measured end to end: one record decoder for serving, transfers and signing, a per-zone owner index for negative answers and wildcards, and an allocation-free name validator. Positive answers around 1 µs, NXDOMAIN under 4 µs per core.</p>
+          <div class="rfc-list"><span class="rfc">0.81</span><span class="rfc">Performance</span></div>
+        </article>
+        <article class="roadmap">
+          <header><h3>Large-scale zone hosting and typed storage</h3><span class="status next">planned</span></header>
+          <p>Zone resolution independent of zone count, a canonical Merkle leaf hash negotiated per peer, and a single typed storage format with in-place migration.</p>
+          <div class="rfc-list"><span class="rfc">0.82</span><span class="rfc">0.84</span></div>
         </article>
       </div>
     </section>
@@ -515,7 +546,7 @@
       <div class="doc-grid">
         <div class="doc-link">
           <a href="/guides/">Guides</a>
-          <p>Primary/secondary/distributed setup, API examples, DNSSEC, TSIG, transfers, and go53ctl workflows.</p>
+          <p>Primary/secondary/distributed setup, API examples, DNSSEC, TSIG, transfers, backup and restore, and go53ctl workflows.</p>
         </div>
         <div class="doc-link">
           <a href="/reference/configuration/">Config Reference</a>
@@ -523,7 +554,7 @@
         </div>
         <div class="doc-link">
           <a href="/concepts/">Concepts</a>
-          <p>Deep dives into DNSSEC behavior and multi-node replication: encryption, signed events, vector clocks, and Merkle repair.</p>
+          <p>Deep dives into DNSSEC behavior, multi-node replication (signed events, vector clocks, Merkle repair), and the query path and record storage model.</p>
         </div>
         <div class="doc-link">
           <a href="/internal/">Engine Internals</a>
@@ -534,7 +565,7 @@
   </main>
 
   <footer>
-    <p>Copyright 2025 go53 Project - Fast, secure, API-driven authoritative DNS</p>
+    <p>Copyright 2025- go53 Project - Fast, secure, API-driven authoritative DNS</p>
     <p><a href="https://go53.eu">https://go53.eu</a></p>
   </footer>
 </body>

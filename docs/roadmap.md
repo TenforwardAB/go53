@@ -43,11 +43,11 @@ maintainability over feature count.
 
 | Issue | Title | Theme | Status |
 |-------|-------|-------|--------|
-| [#40](https://github.com/TenforwardAB/go53/issues/40) | Enhancement: Cache pre-built RRsets to reduce query-time allocations | Performance | In Progress |
-| [#57](https://github.com/TenforwardAB/go53/issues/57) | Streamline rtype Lookup value shape handling to remove repeated type switches |  | In Progress |
-| [#59](https://github.com/TenforwardAB/go53/issues/59) | rtypes: Delete with a value wipes the whole RRset when the stored shape is unrecognised |  | — |
-| [#60](https://github.com/TenforwardAB/go53/issues/60) | internal.SanitizeFQDN compiles a regexp on every call (DNS hot path) |  | — |
-| [#62](https://github.com/TenforwardAB/go53/issues/62) | NSEC3: direct query for an NSEC3 owner never matches since #43 (qname lowercased, hash keys uppercase) |  | — |
+| [#40](https://github.com/TenforwardAB/go53/issues/40) | Enhancement: Cache pre-built RRsets to reduce query-time allocations | Performance | Done |
+| [#57](https://github.com/TenforwardAB/go53/issues/57) | Streamline rtype Lookup value shape handling to remove repeated type switches |  | Done |
+| [#59](https://github.com/TenforwardAB/go53/issues/59) | rtypes: Delete with a value wipes the whole RRset when the stored shape is unrecognised |  | Done |
+| [#60](https://github.com/TenforwardAB/go53/issues/60) | internal.SanitizeFQDN compiles a regexp on every call (DNS hot path) |  | Done |
+| [#62](https://github.com/TenforwardAB/go53/issues/62) | NSEC3: direct query for an NSEC3 owner never matches since #43 (qname lowercased, hash keys uppercase) |  | Done |
 
 ### Release 0.82
 
@@ -57,6 +57,8 @@ maintainability over feature count.
 |-------|-------|-------|--------|
 | [#41](https://github.com/TenforwardAB/go53/issues/41) | Enhancement: Optimize authoritative zone lookup | Performance | — |
 | [#61](https://github.com/TenforwardAB/go53/issues/61) | RRSIG: API-added signatures are stored in a shape the store cache does not read; Delete unimplemented |  | — |
+| [#63](https://github.com/TenforwardAB/go53/issues/63) | Distributed: canonical Merkle leaf hash (decoded rows, negotiated per peer) — prerequisite for the storage shape change |  | — |
+| [#66](https://github.com/TenforwardAB/go53/issues/66) | Query path: resolve the authoritative zone once per query instead of once per Lookup |  | — |
 
 ### Release 0.83
 
@@ -73,7 +75,10 @@ maintainability over feature count.
 
 **Theme:** Distributed &nbsp;·&nbsp; **Goal:** Distributed Hardening
 
-_No tickets assigned yet._
+| Issue | Title | Theme | Status |
+|-------|-------|-------|--------|
+| [#64](https://github.com/TenforwardAB/go53/issues/64) | Storage format v2: typed record values everywhere (single stored shape, migration on load) |  | — |
+| [#65](https://github.com/TenforwardAB/go53/issues/65) | Query path: cache pre-built []dns.RR per (zone, owner, rrtype) — after storage format v2 |  | — |
 
 ### Release 0.85
 
